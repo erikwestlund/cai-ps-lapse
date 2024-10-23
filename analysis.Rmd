@@ -1,0 +1,19 @@
+---
+title: "Lapse & Vision Loss PS Analysis"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readr)
+library(dplyr)
+library(kableExtra)
+library(purrr)
+library(gee)
+library(MatchIt)
+```
+
+## Data Init
