@@ -12,20 +12,18 @@ knitr::opts_chunk$set(echo = TRUE)
 
 source("settings.R")
 
-library(readr)
-library(dplyr)
-library(kableExtra)
-library(purrr)
-library(gee)
-library(geepack)
-library(ggplot2)
-library(MatchIt)
-library(twang)
-library(survey)
 library(cobalt)
+library(dplyr)
+library(gee)
+library(ggplot2)
+library(kableExtra)
 library(margins)
-library(margins)
-
+library(MatchIt)
+library(purrr)
+library(readr)
+library(survey)
+library(twang)
+library(WeightIt)
 
 shouldCache <- TRUE
 
@@ -209,154 +207,100 @@ All propensity score models use a binomial family with a logit link. Matching is
 ```{r ps_f, echo=FALSE}
 
 # Define function to run matching with disk storage and selective re-running
-run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, output_dir = "ps_results") {
-  # Ensure the specified output directory exists
+run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, rerun_diagnostics = TRUE, output_dir = "ps_results") {
   if (!dir.exists(output_dir)) {
     dir.create(output_dir, recursive = TRUE)
   }
-  
+
   all_results <- list()
-  
-  # Iterate over each method
+
   for (params in methods) {
     filename <- file.path(output_dir, paste0(params$name, ".rds"))
-    
+    diagnostics_filename <- file.path(output_dir, paste0(params$name, "_diagnostics.rds"))
+
     print(paste0("Starting method: ", params$name, "."))
-    
-    if (file.exists(filename) && !params$rerun && !rerun_all) {
+
+    if (file.exists(filename) && !rerun_model) {
       print("Results are cached. Proceeding to next method...")
       method_results <- readRDS(filename)
+
+      if (file.exists(diagnostics_filename) && !rerun_diagnostics) {
+        diagnostics <- readRDS(diagnostics_filename)
+        method_results <- c(method_results, diagnostics)
+      }
+
       all_results[[params$name]] <- method_results
       next
     }
-    
+
     print("No cached results found. Running method...")
-    
-    
-    # For Twang
-    if (params$method == "twang") {
-      result <- tryCatch({
+
+    result <- tryCatch({
+      if (params$method == "twang") {
         ps(formula = formula, data = data.frame(data), 
-           n.trees = 10000,
-           interaction.depth = 3,
-           shrinkage = 0.01,
-           estimand = params$estimand,
-           stop.method = c("es.mean", "ks.max"))  # Stopping criteria
-      }, error = function(e) {
-        message("Error in TWANG GBM: ", e)
-        return(NULL)
-      })
-      
-      if (!is.null(result)) {
-        balance_plot <- tryCatch({
-          love.plot(result, stat = "mean.diffs", var.order = "es.mean", stars="std")
-        }, error = function(e) {
-          message("Error generating TWANG balance plot: ", e)
-          NULL
-        })
-        
-        common_support_plot <- tryCatch({
-          bal.plot(result, var.name = "prop.score.es.mean", which="both")
-        }, error = function(e) {
-          message("Error generating TWANG common support plot: ", e)
-          NULL
-        })
-        
-        balance_summary <- tryCatch({
-          summary(result)
-        }, error = function(e) {
-          message("Error generating TWANG balance summary: ", e)
-          NULL
-        })
-      }
-      
-    } 
-    # For WeightIt
-    else if(length(params$use) > 0 && params$use == "weightit") {
-       result <- tryCatch({
+           n.trees = 10000, interaction.depth = 3,
+           shrinkage = 0.01, estimand = params$estimand,
+           stop.method = c("es.mean", "ks.max"))
+      } else if (!is.null(params$use) && params$use == "weightit") {
         do.call(weightit, c(list(formula = formula, data = data), params))
-      }, error = function(e) {
-        message("Error in ", params$name, ": ", e)
-        return(NULL)
-      })
-      
-      if (is.null(result)) next
-      
-      balance_plot <- tryCatch({
-        love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars="std")
-      }, error = function(e) {
-        message("Error generating balance plot for ", params$name, ": ", e)
-        NULL
-      })
-      
-      if(! params$method %in% c("nearest_mahalanobis", "cem", "cbps", "entropy")) {
-        common_support_plot <- tryCatch({
-          bal.plot(result, var.name = "distance", which = "both")
-        }, error = function(e) {
-          message("Error generating common support plot for ", params$name, ": ", e)
-          NULL
-        })
       } else {
-        common_support_plot <- NULL
-      }
-      
-      
-      balance_summary <- tryCatch({
-        bal.tab(result)
-      }, error = function(e) {
-        message("Error generating balance summary for ", params$name, ": ", e)
-        NULL
-      })
-    }
-    # For MatchIt
-    else {
-      result <- tryCatch({
         do.call(matchit, c(list(formula = formula, data = data), params))
-      }, error = function(e) {
-        message("Error in ", params$name, ": ", e)
-        return(NULL)
-      })
-      
-      if (is.null(result)) next
-      
+      }
+    }, error = function(e) {
+      message("Error in ", params$name, ": ", e)
+      return(NULL)
+    })
+
+    if (is.null(result)) {
+      next
+    }
+
+    balance_plot <- NULL
+    common_support_plot <- NULL
+    balance_summary <- NULL
+
+    if (rerun_diagnostics) {
       balance_plot <- tryCatch({
-        love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars="std")
+        love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars = "std")
       }, error = function(e) {
         message("Error generating balance plot for ", params$name, ": ", e)
-        NULL
+        return(NULL)
       })
-      
-      if(! params$method %in% c("nearest_mahalanobis", "cem")) {
+
+      if (!params$method %in% c("nearest_mahalanobis", "cem")) {
         common_support_plot <- tryCatch({
-          bal.plot(result, var.name = "distance", which = "both")
+          if (params$method == "twang") {
+            bal.plot(result, var.name = "prop.score.es.mean", which = "both")
+          } else {
+            bal.plot(result, var.name = "distance", which = "both")
+          }
         }, error = function(e) {
           message("Error generating common support plot for ", params$name, ": ", e)
-          NULL
+          return(NULL)
         })
-      } else {
-        common_support_plot <- NULL
       }
-      
-      
+
       balance_summary <- tryCatch({
-        summary(result)
+        if (params$method == "twang") {
+          summary(result)
+        } else {
+          bal.tab(result)
+        }
       }, error = function(e) {
         message("Error generating balance summary for ", params$name, ": ", e)
-        NULL
+        return(NULL)
       })
     }
 
-    method_results <- list(
-      result = result,
-      balance_plot = balance_plot,
-      common_support_plot = common_support_plot,
-      summary = balance_summary
-    )
-          
+    method_results <- list(result = result)
     saveRDS(method_results, file = filename)
-    all_results[[params$name]] <- method_results
+
+    diagnostics <- list(balance_plot = balance_plot, common_support_plot = common_support_plot, summary = balance_summary)
+    saveRDS(diagnostics, file = diagnostics_filename)
+
+    all_results[[params$name]] <- c(method_results, diagnostics)
   }
-  
+
   return(all_results)
 }
 
@@ -367,25 +311,25 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
 
 # Define a list of matching methods and parameters, each with a unique name
 methods <- list(
-  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun = FALSE),
-  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun = FALSE),
-  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun = FALSE),
-  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun = FALSE),
-  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun = FALSE),
-  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun = FALSE),
-  list(name = "cem", method = "cem", estimand="ATT", rerun = FALSE),
-  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun = FALSE),
-  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun=FALSE),
-  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun=FALSE),
-  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun=FALSE),
-  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun = FALSE)
+  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "cem", method = "cem", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
+  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
+  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
+  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE)
 )
 
 results <- run_matching_methods(
   data = m_data,
   formula = matchingFormula,
   methods = methods,
-  rerun_all = FALSE,
+  rerun_model = FALSE,
   output_dir = ps_dir
 )
 
