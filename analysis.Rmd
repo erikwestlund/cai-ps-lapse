@@ -386,44 +386,51 @@ analysisFormulaFull <- formula(
 
 run_logistic_models <- function(design, formulas, method_name) {
   print(paste0("Estimating models: ", method_name))
-  
+
   results <- list()
   roundTo <- 2
+  roundP <- 3
+
   for (i in seq_along(formulas)) {
-    if(method_name %in% c("cbps", "entropy", "bart")) {
+    if (method_name %in% c("cbps", "entropy", "bart")) {
       package <- "WeightIt"
       approach <- "ipw"
-    } else if(method_name %in% c("twang_gbm")) {
+    } else if (method_name %in% c("twang_gbm")) {
       package <- "twang"
       approach <- "ipw"
+    } else if (method_name == "subclass") {
+      package <- "MatchIt"
+      approach <- "subclassification"
     } else {
       package <- "MatchIt"
       approach <- "match w/ replacement"
     }
-    
-    
-    model <- svyglm(formula = formulas[[i]], design = design, family = quasibinomial(), contrasts=NULL)
+
+    if (method_name == "subclass") {
+      # Extract subclass weights
+      subclass_weights <- weights(design, type = "sampling")
+
+      # Run weighted survey logistic regression
+      model <- svyglm(formula = formulas[[i]], design = design, family = quasibinomial(), contrasts = NULL)
+    } else {
+      # Standard survey logistic regression
+      model <- svyglm(formula = formulas[[i]], design = design, family = quasibinomial(), contrasts = NULL)
+    }
 
     model_summary <- summary(model)
-
     coef_table <- model_summary$coefficients
     estimate <- coef_table[2, "Estimate"]
-    
-    roundTo <- 2
-    roundP <- 3
-    
-    or <- formatC(exp(estimate), format="f", digits=roundTo)
-    estimate <- formatC(estimate, format="f", digits=roundTo)
-    se <- formatC(coef_table[2, "Std. Error"], format="f", digits=roundTo)
-    t_value <- formatC(coef_table[2, "t value"], format="f", digits=roundTo)
-    p_value <- formatC(coef_table[2, "Pr(>|t|)"], format="f", digits=roundP)
-    
+
+    or <- formatC(exp(estimate), format = "f", digits = roundTo)
+    estimate <- formatC(estimate, format = "f", digits = roundTo)
+    se <- formatC(coef_table[2, "Std. Error"], format = "f", digits = roundTo)
+    t_value <- formatC(coef_table[2, "t value"], format = "f", digits = roundTo)
+    p_value <- formatC(coef_table[2, "Pr(>|t|)"], format = "f", digits = roundP)
+
     confint_values <- confint(model, level = 0.95)[2, ]
-    ci_lb <- confint_values[1]
-    ci_ub <- confint_values[2]
-    ci_lb_or <- formatC(exp(ci_lb), format="f", digits=roundTo)
-    ci_ub_or <- formatC(exp(ci_ub), format="f", digits=roundTo)
-    
+    ci_lb_or <- formatC(exp(confint_values[1]), format = "f", digits = roundTo)
+    ci_ub_or <- formatC(exp(confint_values[2]), format = "f", digits = roundTo)
+
     result_summ <- data.frame(
       package = package,
       method = method_name,
@@ -436,11 +443,10 @@ run_logistic_models <- function(design, formulas, method_name) {
       t_value = t_value,
       p_value = p_value,
       lb_95_or = ci_lb_or,
-      ub_95_or = ci_ub_or 
+      ub_95_or = ci_ub_or
     )
-    
+
     rownames(result_summ) <- NULL
-     
     results[[i]] <- result_summ
   }
 
