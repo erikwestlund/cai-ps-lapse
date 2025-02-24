@@ -207,7 +207,7 @@ All propensity score models use a binomial family with a logit link. Matching is
 ```{r ps_f, echo=FALSE}
 
 # Define function to run matching with disk storage and selective re-running
-run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, rerun_diagnostics = TRUE, output_dir = "ps_results") {
+run_matching_methods <- function(data, formula, methods, output_dir = "ps_results") {
   if (!dir.exists(output_dir)) {
     dir.create(output_dir, recursive = TRUE)
   }
@@ -222,7 +222,7 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
 
     result <- NULL
 
-    if (file.exists(filename) && !rerun_model) {
+    if (file.exists(filename) && !params$rerun_model) {
       print("Loading cached results...")
       result <- readRDS(filename)$result
     }
@@ -255,25 +255,31 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
       next
     }
 
+    love_plot <- NULL
     balance_plot <- NULL
-    common_support_plot <- NULL
     balance_summary <- NULL
 
-    if (rerun_diagnostics || !file.exists(diagnostics_filename)) {
+    if (params$rerun_diagnostics || !file.exists(diagnostics_filename)) {
       print("Running diagnostics...")
 
-      balance_plot <- tryCatch({
-        love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars = "std")
-      }, error = function(e) {
-        message("Error generating balance plot for ", params$name, ": ", e)
-        return(NULL)
-      })
+      love_plot <- if (params$method != "twang") { 
+        tryCatch({
+          love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars = "std")
+        }, error = function(e) {
+          message("Error generating balance plot for ", params$name, ": ", e)
+          return(NULL)
+        })
+      } else {
+        NULL
+      }
 
-      common_support_plot <- tryCatch({
+      balance_plot <- tryCatch({
         if (params$method == "twang") {
           bal.plot(result, var.name = "prop.score.es.mean", which = "both")
-        } else {
+        } else if("distance" %in% names(result)) {
           bal.plot(result, var.name = "distance", which = "both")
+        } else {
+          NULL
         }
       }, error = function(e) {
         message("Error generating common support plot for ", params$name, ": ", e)
@@ -291,19 +297,19 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
         return(NULL)
       })
 
-      saveRDS(list(balance_plot = balance_plot, common_support_plot = common_support_plot, summary = balance_summary), file = diagnostics_filename)
+      saveRDS(list(love_plot = love_plot, balance_plot = balance_plot, summary = balance_summary), file = diagnostics_filename)
     } else {
       print("Loading cached diagnostics...")
       diagnostics <- readRDS(diagnostics_filename)
+      love_plot <- diagnostics$love_plot
       balance_plot <- diagnostics$balance_plot
-      common_support_plot <- diagnostics$common_support_plot
       balance_summary <- diagnostics$summary
     }
 
     all_results[[params$name]] <- list(
       result = result,
+      love_plot = love_plot,
       balance_plot = balance_plot,
-      common_support_plot = common_support_plot,
       summary = balance_summary
     )
   }
@@ -318,25 +324,23 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
 
 # Define a list of matching methods and parameters, each with a unique name
 methods <- list(
-  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "cem", method = "cem", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
-  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
-  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
-  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE)
+  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
+  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
+  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
+  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE)
 )
 
 results <- run_matching_methods(
   data = m_data,
   formula = matchingFormula,
   methods = methods,
-  rerun_model = FALSE,
   output_dir = ps_dir
 )
 
@@ -483,7 +487,7 @@ for (method_name in method_names) {
   } else {
     # For MatchIt methods, use get_matches due to having more Tx than C.
     matched_data <- if(method_name == "subclass_glm") {
-      MatchIt::match_data(method_result$result)
+      MatchIt::match_data(method_result$result, subclass = 5)
     } else {
       MatchIt::get_matches(method_result$result)
     }
@@ -513,24 +517,24 @@ saveRDS(final_results, file.path(ps_dir, paste0("ps_results_summary.rds")))
 
 ## Diagnostics
 
-```{r balance_plots}
+```{r love_plots}
 for (method_name in method_names) {
   # Get balance and common support plots for the method
   method_results <- results[[method_name]]
+  love_plot <- method_results$love_plot
   balance_plot <- method_results$balance_plot
-  common_support_plot <- method_results$common_support_plot
   
   # Output section header for balance plot
-  if (!is.null(balance_plot)) {
-    cat("### Diagnostic Plot for", method_name, "\n\n")
-    print(balance_plot)
+  if (!is.null(love_plot)) {
+    cat("### Love Plot for", method_name, "\n\n")
+    print(love_plot)
     cat("\n\n")
   }
   
-  # Output section header for common support plot (if exists)
-  if (!is.null(common_support_plot)) {
-    cat("### Equipoise Plot for", method_name, "\n\n")
-    print(common_support_plot)
+  # Output section header for balanace plot of pscore (if exists)
+  if (!is.null(balance_plot)) {
+    cat("### Balance Plot of distance measure for", method_name, "\n\n")
+    print(balance_plot)
     cat("\n\n")
   }
 }
