@@ -1,0 +1,118 @@
+---
+title: "Results Summary"
+author: "Erik Westlund"
+date: "2025-02-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+
+# Get results summary from the pipeline; no PHI in here
+results <- readRDS("final_results.rds")
+
+fullResults <- results |> filter(formula == "full")
+
+fullResultsForHumans <- fullResults |> 
+  mutate(
+    estimate_or = estimate_or |> as.numeric(),
+    se = se |> as.numeric(),
+    t_value = t_value |> as.numeric(),
+    p_value = p_value |> as.numeric(),
+    lb_95_or = lb_95_or |> as.numeric(),
+    ub_95_or = ub_95_or |> as.numeric(),
+    method = case_when(
+      method == "Naive" ~ "No Adjustment",
+      method == "nearest_glm" ~ "Nearest Neighbor Matching, GLM (MatchIt)",
+      method == "nearest_gam" ~ "Nearest Neighbor Matching, GAM (MatchIt)",
+      method == "nearest_gbm" ~ "Nearest Neighbor Matching, GBM (MatchIt)",
+      method == "nearest_lasso" ~ "Nearest Neighbor Matching, LASSO (MatchIt)",
+      method == "nearest_mahalanobis" ~ "Nearest Neighbor Matching, Mahalanobis (MatchIt)",
+      method == "nearest_rpart" ~ "Nearest Neighbor Matching, Recursive Partinioning (MatchIt)",
+      method == "subclass_glm" ~ "Subclassification, GLM (MatchIt)",
+      method == "cbps" ~ "IPW, Covariate Balancing Propensity Score (WeightIt)",
+      method == "entropy" ~ "IPW, Entropy Balancing (WeightIt)",
+      method == "bart" ~ "IPW, Bayesian Additive Regression Trees (WeightIt)",
+      method == "twang_gbm" ~ "IPW, GBM (twang)",
+      TRUE ~ "Unknown"
+    )
+  ) |> 
+  select(
+    method, estimand, estimate_or, se, t_value, p_value, lb_95_or, ub_95_or
+  ) |> 
+  rename(
+    "OR" = estimate_or,
+    "SE" = se,
+    "t" = t_value,
+    "Lower" = lb_95_or,
+    "Upper" = ub_95_or
+  ) |> 
+  arrange(OR) |>
+  mutate(method = factor(method, levels = method))
+
+# Define colors
+fullResultsForHumans$color <- "black"
+fullResultsForHumans$color[fullResultsForHumans$method == "No Adjustment"] <- "red"
+fullResultsForHumans$color[fullResultsForHumans$method == "IPW, GBM (twang)"] <- "blue"
+```
+
+```{r, echo = FALSE, fig.width = 10, fig.height = 8}
+# Plot
+plot <- ggplot(fullResultsForHumans, aes(x = reorder(method, OR), y = OR, color = color)) +
+  geom_pointrange(aes(ymin = Lower, ymax = Upper), size = 0.8) +
+  geom_point(size = 3) +
+  geom_text(aes(label = sprintf("%.2f", OR), color = color), vjust = -1.2, hjust = 0.5, size = 4) +  # Match color
+  coord_flip() +
+  scale_color_identity() +  # Uses the color column directly
+  scale_y_continuous(breaks = seq(1, max(fullResultsForHumans$Upper), by = 0.1)) +  # Custom x-axis breaks every 0.1
+  theme_minimal(base_size = 14) +
+  labs(
+    x = element_blank(),
+    y = "Odds Ratio",
+    title = "Doubly Robust Propensity Score Adjusted\n Model Estimates (ATT)",  # Wrap title
+    caption = "\n\nOdds Ratio of 1.0 = No Association.
+               MatchIt, WeightIt, and twang R packages are used for estimation.
+               IPW Twang GBM results (shown in blue) reported throughout paper.
+               No Adjustment (shown in red) reflects results with no propensity score adjustment."
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", margin = margin(b = 15)),  # Add space below title
+    legend.position = "none",
+    axis.line = element_line(color = "gray80"),  # Lighten axis lines
+    axis.text = element_text(color = "gray30"),  # Lighten axis labels
+    axis.ticks = element_line(color = "gray80"),  # Lighten axis ticks
+    axis.title.x = element_text(margin = margin(t = 10)),  # Space between y-axis label and plot
+    plot.caption = element_text(margin = margin(t = 15)),  # Space above caption
+    plot.margin = margin(20, 20, 30, 20)  # Adds overall spacing
+  ) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray70") +  # Lightened reference line
+  geom_hline(yintercept = 1, color = "gray30")  # Black solid line at OR = 1
+
+plot
+ggsave("results_summary.png", plot, width = 10, height = 8, dpi = 300)
+
+tableOutput <- fullResultsForHumans |> 
+  select(-color) |> 
+  rename(
+    Method = method,
+    Estimand = estimand,
+  ) 
+
+tableOutput$Method <- factor(
+  fullResultsForHumans$method, 
+  levels = c(
+    "IPW, GBM (twang)",  # Move to top
+    "No Adjustment",      # Move to second
+    setdiff(levels(factor(fullResultsForHumans$method)), c("IPW, GBM (twang)", "No Adjustment"))  # Keep existing order for others
+  )
+) 
+
+tableOutput <- tableOutput |> arrange(Method)
+
+tableOutput |> 
+  kable()
+```
