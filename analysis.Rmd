@@ -220,36 +220,36 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
 
     print(paste0("Starting method: ", params$name, "."))
 
+    result <- NULL
+
     if (file.exists(filename) && !rerun_model) {
-      print("Results are cached. Proceeding to next method...")
-      method_results <- readRDS(filename)
-
-      if (file.exists(diagnostics_filename) && !rerun_diagnostics) {
-        diagnostics <- readRDS(diagnostics_filename)
-        method_results <- c(method_results, diagnostics)
-      }
-
-      all_results[[params$name]] <- method_results
-      next
+      print("Loading cached results...")
+      result <- readRDS(filename)$result
     }
 
-    print("No cached results found. Running method...")
+    if (is.null(result)) {
+      print("No cached results found or rerunning model. Running method...")
 
-    result <- tryCatch({
-      if (params$method == "twang") {
-        ps(formula = formula, data = data.frame(data), 
-           n.trees = 10000, interaction.depth = 3,
-           shrinkage = 0.01, estimand = params$estimand,
-           stop.method = c("es.mean", "ks.max"))
-      } else if (!is.null(params$use) && params$use == "weightit") {
-        do.call(weightit, c(list(formula = formula, data = data), params))
-      } else {
-        do.call(matchit, c(list(formula = formula, data = data), params))
+      result <- tryCatch({
+        if (params$method == "twang") {
+          ps(formula = formula, data = data.frame(data), 
+             n.trees = 10000, interaction.depth = 3,
+             shrinkage = 0.01, estimand = params$estimand,
+             stop.method = c("es.mean", "ks.max"))
+        } else if (!is.null(params$use) && params$use == "weightit") {
+          do.call(weightit, c(list(formula = formula, data = data), params))
+        } else {
+          do.call(matchit, c(list(formula = formula, data = data), params))
+        }
+      }, error = function(e) {
+        message("Error in ", params$name, ": ", e)
+        return(NULL)
+      })
+      
+      if (!is.null(result)) {
+        saveRDS(list(result = result), file = filename)
       }
-    }, error = function(e) {
-      message("Error in ", params$name, ": ", e)
-      return(NULL)
-    })
+    }
 
     if (is.null(result)) {
       next
@@ -259,7 +259,9 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
     common_support_plot <- NULL
     balance_summary <- NULL
 
-    if (rerun_diagnostics) {
+    if (rerun_diagnostics || !file.exists(diagnostics_filename)) {
+      print("Running diagnostics...")
+
       balance_plot <- tryCatch({
         love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars = "std")
       }, error = function(e) {
@@ -267,18 +269,16 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
         return(NULL)
       })
 
-      if (!params$method %in% c("nearest_mahalanobis", "cem")) {
-        common_support_plot <- tryCatch({
-          if (params$method == "twang") {
-            bal.plot(result, var.name = "prop.score.es.mean", which = "both")
-          } else {
-            bal.plot(result, var.name = "distance", which = "both")
-          }
-        }, error = function(e) {
-          message("Error generating common support plot for ", params$name, ": ", e)
-          return(NULL)
-        })
-      }
+      common_support_plot <- tryCatch({
+        if (params$method == "twang") {
+          bal.plot(result, var.name = "prop.score.es.mean", which = "both")
+        } else {
+          bal.plot(result, var.name = "distance", which = "both")
+        }
+      }, error = function(e) {
+        message("Error generating common support plot for ", params$name, ": ", e)
+        return(NULL)
+      })
 
       balance_summary <- tryCatch({
         if (params$method == "twang") {
@@ -290,15 +290,22 @@ run_matching_methods <- function(data, formula, methods, rerun_model = FALSE, re
         message("Error generating balance summary for ", params$name, ": ", e)
         return(NULL)
       })
+
+      saveRDS(list(balance_plot = balance_plot, common_support_plot = common_support_plot, summary = balance_summary), file = diagnostics_filename)
+    } else {
+      print("Loading cached diagnostics...")
+      diagnostics <- readRDS(diagnostics_filename)
+      balance_plot <- diagnostics$balance_plot
+      common_support_plot <- diagnostics$common_support_plot
+      balance_summary <- diagnostics$summary
     }
 
-    method_results <- list(result = result)
-    saveRDS(method_results, file = filename)
-
-    diagnostics <- list(balance_plot = balance_plot, common_support_plot = common_support_plot, summary = balance_summary)
-    saveRDS(diagnostics, file = diagnostics_filename)
-
-    all_results[[params$name]] <- c(method_results, diagnostics)
+    all_results[[params$name]] <- list(
+      result = result,
+      balance_plot = balance_plot,
+      common_support_plot = common_support_plot,
+      summary = balance_summary
+    )
   }
 
   return(all_results)
