@@ -1,3 +1,7 @@
+*.html
+images/*
+*.Rds
+
 # History files
 .Rhistory
 .Rapp.history

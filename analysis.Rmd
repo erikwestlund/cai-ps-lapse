@@ -10,13 +10,6 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-library(readr)
-library(dplyr)
-library(kableExtra)
-library(purrr)
-library(gee)
-library(MatchIt)
-
 source("settings.R")
 
 library(readr)
@@ -24,13 +17,25 @@ library(dplyr)
 library(kableExtra)
 library(purrr)
 library(gee)
+library(geepack)
+library(ggplot2)
 library(MatchIt)
+library(twang)
+library(survey)
+library(cobalt)
+library(margins)
+
+
+shouldCache <- TRUE
 
 data <- readr::read_csv(file.path(s_root, "Gina's Project/df_Final_240909.csv")) |> 
   mutate(
     outcome_va_vi = outcome_VA_logMAR >= 0.3,
     outcome_va_blind = outcome_VA_logMAR >= 1,
+    outcome_va_vi_binary = if_else(outcome_va_vi, 1, 0),
+    outcome_va_blind_binary = if_else(outcome_va_blind, 1, 0),
     ever_lapse_cat = factor(person_ever_lapse),
+    ever_lapse_binary = if_else(ever_lapse_cat == TRUE, 1, 0),
     MRN = dplyr::min_rank(e_mrn_deidentified),
     gender_cat = factor(gender),
     race_ethnic_cat = factor(race_ethnicity_gp),
@@ -69,26 +74,35 @@ data <- readr::read_csv(file.path(s_root, "Gina's Project/df_Final_240909.csv"))
     glaucoma_after_hitplus_cat = case_when(
       Otherretina_after_hitplus != "Present" | is.na(Otherretina_after_hitplus) ~ FALSE,
       Otherretina_after_hitplus == "Present" ~ TRUE
-    )
-  ) |> 
-  rename(
-    catsurg_before_hitplus_cat = cataract_surgery_bef_hitplus,
-    catsurg_after_hitplus_cat = cataract_surgery_after_hitplus,
+    ),
+    other_inject = factor(other_inject),
+    anti_VEGF = factor(anti_VEGF),
+    focal_laser_flag = factor(focal_laser_flag),
+    PRP_flag = factor(PRP_flag),
+    glaucoma_bef_hitplus_cat = factor(glaucoma_bef_hitplus_cat),
+    otherretina_bef_hitplus_cat = factor(otherretina_bef_hitplus_cat),
+    catsurg_before_hitplus_cat = factor(cataract_surgery_bef_hitplus)
   )
+
+save_og_image <- function(plot, filename, width=800, height=1000) {
+  png(filename=filename, width=width, height=height)
+  plot
+  dev.off()
+} 
 
 ```
 
-## Goals
+## Introduction
 
-`Treatment`: We consider here the "treatment" to be having a lapsed episode within our observation window.
-`Outcome`: We want to estimate the effect of the treatment on vision loss, measured separately as vision impairment and blindness.
-`Estimand`: We will estimate the ATT, or average treatment effect in the treated. 
+* `Treatment`: We consider here the "treatment" to be having a lapsed episode within our observation window.
+* `Outcome`: We want to estimate the effect of the treatment on vision loss, measured separately as vision impairment and blindness.
+* `Estimand`: We will estimate the ATT, or average treatment effect in the treated. 
 
 In summary, we will attempt to estimate the effect of lapsing vs. not lapsing among those who lapsed. Put differently, one could think of this as the impact of attending clinic, counter to fact (lapsing), on vision impairment.
 
 ## Process
 
-We will use propensity score matching techniques to estimate the probability of treatment (i.e., the probability of lapsing), given a vector of covariates. These covariates must be measured before treatment. We will then use these probabilities, or propensity scores, to construct a cohort of patients.
+We will use propensity score matching techniques to estimate the probability of treatment (i.e., the probability of lapsing), given a vector of covariates we think predicts lapsing. These covariates must be measured before treatment. We will then use these probabilities, or propensity scores, to construct a cohort of patients assembled or weighted such that it allows for the estimation of the desired estimand (here, the `ATT`).
 
 Since we will be estimating the `ATT`, all patients who lapsed will be kept in the study. We will use various techniques to choose a matched cohort of patients, with the end goal of matching lapsers with patients who do not lapse, despite having a similar propensity to do so.
 
@@ -104,18 +118,296 @@ missing <- data |>
 missing |> count()
 missing |> kable()
 
-
-m_data <- data |> 
-  filter(!is.na(CCI) & !is.na(DCSI))
 ```
+
+We will proceed with a data set that drops those patients.
+
+```{r get_m_data}
+m_data <- data |> filter(
+  !is.na(!CCI) & !is.na(DCSI)
+)
+
+m_data |> count()
+```
+
+We will model `p(lapse)` using this formula:
+
+```{r init_ps, echo = FALSE}
+matchingFormula <- as.formula("ever_lapse_binary ~ 
+  baseline_VA_logMAR +
+  gender_cat +
+  race_ethnic_cat +
+  insurance_cat +
+  age_cat +
+  CCI +
+  DCSI +
+  other_inject +
+  anti_VEGF +
+  focal_laser_flag +
+  PRP_flag +
+  glaucoma_bef_hitplus_cat +
+  otherretina_bef_hitplus_cat +
+  catsurg_before_hitplus_cat")
+
+print(matchingFormula)
+
+```
+
+## Initial Imbalance
+
+We first want to assess the imbalance before weighting or matching to get a sense for how imbalanced our sample is.
+
+```{r initial_imbalance}
+m.initialImbalance <- matchit(
+    formula = matchingFormula,
+    data = m_data,
+    method = NULL,
+    distance = "glm" 
+  )
+```
+
+```{r initial_imablance_img, echo=FALSE}
+
+save_og_image(
+  plot = plot(summary(m.initialImbalance), main="Summary of Initial Imbalance", sub="distance = p(lapse)"),
+  filename = "images/m.initialImbalance_summary.png",
+  width = 800,
+  height = 1000
+)
+```
+
+![Initial Imbalance](images/m.initialImbalance_summary.png)
+
+A rule of thumb is <0.1 SMD is good, < 0.15 is acceptable, and over that is problematic.
+
+Accounting:
+
+* 25 measures
+* 13 > 0.1
+
 
 ## Propensity Score Construction
 
-```{r match_1}
+We will use a function that lets us run a number of different propensity score designs.
 
-m.out1 <- matchit(
-  ever_lapse_cat ~ 
-    baseline_VA_logMAR +
+All propensity score models use a binomial family with a logit link. Matching is done with replacement because we have more treated than control units.
+
+* `nearest_glm`: Nearest neighbor using propensity scores generated with GLM (generalized linear model)
+* `nearest_gam`: Nearest neighbor using propensity scores generated with a GAM (generalized additive model)
+* `nearest_gbm`: Nearest neighbor using propensity scores generated with GBM (generalized boosted model)
+* `nearest_lasso`: Nearest neighbor using propensity scores generated with lasso regression
+* `nearest_rpart`: Nearest neighbor using propensity scores generated with regression trees
+* `optimal_glm`: Optimal matching is similar to nearest but optimizes on the absolute pair distance
+* `subclass_glm`: Uses N number of bins (set to 5) to create strata and weights
+* `nearest_mahalanobis`: Matches using the mahalanobis distance between the set of covariates.
+* `genetic`: Nearest neighbor matching using a genetic algorithm to generate a distance scores.
+* `coarsened`: Coarsens the covariates into bins and uses exact matching afterwards.
+* `twang_gbm`: Use weighting with GBM (gradient boosting model)
+
+
+```{r ps_f, echo=FALSE}
+
+# Define function to run matching with disk storage and selective re-running
+run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, output_dir = "ps_results") {
+  # Ensure the specified output directory exists
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  all_results <- list()
+  
+  # Iterate over each method
+  for (params in methods) {
+    filename <- file.path(output_dir, paste0(params$name, ".rds"))
+    
+    print(paste0("Starting method: ", params$name, "."))
+    
+    if (file.exists(filename) && !params$rerun && !rerun_all) {
+      print("Results are cached. Proceeding to next method...")
+      method_results <- readRDS(filename)
+      all_results[[params$name]] <- method_results
+      next
+    }
+    
+    print("No cached results found. Running method...")
+    
+    
+    
+    if (params$method == "twang") {
+      result <- tryCatch({
+        ps(formula = formula, data = data.frame(data), 
+           n.trees = 10000,
+           interaction.depth = 3,
+           shrinkage = 0.01,
+           estimand = params$estimand,
+           stop.method = c("es.mean", "ks.max"))  # Stopping criteria
+      }, error = function(e) {
+        message("Error in TWANG GBM: ", e)
+        return(NULL)
+      })
+      
+      if (!is.null(result)) {
+        diagnostic_plot <- tryCatch({
+          love.plot(result, stat = "mean.diffs", var.order = "es.mean", stars="std")
+        }, error = function(e) {
+          message("Error generating TWANG balance plot: ", e)
+          NULL
+        })
+        
+        equipoise_plot <- tryCatch({
+          bal.plot(result, var.name = "prop.score.es.mean", which="both")
+        }, error = function(e) {
+          message("Error generating TWANG equipoise plot: ", e)
+          NULL
+        })
+        
+        balance_summary <- tryCatch({
+          summary(result)
+        }, error = function(e) {
+          message("Error generating TWANG balance summary: ", e)
+          NULL
+        })
+      }
+      
+    } else if(length(params$use) > 0 && params$use == "weightit") {
+       result <- tryCatch({
+        do.call(weightit, c(list(formula = formula, data = data), params))
+      }, error = function(e) {
+        message("Error in ", params$name, ": ", e)
+        return(NULL)
+      })
+      
+      if (is.null(result)) next
+      
+      diagnostic_plot <- tryCatch({
+        love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars="std")
+      }, error = function(e) {
+        message("Error generating diagnostic plot for ", params$name, ": ", e)
+        NULL
+      })
+      
+      if(! params$method %in% c("nearest_mahalanobis", "cem", "cbps", "entropy")) {
+        equipoise_plot <- tryCatch({
+          bal.plot(result, var.name = "distance", which = "both")
+        }, error = function(e) {
+          message("Error generating equipoise plot for ", params$name, ": ", e)
+          NULL
+        })
+      } else {
+        equipoise_plot <- NULL
+      }
+      
+      
+      balance_summary <- tryCatch({
+        bal.tab(result)
+      }, error = function(e) {
+        message("Error generating balance summary for ", params$name, ": ", e)
+        NULL
+      })
+    } else {
+      result <- tryCatch({
+        do.call(matchit, c(list(formula = formula, data = data), params))
+      }, error = function(e) {
+        message("Error in ", params$name, ": ", e)
+        return(NULL)
+      })
+      
+      if (is.null(result)) next
+      
+      diagnostic_plot <- tryCatch({
+        love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars="std")
+      }, error = function(e) {
+        message("Error generating diagnostic plot for ", params$name, ": ", e)
+        NULL
+      })
+      
+      if(! params$method %in% c("nearest_mahalanobis", "cem")) {
+        equipoise_plot <- tryCatch({
+          bal.plot(result, var.name = "distance", which = "both")
+        }, error = function(e) {
+          message("Error generating equipoise plot for ", params$name, ": ", e)
+          NULL
+        })
+      } else {
+        equipoise_plot <- NULL
+      }
+      
+      
+      balance_summary <- tryCatch({
+        summary(result)
+      }, error = function(e) {
+        message("Error generating balance summary for ", params$name, ": ", e)
+        NULL
+      })
+    }
+
+    method_results <- list(
+      result = result,
+      diagnostic_plot = diagnostic_plot,
+      equipoise_plot = equipoise_plot,
+      summary = balance_summary
+    )
+          
+    saveRDS(method_results, file = filename)
+    all_results[[params$name]] <- method_results
+  }
+  
+  return(all_results)
+}
+
+# These methods had issues with computation/time; revisit later.
+# list(name = "genetic", method = "genetic", rerun = FALSE),
+# list(name = "optimal_pair", method = "optimal", rerun = FALSE),
+# list(name = "full", method = "full", rerun = FALSE),
+
+# Define a list of matching methods and parameters, each with a unique name
+methods <- list(
+  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun = FALSE),
+  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun = FALSE),
+  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun = FALSE),
+  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun = FALSE),
+  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun = FALSE),
+  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun = FALSE),
+  list(name = "cem", method = "cem", estimand="ATT", rerun = FALSE),
+  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun = FALSE),
+  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun=FALSE),
+  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun=FALSE),
+  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun=FALSE),
+  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun = FALSE)
+)
+
+results <- run_matching_methods(
+  data = m_data,
+  formula = matchingFormula,
+  methods = methods,
+  rerun_all = FALSE,
+  output_dir = ps_dir
+)
+
+```
+
+Note that optimal pair matching would not run on our data. I have not tried optimal full matching. Genetic may run but over 18 hours later it still hadn't matched. I may debug this later, but for now we have 9 methods.
+
+## Results Summary
+
+```{r analysis_setup}
+analysisFormulaSimple <- formula(
+  outcome_va_vi_binary ~
+    ever_lapse_binary
+)
+
+analysisFormulaMiddle <- formula(
+  outcome_va_vi_binary ~
+    ever_lapse_binary + 
+    gender_cat +
+    race_ethnic_cat +
+    insurance_cat +
+    age_cat
+)
+
+analysisFormulaFull <- formula(
+  outcome_va_vi_binary ~
+    ever_lapse_binary + 
     gender_cat +
     race_ethnic_cat +
     insurance_cat +
@@ -127,39 +419,289 @@ m.out1 <- matchit(
     focal_laser_flag +
     PRP_flag +
     glaucoma_bef_hitplus_cat +
-    glaucoma_after_hitplus_cat +
     otherretina_bef_hitplus_cat +
-    glaucoma_after_hitplus_cat +
-    catsurg_before_hitplus_cat +
-    catsurg_after_hitplus_cat,
-    data = m_data,
-    method = "optimal",
-    distance = "glm",
-    estimate = "ATT", 
-  )
+    catsurg_before_hitplus_cat
+)
 
 
-m.out1
-summary(m.out1)
-plot(m.out1, type = "jitter", interactive = FALSE)
-plot(m.out1, type = "desnity", interactive = FALSE, which.xs = ~baseline_VA_logMAR + CCI + DCSI)
-plot(m.out1, type = "jitter", interactive = FALSE)
+run_logistic_models <- function(design, formulas, method_name) {
+  print(paste0("Estimating models: ", method_name))
+  
+  results <- list()
+  roundTo <- 2
+  for (i in seq_along(formulas)) {
+    if(method_name %in% c("cbps", "entropy", "bart")) {
+      package <- "WeightIt"
+      approach <- "ipw"
+    } else if(method_name %in% c("twang_gbm")) {
+      package <- "twang"
+      approach <- "ipw"
+    } else {
+      package <- "MatchIt"
+      approach <- "match w/ replacement"
+    }
+    
+    
+    model <- svyglm(formula = formulas[[i]], design = design, family = quasibinomial(), contrasts=NULL)
+
+    model_summary <- summary(model)
+
+    coef_table <- model_summary$coefficients
+    estimate <- coef_table[2, "Estimate"]
+    
+    roundTo <- 2
+    roundP <- 3
+    
+    or <- formatC(exp(estimate), format="f", digits=roundTo)
+    estimate <- formatC(estimate, format="f", digits=roundTo)
+    se <- formatC(coef_table[2, "Std. Error"], format="f", digits=roundTo)
+    t_value <- formatC(coef_table[2, "t value"], format="f", digits=roundTo)
+    p_value <- formatC(coef_table[2, "Pr(>|t|)"], format="f", digits=roundP)
+    
+    confint_values <- confint(model, level = 0.95)[2, ]
+    ci_lb <- confint_values[1]
+    ci_ub <- confint_values[2]
+    ci_lb_or <- formatC(exp(ci_lb), format="f", digits=roundTo)
+    ci_ub_or <- formatC(exp(ci_ub), format="f", digits=roundTo)
+    
+    result_summ <- data.frame(
+      package = package,
+      method = method_name,
+      approach = approach,
+      estimand = "ATT",
+      formula = names(formulas)[i],
+      estimate = estimate,
+      estimate_or = or,
+      se = se,
+      t_value = t_value,
+      p_value = p_value,
+      lb_95_or = ci_lb_or,
+      ub_95_or = ci_ub_or 
+    )
+    
+    rownames(result_summ) <- NULL
+     
+    results[[i]] <- result_summ
+  }
+
+  do.call(rbind, results)
+}
+```
+
+Below are results for the simple (treatment only), middle (demographics only), and full (everything). See the formulas above.
+
+I excluded CEM (coarsened exact matching) because in the process it ended up dropping patients with certain factor levels and so estimation wouldn't run because of lack of contrasts. We could respecify models to exclude those covariates but I would not go that route.
+
+```{r results, echo=FALSE}
+
+formulas <- list(
+  tx_only = analysisFormulaSimple,
+  # middle = analysisFormulaMiddle,
+  full = analysisFormulaFull
+)
+
+# Start with naive model results
+naive_design <- svydesign(ids = ~e_mrn_deidentified, data = m_data, weights=~1)
+naive_results <- run_logistic_models(naive_design, formulas, "Naive")
+
+all_results <- list(naive_results)
+
+# Removing CEM because matching process drops levels of certain factors due to unavailable matches.
+method_names <- names(results)
+method_names <- method_names[! method_names %in% c("cem")]
+
+for (method_name in method_names) {
+  print(paste0("Running model for method: ", method_name))
+  method_result <- results[[method_name]]
+  
+  if(method_name %in% c("cbps", "entropy", "energy", "bart")) {
+    # Weightit methods
+    matched_data <- m_data
+    weights <- method_result$result$weights
+    matched_data$weights <- weights
+    design <- svydesign(ids = ~e_mrn_deidentified, weights = ~weights, data = matched_data)
+  } else if (method_name == "twang_gbm") {
+    # For TWANG model with weights
+    m_data$twang_att_w <- get.weights(method_result$result, stop.method = "es.mean")
+    design <- svydesign(ids = ~e_mrn_deidentified, weights = ~twang_att_w, data = m_data)
+  } else {
+    # For MatchIt methods, use get_matches due to having more Tx than C.
+    matched_data <- if(method_name == "subclass_glm") {
+      MatchIt::match_data(method_result$result)
+    } else {
+      MatchIt::get_matches(method_result$result)
+    }
+    design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights=~1)
+  }
+  
+  # Run logistic models and store results
+  method_results <- run_logistic_models(design, formulas, method_name)
+  all_results[[method_name]] <- method_results
+}
+
+# Combine all results into a single data frame
+final_results <- do.call(rbind, all_results)
+
+# Remove row names
+rownames(final_results) <- NULL
+
+final_results |> 
+  filter(formula == "full") |> 
+  arrange(estimate) |> 
+  kable(format = "markdown", caption = "Logistic Regression Results Across Matching Methods (Full Model)")
+
+
+saveRDS(final_results, file.path(ps_dir, paste0("ps_results_summary.rds")))
+```
+
+
+## Diagnostics
+
+```{r diagnostic_plots}
+for (method_name in method_names) {
+  # Get diagnostic and equipoise plots for the method
+  method_results <- results[[method_name]]
+  diagnostic_plot <- method_results$diagnostic_plot
+  equipoise_plot <- method_results$equipoise_plot
+  
+  # Output section header for diagnostic plot
+  if (!is.null(diagnostic_plot)) {
+    cat("### Diagnostic Plot for", method_name, "\n\n")
+    print(diagnostic_plot)
+    cat("\n\n")
+  }
+  
+  # Output section header for equipoise plot (if exists)
+  if (!is.null(equipoise_plot)) {
+    cat("### Equipoise Plot for", method_name, "\n\n")
+    print(equipoise_plot)
+    cat("\n\n")
+  }
+}
+```
+
+
+## Margins Model
+
+From here on out, we'll use the twang model with IPW. 
+
+A key research question we had is the relationship between lapse and vision impairment for certain subpopulations, including those with:
+
+* PDR on any treatment
+* PDR on anti-VEGF only
+* PDR on PRP only
+
+
+```{r post-analysis}
+design <- svydesign(ids = ~e_mrn_deidentified, weights = ~twang_att_w, data = m_data)
+model <- svyglm(formula = formulas[["full"]], design = design, family = quasibinomial(), contrasts=NULL)
+
+avg_margfx <- margins(model, design=design)
+
+all_mfx <- summary(avg_margfx) 
+
+# PDR on any treatment
+design_pdr_any_tx <- subset(design, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_pdr_any_tx <- subset(m_data, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_any_tx <- data_pdr_any_tx |> nrow()
+mfx_any_tx <- summary(margins(model, design = design_pdr_any_tx, data = data_pdr_any_tx, variables=c("ever_lapse_binary")))
+
+# PDR on anti-VEGF only
+design_pdr_anti_vegf <- subset(design, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
+data_pdr_anti_vegf <- subset(m_data, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
+n_anti_vegf <- data_pdr_anti_vegf |> nrow()
+mfx_anti_vegf <- summary(margins(model, design = design_pdr_anti_vegf, data = data_pdr_anti_vegf, variables=c("ever_lapse_binary")))
+
+# PDR on PRP only
+design_pdr_prp <- subset(design, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
+data_pdr_prp <- subset(m_data, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
+n_pdr_prp <- data_pdr_prp |> nrow()
+mfx_pdr_prp <- summary(margins(model, design = design_pdr_prp, data = data_pdr_prp, variables=c("ever_lapse_binary")))
 
 ```
 
-For now, I am dropping these cases. I assume we can fill them back in since we should have the information to do so.
+### Twang: Average Marginal Effect
 
-## Variable qusetions:
+```{r avg_ame}
+all_mfx |> kable()
+```
 
-Confirm time of measurement (i.e., was it before measurement of lapse) on the following measures:
+### Twang: PDR on any treatment
 
-* `other_inject`
-* `anti_VEGF`
-* `focal_laser_flag`
-* `PRP_flag`
-* `glaucoma_bef_hitplus_cat`
-* `glaucoma_after_hitplus_cat`
-* `otherretina_bef_hitplus_cat`
-* `glaucoma_after_hitplus_cat`
-* `catsurg_before_hitplus_cat`
-* `catsurg_after_hitplus_cat`
+```{r avg_ame_any_tx}
+print(n_any_tx)
+mfx_any_tx |> kable()
+```
+
+### Twang: PDR on AntiVEGF
+
+```{r avg_ame_antivegf}
+print(n_anti_vegf)
+mfx_anti_vegf |> kable()
+```
+
+
+### Twang: PDR on PRP
+
+```{r avg_ame_prp}
+print(n_pdr_prp)
+mfx_pdr_prp |> kable()
+```
+
+
+### Gut check on similar results: Nearest Neighbor GLM matching
+
+```{r gut_check}
+
+nearest_glm_data <- match.data(results[["nearest_glm"]]$result)
+nearest_glm_design <- svydesign(ids = ~e_mrn_deidentified, data = nearest_glm_data, weights=~1)
+nearest_glm_model <- svyglm(formula = formulas[["full"]], design = nearest_glm_design, family = binomial())
+nearest_glm_avg_mfx <- summary(margins(nearest_glm_model, design = nearest_glm_design, variables=c("ever_lapse_binary")))
+
+# PDR on any treatment
+nearest_glm_design_pdr_any_tx <- subset(nearest_glm_design, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+nearest_glm_data_pdr_any_tx <- subset(nearest_glm_data, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+nearest_glm_n_any_tx <- nearest_glm_data_pdr_any_tx |> nrow()
+nearest_glm_mfx_any_tx <- summary(margins(model, design = nearest_glm_design_pdr_any_tx, data = nearest_glm_data_pdr_any_tx, variables=c("ever_lapse_binary")))
+
+# PDR on anti-VEGF only
+nearest_glm_design_pdr_anti_vegf <- subset(nearest_glm_design, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
+nearest_glm_data_pdr_anti_vegf <- subset(nearest_glm_data, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
+nearest_glm_n_anti_vegf <- nearest_glm_data_pdr_anti_vegf |> nrow()
+nearest_glm_mfx_anti_vegf <- summary(margins(model, design = nearest_glm_design_pdr_anti_vegf, data = nearest_glm_data_pdr_anti_vegf, variables=c("ever_lapse_binary")))
+
+# PDR on PRP only
+nearest_glm_design_pdr_prp <- subset(nearest_glm_design, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
+nearest_glm_data_pdr_prp <- subset(nearest_glm_data, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
+nearest_glm_n_pdr_prp <- nearest_glm_data_pdr_prp |> nrow()
+nearest_glm_mfx_pdr_prp <- summary(margins(model, design = nearest_glm_design_pdr_prp, data = nearest_glm_data_pdr_prp, variables=c("ever_lapse_binary")))
+
+```
+
+
+### Nearest GLM: Average Marginal Effect
+
+```{r nearest_glm_avg_ame}
+nearest_glm_avg_mfx |> kable()
+```
+
+### Nearest GLM: PDR on any treatment
+
+```{r nearest_glm_avg_ame_any_tx}
+print(nearest_glm_n_any_tx)
+nearest_glm_mfx_any_tx |> kable()
+```
+
+### Nearest GLM: PDR on AntiVEGF
+
+```{r nearest_glm_avg_ame_anti_vegf}
+print(nearest_glm_n_anti_vegf)
+nearest_glm_mfx_anti_vegf |> kable()
+```
+
+### Nearest GLM: PDR on PRP
+
+```{r nearest_glm_avg_ame_prp}
+print(nearest_glm_n_pdr_prp)
+nearest_glm_mfx_pdr_prp |> kable()
+```
