@@ -1,0 +1,199 @@
+---
+title: "Twang only analysis summary"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+source("settings.R")
+
+library(dplyr)
+library(kableExtra)
+library(MatchIt)
+library(twang)
+library(survey)
+library(margins)
+
+# Note this depends on output from analysis.rmd
+
+m_data <- readRDS(file.path(ps_dir, "m_data.rds"))
+twang <- readRDS(file.path(ps_dir, "twang_gbm.rds"))
+formulas <- readRDS(file.path(ps_dir, "formulas.rds"))
+```
+
+# Model
+
+This model adjusts for multiple eyes by using model-robust standard errors (specifically, Horvitz-Thompson standard errors, which are generalized from model-robust sandwich estimators). Details are in the documentation for the survey package.
+
+The below output is before exponentiation. To exponentiate any coefficient, just do `e^b` where `b` is the coefficient and `e` is Euler's constant. In `R` or `Stata`, type `exp(b)` for short-hand
+
+```{r analysis}
+m_data$twang_att_w <- get.weights(twang$result, stop.method = "es.mean")
+design <- svydesign(ids = ~e_mrn_deidentified, weights = ~twang_att_w, data = m_data)
+model <- svyglm(formula = formulas[["full"]], design = design, family = quasibinomial())
+
+summary(model)
+```
+
+# Marginal effects
+
+Inspect logic for bugs given quickness of this turnaround
+
+```{r mfx}
+avg_margfx <- margins(model, design=design)
+
+all_mfx <- summary(avg_margfx) 
+
+# PDR on any treatment
+design_pdr_any_tx <- subset(design, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_pdr_any_tx <- subset(m_data, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_any_tx <- data_pdr_any_tx |> nrow()
+mfx_any_tx <- summary(margins(model, design = design_pdr_any_tx, data = data_pdr_any_tx, variables=c("ever_lapse_binary")))
+
+# PDR on anti-VEGF only
+design_pdr_anti_vegf <- subset(design, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
+data_pdr_anti_vegf <- subset(m_data, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
+n_anti_vegf <- data_pdr_anti_vegf |> nrow()
+mfx_anti_vegf <- summary(margins(model, design = design_pdr_anti_vegf, data = data_pdr_anti_vegf, variables=c("ever_lapse_binary")))
+
+# PDR on PRP only
+design_pdr_prp <- subset(design, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
+data_pdr_prp <- subset(m_data, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
+n_pdr_prp <- data_pdr_prp |> nrow()
+mfx_pdr_prp <- summary(margins(model, design = design_pdr_prp, data = data_pdr_prp, variables=c("ever_lapse_binary")))
+
+# NPDR or NoDR not on treatment
+design_npdr_nodr_no_tx <- subset(design, (!is.na(NPDR) | No_DR == TRUE) & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+data_npdr_nodr_no_tx <- subset(m_data, (!is.na(NPDR) | No_DR == TRUE) & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+n_npdr_nodr_no_tx <- data_npdr_nodr_no_tx |> nrow()
+mfx_npdr_nodr_no_tx <- summary(margins(model, design = design_npdr_nodr_no_tx, data = data_npdr_nodr_no_tx, variables=c("ever_lapse_binary")))
+
+# NPDR or NoDR any tx
+design_npdr_nodr_any_tx <- subset(design, (!is.na(NPDR) | No_DR == TRUE) & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_npdr_nodr_any_tx <- subset(m_data, (!is.na(NPDR) | No_DR == TRUE) & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_npdr_nodr_any_tx <- data_npdr_nodr_any_tx |> nrow()
+mfx_npdr_nodr_any_tx <- summary(margins(model, design = design_npdr_nodr_any_tx, data = data_npdr_nodr_any_tx, variables=c("ever_lapse_binary")))
+
+# NPDR not on treatment
+design_npdr_no_tx <- subset(design, !is.na(NPDR) & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+data_npdr_no_tx <- subset(m_data, !is.na(NPDR) & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+n_npdr_no_tx <- data_npdr_no_tx |> nrow()
+mfx_npdr_no_tx <- summary(margins(model, design = design_npdr_no_tx, data = data_npdr_no_tx, variables=c("ever_lapse_binary")))
+
+# NPDR  on any treatment
+design_npdr_any_tx <- subset(design, !is.na(NPDR) & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_npdr_any_tx <- subset(m_data, !is.na(NPDR) & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_npdr_any_tx <- data_npdr_any_tx |> nrow()
+mfx_npdr_any_tx <- summary(margins(model, design = design_npdr_any_tx, data = data_npdr_any_tx, variables=c("ever_lapse_binary")))
+
+# NPDR not on treatment: Mild
+design_npdr_mild_no_tx <- subset(design, NPDR == "Mild" & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+data_npdr_mild_no_tx <- subset(m_data, NPDR == "Mild" & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+n_npdr_mild_no_tx <- data_npdr_mild_no_tx |> nrow()
+mfx_npdr_mild_no_tx <- summary(margins(model, design = design_npdr_mild_no_tx, data = data_npdr_mild_no_tx, variables=c("ever_lapse_binary")))
+
+# NPDR  on any treatment: Mild
+design_npdr_mild_any_tx <- subset(design, NPDR == "Mild" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_npdr_mild_any_tx <- subset(m_data, NPDR == "Mild" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_npdr_mild_any_tx <- data_npdr_mild_any_tx |> nrow()
+mfx_npdr_mild_any_tx <- summary(margins(model, design = design_npdr_mild_any_tx, data = data_npdr_mild_any_tx, variables=c("ever_lapse_binary")))
+
+# NPDR not on treatment: Moderate
+design_npdr_moderate_no_tx <- subset(design, NPDR == "Moderate" & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+data_npdr_moderate_no_tx <- subset(m_data, NPDR == "Moderate" & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+n_npdr_moderate_no_tx <- data_npdr_moderate_no_tx |> nrow()
+mfx_npdr_moderate_no_tx <- summary(margins(model, design = design_npdr_moderate_no_tx, data = data_npdr_moderate_no_tx, variables=c("ever_lapse_binary")))
+
+# NPDR  on any treatment: Moderate
+design_npdr_moderate_any_tx <- subset(design, NPDR == "Moderate" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_npdr_moderate_any_tx <- subset(m_data, NPDR == "Moderate" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_npdr_moderate_any_tx <- data_npdr_moderate_any_tx |> nrow()
+mfx_npdr_moderate_any_tx <- summary(margins(model, design = design_npdr_moderate_any_tx, data = data_npdr_moderate_any_tx, variables=c("ever_lapse_binary")))
+
+# NPDR not on treatment: Severe
+design_npdr_severe_no_tx <- subset(design, NPDR == "Severe" & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+data_npdr_severe_no_tx <- subset(m_data, NPDR == "Severe" & (PRP_flag == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0))
+n_npdr_severe_no_tx <- data_npdr_severe_no_tx |> nrow()
+mfx_npdr_severe_no_tx <- summary(margins(model, design = design_npdr_severe_no_tx, data = data_npdr_severe_no_tx, variables=c("ever_lapse_binary")))
+
+# NPDR  on any treatment: Severe
+design_npdr_severe_any_tx <- subset(design, NPDR == "Severe" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+data_npdr_severe_any_tx <- subset(m_data, NPDR == "Severe" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
+n_npdr_severe_any_tx <- data_npdr_severe_any_tx |> nrow()
+mfx_npdr_severe_any_tx <- summary(margins(model, design = design_npdr_severe_any_tx, data = data_npdr_severe_any_tx, variables=c("ever_lapse_binary")))
+
+```
+
+```{r report}
+
+# PDR on any treatment
+print("PDR on any treatment:")
+print(n_any_tx)
+mfx_any_tx |> kable()
+
+# PDR on anti-VEGF only
+print("PDR on anti-VEGF only:")
+print(n_anti_vegf)
+mfx_anti_vegf |> kable()
+
+# PDR on PRP only
+print("PDR on PRP only:")
+print(n_pdr_prp)
+mfx_pdr_prp |> kable()
+
+# NPDR or NoDR not on treatment
+print("NPDR or NoDR not on treatment:")
+print(n_npdr_nodr_no_tx)
+mfx_npdr_nodr_no_tx |> kable()
+
+# NPDR or NoDR any tx
+print("NPDR or NoDR any tx:")
+print(n_npdr_nodr_any_tx)
+mfx_npdr_nodr_any_tx |> kable()
+
+# NPDR not on treatment
+print("NPDR not on treatment:")
+print(n_npdr_no_tx)
+mfx_npdr_no_tx |> kable()
+
+# NPDR  on any treatment
+print("NPDR  on any treatment:")
+print(n_npdr_any_tx)
+mfx_npdr_any_tx |> kable()
+
+# NPDR not on treatment: Mild
+print("NPDR not on treatment: Mild:")
+print(n_npdr_mild_no_tx)
+mfx_npdr_mild_no_tx |> kable()
+
+# NPDR  on any treatment: Mild
+print("NPDR  on any treatment: Mild:")
+print(n_npdr_mild_any_tx)
+mfx_npdr_mild_any_tx |> kable()
+
+# NPDR not on treatment: Moderate
+print("NPDR not on treatment: Moderate:")
+print(n_npdr_moderate_no_tx)
+mfx_npdr_moderate_no_tx |> kable()
+
+# NPDR  on any treatment: Moderate
+print("NPDR  on any treatment: Moderate:")
+print(n_npdr_moderate_any_tx)
+mfx_npdr_moderate_any_tx |> kable()
+
+# NPDR not on treatment: Severe
+print("NPDR not on treatment: Severe:")
+print(n_npdr_severe_no_tx)
+mfx_npdr_severe_no_tx |> kable()
+
+# NPDR  on any treatment: Severe
+print("NPDR  on any treatment: Severe:")
+print(n_npdr_severe_any_tx)
+mfx_npdr_severe_any_tx |> kable()
+
+```

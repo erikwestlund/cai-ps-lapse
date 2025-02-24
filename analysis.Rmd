@@ -24,6 +24,7 @@ library(twang)
 library(survey)
 library(cobalt)
 library(margins)
+library(margins)
 
 
 shouldCache <- TRUE
@@ -232,7 +233,7 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
     print("No cached results found. Running method...")
     
     
-    
+    # For Twang
     if (params$method == "twang") {
       result <- tryCatch({
         ps(formula = formula, data = data.frame(data), 
@@ -247,17 +248,17 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
       })
       
       if (!is.null(result)) {
-        diagnostic_plot <- tryCatch({
+        balance_plot <- tryCatch({
           love.plot(result, stat = "mean.diffs", var.order = "es.mean", stars="std")
         }, error = function(e) {
           message("Error generating TWANG balance plot: ", e)
           NULL
         })
         
-        equipoise_plot <- tryCatch({
+        common_support_plot <- tryCatch({
           bal.plot(result, var.name = "prop.score.es.mean", which="both")
         }, error = function(e) {
-          message("Error generating TWANG equipoise plot: ", e)
+          message("Error generating TWANG common support plot: ", e)
           NULL
         })
         
@@ -269,7 +270,9 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
         })
       }
       
-    } else if(length(params$use) > 0 && params$use == "weightit") {
+    } 
+    # For WeightIt
+    else if(length(params$use) > 0 && params$use == "weightit") {
        result <- tryCatch({
         do.call(weightit, c(list(formula = formula, data = data), params))
       }, error = function(e) {
@@ -279,22 +282,22 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
       
       if (is.null(result)) next
       
-      diagnostic_plot <- tryCatch({
+      balance_plot <- tryCatch({
         love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars="std")
       }, error = function(e) {
-        message("Error generating diagnostic plot for ", params$name, ": ", e)
+        message("Error generating balance plot for ", params$name, ": ", e)
         NULL
       })
       
       if(! params$method %in% c("nearest_mahalanobis", "cem", "cbps", "entropy")) {
-        equipoise_plot <- tryCatch({
+        common_support_plot <- tryCatch({
           bal.plot(result, var.name = "distance", which = "both")
         }, error = function(e) {
-          message("Error generating equipoise plot for ", params$name, ": ", e)
+          message("Error generating common support plot for ", params$name, ": ", e)
           NULL
         })
       } else {
-        equipoise_plot <- NULL
+        common_support_plot <- NULL
       }
       
       
@@ -304,7 +307,9 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
         message("Error generating balance summary for ", params$name, ": ", e)
         NULL
       })
-    } else {
+    }
+    # For MatchIt
+    else {
       result <- tryCatch({
         do.call(matchit, c(list(formula = formula, data = data), params))
       }, error = function(e) {
@@ -314,22 +319,22 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
       
       if (is.null(result)) next
       
-      diagnostic_plot <- tryCatch({
+      balance_plot <- tryCatch({
         love.plot(result, stat = "mean.diffs", var.order = "adjusted", stars="std")
       }, error = function(e) {
-        message("Error generating diagnostic plot for ", params$name, ": ", e)
+        message("Error generating balance plot for ", params$name, ": ", e)
         NULL
       })
       
       if(! params$method %in% c("nearest_mahalanobis", "cem")) {
-        equipoise_plot <- tryCatch({
+        common_support_plot <- tryCatch({
           bal.plot(result, var.name = "distance", which = "both")
         }, error = function(e) {
-          message("Error generating equipoise plot for ", params$name, ": ", e)
+          message("Error generating common support plot for ", params$name, ": ", e)
           NULL
         })
       } else {
-        equipoise_plot <- NULL
+        common_support_plot <- NULL
       }
       
       
@@ -343,8 +348,8 @@ run_matching_methods <- function(data, formula, methods, rerun_all = FALSE, outp
 
     method_results <- list(
       result = result,
-      diagnostic_plot = diagnostic_plot,
-      equipoise_plot = equipoise_plot,
+      balance_plot = balance_plot,
+      common_support_plot = common_support_plot,
       summary = balance_summary
     )
           
@@ -557,24 +562,24 @@ saveRDS(final_results, file.path(ps_dir, paste0("ps_results_summary.rds")))
 
 ## Diagnostics
 
-```{r diagnostic_plots}
+```{r balance_plots}
 for (method_name in method_names) {
-  # Get diagnostic and equipoise plots for the method
+  # Get balance and common support plots for the method
   method_results <- results[[method_name]]
-  diagnostic_plot <- method_results$diagnostic_plot
-  equipoise_plot <- method_results$equipoise_plot
+  balance_plot <- method_results$balance_plot
+  common_support_plot <- method_results$common_support_plot
   
-  # Output section header for diagnostic plot
-  if (!is.null(diagnostic_plot)) {
+  # Output section header for balance plot
+  if (!is.null(balance_plot)) {
     cat("### Diagnostic Plot for", method_name, "\n\n")
-    print(diagnostic_plot)
+    print(balance_plot)
     cat("\n\n")
   }
   
-  # Output section header for equipoise plot (if exists)
-  if (!is.null(equipoise_plot)) {
+  # Output section header for common support plot (if exists)
+  if (!is.null(common_support_plot)) {
     cat("### Equipoise Plot for", method_name, "\n\n")
-    print(equipoise_plot)
+    print(common_support_plot)
     cat("\n\n")
   }
 }
