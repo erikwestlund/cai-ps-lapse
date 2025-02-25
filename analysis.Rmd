@@ -398,7 +398,7 @@ run_logistic_models <- function(design, formulas, method_name) {
     } else if (method_name %in% c("twang_gbm")) {
       package <- "twang"
       approach <- "ipw"
-    } else if (method_name == "subclass") {
+    } else if (method_name == "subclass_glm") {
       package <- "MatchIt"
       approach <- "subclassification"
     } else {
@@ -406,7 +406,7 @@ run_logistic_models <- function(design, formulas, method_name) {
       approach <- "match w/ replacement"
     }
 
-    if (method_name == "subclass") {
+    if (method_name == "subclass_glm") {
       # Extract subclass weights
       subclass_weights <- weights(design, type = "sampling")
 
@@ -490,13 +490,12 @@ for (method_name in method_names) {
     # For TWANG model with weights
     m_data$twang_att_w <- get.weights(method_result$result, stop.method = "es.mean")
     design <- svydesign(ids = ~e_mrn_deidentified, weights = ~twang_att_w, data = m_data)
-  } else {
-    # For MatchIt methods, use get_matches due to having more Tx than C.
-    matched_data <- if(method_name == "subclass_glm") {
-      MatchIt::match_data(method_result$result, subclass = 5)
-    } else {
-      MatchIt::get_matches(method_result$result)
-    }
+  } else if(method_name == "subclass_glm") {
+    matched_data <- MatchIt::match_data(method_result$result, subclass = "subclass")
+    design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights=~weights)
+    design <- postStratify(design, ~subclass, xtabs(~subclass, data = matched_data))
+  }  else {
+    matched_data <- MatchIt::get_matches(method_result$result)
     design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights=~1)
   }
   

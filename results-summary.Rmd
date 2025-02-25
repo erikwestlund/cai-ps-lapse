@@ -11,9 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 library(dplyr)
 library(ggplot2)
 library(kableExtra)
+source("settings.R")
 
 # Get results summary from the pipeline; no PHI in here
-results <- readRDS("final_results.rds")
+results <- readRDS(file.path(ps_dir, "ps_results_summary.rds"))
 
 fullResults <- results |> filter(formula == "full")
 
