@@ -269,6 +269,13 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
           message("Error generating balance plot for ", params$name, ": ", e)
           return(NULL)
         })
+      } else if(params$method == "twang") {
+       tryCatch({
+          plot(result, plots=3)
+        }, error = function(e) {
+          message("Error generating balance plot for ", params$name, ": ", e)
+          return(NULL)
+        })
       } else {
         NULL
       }
@@ -285,6 +292,19 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
         message("Error generating common support plot for ", params$name, ": ", e)
         return(NULL)
       })
+      
+      p_dist_plot <- tryCatch({
+        if (params$method == "twang") {
+          plot(result, plots=2)
+        } else if("distance" %in% names(result)) {
+          plot(result, type = "jitter", interactive=FALSE)
+        } else {
+          NULL
+        }
+      }, error = function(e) {
+        message("Error generating p-score distribution support plot for ", params$name, ": ", e)
+        return(NULL)
+      })
 
       balance_summary <- tryCatch({
         if (params$method == "twang") {
@@ -297,7 +317,7 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
         return(NULL)
       })
 
-      saveRDS(list(love_plot = love_plot, balance_plot = balance_plot, summary = balance_summary), file = diagnostics_filename)
+      saveRDS(list(love_plot = love_plot, balance_plot = balance_plot, p_dist_plot = p_dist_plot, summary = balance_summary), file = diagnostics_filename)
     } else {
       print("Loading cached diagnostics...")
       diagnostics <- readRDS(diagnostics_filename)
@@ -309,6 +329,7 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
     all_results[[params$name]] <- list(
       result = result,
       love_plot = love_plot,
+      p_dist_plot = p_dist_plot,
       balance_plot = balance_plot,
       summary = balance_summary
     )
@@ -324,17 +345,17 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
 
 # Define a list of matching methods and parameters, each with a unique name
 methods <- list(
-  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
-  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
-  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
-  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
-  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE)
+  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
+  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
+  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
+  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
+  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE)
 )
 
 results <- run_matching_methods(
@@ -522,12 +543,14 @@ saveRDS(final_results, file.path(ps_dir, paste0("ps_results_summary.rds")))
 
 ## Diagnostics
 
-```{r love_plots}
+```{r diag_plots}
+
 for (method_name in method_names) {
   # Get balance and common support plots for the method
   method_results <- results[[method_name]]
   love_plot <- method_results$love_plot
   balance_plot <- method_results$balance_plot
+  p_dist_plot <- method_results$p_dist_plot
   
   # Output section header for balance plot
   if (!is.null(love_plot)) {
@@ -541,6 +564,81 @@ for (method_name in method_names) {
     cat("### Balance Plot of distance measure for", method_name, "\n\n")
     print(balance_plot)
     cat("\n\n")
+  }
+  
+    # Output section header for box plot of p-scores (if exists)
+  if (!is.null(p_dist_plot)) {
+    cat("### Balance Plot of distance measure for", method_name, "\n\n")
+    print(p_dist_plot)
+    cat("\n\n")
+  }
+}
+```
+
+```{r save_diag_plots}
+
+if(! dir.exists("ps_diagnostics")) {
+  dir.create("ps_diagnostics")
+}
+
+for (method_name in method_names) {
+  # Get balance and common support plots for the method
+  print(paste0("saving plots for ", method_name))
+  method_results <- results[[method_name]]
+  method_result <- method_results$result
+  
+  if(method_name == "subclass_glm") {
+    # love plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_love_plot.png")), method_results$love_plot, dpi=300)
+    
+    # balance plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_balance_plot.png")), method_results$balance_plot, dpi=300)
+    
+    # jitter plot
+    png(file.path("ps_diagnostics", paste0(method_name, "_p_dist_plot.png")), res = 300, width = 8, height = 6, units = "in")
+    plot(method_results$p_dist_plot, type="jitter", interactive=FALSE)
+    dev.off()
+  } else if(method_name == "nearest_mahalanobis") {
+    # love plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_love_plot.png")), method_results$love_plot, dpi=300)
+    
+    # balance plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_balance_plot.png")), method_results$balance_plot, dpi=300)
+  } else if(class(method_results$result) == "matchit") {
+    # love plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_love_plot.png")), method_results$love_plot, dpi=300)
+    
+    # balance plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_balance_plot.png")), method_results$balance_plot, dpi=300)
+    
+    # jitter plot
+    png(file.path("ps_diagnostics", paste0(method_name, "_p_dist_plot.png")), res = 300, width = 8, height = 6, units = "in")
+    plot(method_results$p_dist_plot, type="jitter", interactive=FALSE)
+    dev.off()
+  } else if(class(method_results$result) == "ps") {
+    # love plot
+    png(file.path("ps_diagnostics", paste0(method_name, "_love_plot.png")), res = 300, width = 8, height = 6, units = "in")
+    plot(method_result, plots = 3)
+    dev.off()
+    
+    # balance plot
+    ps_data <- method_result$data
+    ps_data$p_score <- method_result$ps$es.mean.ATT
+    
+    bplot <- ggplot(ps_data, aes(x=p_score, fill=person_ever_lapse)) + 
+      geom_density(alpha=0.4)
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_balance_plot.png")), bplot, dpi=300)
+    
+    # jitter plot
+    png(file.path("ps_diagnostics", paste0(method_name, "_p_dist_plot.png")), res = 300, width = 8, height = 6, units = "in")
+    plot(method_result, plots = 2)
+    dev.off()
+  } else if(class(method_result) == "weightit") {
+    # love plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_love_plot.png")), method_results$love_plot, dpi=300)
+    
+    # balance plot
+    ggsave(file.path("ps_diagnostics", paste0(method_name, "_balance_plot.png")), method_results$balance_plot, dpi=300)
   }
 }
 ```
