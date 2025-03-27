@@ -99,6 +99,8 @@ plot <- ggplot(fullResultsForHumans, aes(x = reorder(method, OR), y = OR, color 
 plot
 ggsave("results_summary.png", plot, width = 10, height = 8, dpi = 300)
 
+
+
 tableOutput <- fullResultsForHumans |> 
   select(-color) |> 
   rename(
