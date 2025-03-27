@@ -14,7 +14,8 @@ library(kableExtra)
 source("settings.R")
 
 # Get results summary from the pipeline; no PHI in here
-results <- readRDS(file.path(ps_dir, "ps_results_summary.rds"))
+results <- readRDS("ps_results_summary.rds")
+# results <- readRDS(file.path(ps_dir, "ps_results_summary.rds"))
 
 fullResults <- results |> filter(formula == "full")
 
@@ -27,7 +28,7 @@ fullResultsForHumans <- fullResults |>
     lb_95_or = lb_95_or |> as.numeric(),
     ub_95_or = ub_95_or |> as.numeric(),
     method = case_when(
-      method == "Naive" ~ "No Adjustment",
+      method == "Naive" ~ "No Propensity Score Balancing",
       method == "nearest_glm" ~ "Nearest Neighbor Matching, GLM (MatchIt)",
       method == "nearest_gam" ~ "Nearest Neighbor Matching, GAM (MatchIt)",
       method == "nearest_gbm" ~ "Nearest Neighbor Matching, GBM (MatchIt)",
@@ -35,10 +36,10 @@ fullResultsForHumans <- fullResults |>
       method == "nearest_mahalanobis" ~ "Nearest Neighbor Matching, Mahalanobis (MatchIt)",
       method == "nearest_rpart" ~ "Nearest Neighbor Matching, Recursive Partinioning (MatchIt)",
       method == "subclass_glm" ~ "Subclassification, GLM (MatchIt)",
-      method == "cbps" ~ "IPW, Covariate Balancing Propensity Score (WeightIt)",
-      method == "entropy" ~ "IPW, Entropy Balancing (WeightIt)",
-      method == "bart" ~ "IPW, Bayesian Additive Regression Trees (WeightIt)",
-      method == "twang_gbm" ~ "IPW, GBM (twang)",
+      method == "cbps" ~ "IPTW, Covariate Balancing Propensity Score (WeightIt)",
+      method == "entropy" ~ "IPTW, Entropy Balancing (WeightIt)",
+      method == "bart" ~ "IPTW, Bayesian Additive Regression Trees (WeightIt)",
+      method == "twang_gbm" ~ "IPTW, GBM (twang)",
       TRUE ~ "Unknown"
     )
   ) |> 
@@ -57,8 +58,8 @@ fullResultsForHumans <- fullResults |>
 
 # Define colors
 fullResultsForHumans$color <- "black"
-fullResultsForHumans$color[fullResultsForHumans$method == "No Adjustment"] <- "red"
-fullResultsForHumans$color[fullResultsForHumans$method == "IPW, GBM (twang)"] <- "blue"
+fullResultsForHumans$color[fullResultsForHumans$method == "No Propensity Score Balancing"] <- "red"
+fullResultsForHumans$color[fullResultsForHumans$method == "IPTW, GBM (twang)"] <- "blue"
 ```
 
 ```{r, echo = FALSE, fig.width = 10, fig.height = 8}
@@ -66,32 +67,34 @@ fullResultsForHumans$color[fullResultsForHumans$method == "IPW, GBM (twang)"] <-
 plot <- ggplot(fullResultsForHumans, aes(x = reorder(method, OR), y = OR, color = color)) +
   geom_pointrange(aes(ymin = Lower, ymax = Upper), size = 0.8) +
   geom_point(size = 3) +
-  geom_text(aes(label = sprintf("%.2f", OR), color = color), vjust = -1.2, hjust = 0.5, size = 4) +  # Match color
+  geom_text(aes(label = sprintf("%.2f", OR), color = color), vjust = -1.2, hjust = 0.5, size = 4) +
   coord_flip() +
-  scale_color_identity() +  # Uses the color column directly
-  scale_y_continuous(breaks = seq(1, max(fullResultsForHumans$Upper), by = 0.1)) +  # Custom x-axis breaks every 0.1
+  scale_color_identity() +
+  scale_y_continuous(breaks = seq(1, max(fullResultsForHumans$Upper), by = 0.1)) +
+  scale_x_discrete(expand = c(0.075, 0.075)) +
   theme_minimal(base_size = 14) +
   labs(
     x = element_blank(),
     y = "Odds Ratio",
-    title = "Doubly Robust Propensity Score Adjusted\n Model Estimates (ATT)",  # Wrap title
+    title = "Doubly Robust Propensity Score Adjusted\n Model Estimates (ATT)",
     caption = "\n\nOdds Ratio of 1.0 = No Association.
                MatchIt, WeightIt, and twang R packages are used for estimation.
-               IPW Twang GBM results (shown in blue) reported throughout paper.
+               IPTW = Inverse probability of treatment weighting.
+               IPTW Twang GBM results (shown in blue) reported throughout paper.
                No Adjustment (shown in red) reflects results with no propensity score adjustment."
   ) +
   theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", margin = margin(b = 15)),  # Add space below title
+    plot.title = element_text(hjust = 0.5, face = "bold", margin = margin(b = 15)),
     legend.position = "none",
-    axis.line = element_line(color = "gray80"),  # Lighten axis lines
-    axis.text = element_text(color = "gray30"),  # Lighten axis labels
-    axis.ticks = element_line(color = "gray80"),  # Lighten axis ticks
-    axis.title.x = element_text(margin = margin(t = 10)),  # Space between y-axis label and plot
-    plot.caption = element_text(margin = margin(t = 15)),  # Space above caption
-    plot.margin = margin(20, 20, 30, 20)  # Adds overall spacing
+    axis.line = element_line(color = "gray80"),
+    axis.text = element_text(color = "gray30"),
+    axis.ticks = element_line(color = "gray80"),
+    axis.title.x = element_text(margin = margin(t = 10)),
+    plot.caption = element_text(margin = margin(t = 15)),
+    plot.margin = margin(20, 20, 30, 20)
   ) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "gray70") +  # Lightened reference line
-  geom_hline(yintercept = 1, color = "gray30")  # Black solid line at OR = 1
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray70") +  
+  geom_hline(yintercept = 1, linetype = "dashed",  color = "gray30") 
 
 plot
 ggsave("results_summary.png", plot, width = 10, height = 8, dpi = 300)
@@ -106,9 +109,9 @@ tableOutput <- fullResultsForHumans |>
 tableOutput$Method <- factor(
   fullResultsForHumans$method, 
   levels = c(
-    "IPW, GBM (twang)",  # Move to top
+    "IPTW, GBM (twang)",  # Move to top
     "No Adjustment",      # Move to second
-    setdiff(levels(factor(fullResultsForHumans$method)), c("IPW, GBM (twang)", "No Adjustment"))  # Keep existing order for others
+    setdiff(levels(factor(fullResultsForHumans$method)), c("IPTW, GBM (twang)", "No Adjustment"))  # Keep existing order for others
   )
 ) 
 

@@ -383,39 +383,26 @@ analysisFormulaFull <- formula(
     catsurg_before_hitplus_cat
 )
 
+fit_logistic_models <- function(design, formulas) {
+  models <- list()
+  for (i in seq_along(formulas)) {
+    model <- svyglm(
+      formula = formulas[[i]],
+      design = design,
+      family = quasibinomial(),
+      contrasts = NULL
+    )
+    models[[names(formulas)[i]]] <- model
+  }
+  models
+}
 
-run_logistic_models <- function(design, formulas, method_name) {
-  print(paste0("Estimating models: ", method_name))
-
-  results <- list()
+summarize_logistic_models <- function(models, method_name) {
   roundTo <- 2
   roundP <- 3
 
-  for (i in seq_along(formulas)) {
-    if (method_name %in% c("cbps", "entropy", "bart")) {
-      package <- "WeightIt"
-      approach <- "ipw"
-    } else if (method_name %in% c("twang_gbm")) {
-      package <- "twang"
-      approach <- "ipw"
-    } else if (method_name == "subclass_glm") {
-      package <- "MatchIt"
-      approach <- "subclassification"
-    } else {
-      package <- "MatchIt"
-      approach <- "match w/ replacement"
-    }
-
-    if (method_name == "subclass_glm") {
-      # Extract subclass weights
-      subclass_weights <- weights(design, type = "sampling")
-
-      # Run weighted survey logistic regression
-      model <- svyglm(formula = formulas[[i]], design = design, family = quasibinomial(), contrasts = NULL)
-    } else {
-      # Standard survey logistic regression
-      model <- svyglm(formula = formulas[[i]], design = design, family = quasibinomial(), contrasts = NULL)
-    }
+  results <- lapply(names(models), function(name) {
+    model <- models[[name]]
 
     model_summary <- summary(model)
     coef_table <- model_summary$coefficients
@@ -431,12 +418,20 @@ run_logistic_models <- function(design, formulas, method_name) {
     ci_lb_or <- formatC(exp(confint_values[1]), format = "f", digits = roundTo)
     ci_ub_or <- formatC(exp(confint_values[2]), format = "f", digits = roundTo)
 
-    result_summ <- data.frame(
+    package <- if (method_name %in% c("cbps", "entropy", "bart")) "WeightIt"
+    else if (method_name %in% c("twang_gbm")) "twang"
+    else "MatchIt"
+
+    approach <- if (method_name %in% c("cbps", "entropy", "bart", "twang_gbm")) "ipw"
+    else if (method_name == "subclass_glm") "subclassification"
+    else "match w/ replacement"
+
+    tibble::tibble(
       package = package,
       method = method_name,
       approach = approach,
       estimand = "ATT",
-      formula = names(formulas)[i],
+      formula = name,
       estimate = estimate,
       estimate_or = or,
       se = se,
@@ -445,13 +440,11 @@ run_logistic_models <- function(design, formulas, method_name) {
       lb_95_or = ci_lb_or,
       ub_95_or = ci_ub_or
     )
+  })
 
-    rownames(result_summ) <- NULL
-    results[[i]] <- result_summ
-  }
-
-  do.call(rbind, results)
+  bind_rows(results)
 }
+
 ```
 
 Below are results for the simple (treatment only), middle (demographics only), and full (everything). See the formulas above.
@@ -466,46 +459,54 @@ formulas <- list(
   full = analysisFormulaFull
 )
 
-# Start with naive model results
-naive_design <- svydesign(ids = ~e_mrn_deidentified, data = m_data, weights=~1)
-naive_results <- run_logistic_models(naive_design, formulas, "Naive")
+model_objects <- list()
 
-all_results <- list(naive_results)
+# Naive model first
+naive_design <- svydesign(ids = ~e_mrn_deidentified, data = m_data, weights = ~1)
+naive_models <- fit_logistic_models(naive_design, formulas)
+naive_results <- summarize_logistic_models(naive_models, method_name = "Naive")
 
-# Removing CEM because matching process drops levels of certain factors due to unavailable matches.
+all_results <- list(Naive = naive_results)
+model_objects$Naive <- naive_models
+
+# Run for each method
 method_names <- names(results)
 method_names <- method_names[! method_names %in% c("cem")]
 
 for (method_name in method_names) {
   print(paste0("Running model for method: ", method_name))
   method_result <- results[[method_name]]
-  
-  if(method_name %in% c("cbps", "entropy", "energy", "bart")) {
-    # Weightit methods
+
+  if (method_name %in% c("cbps", "entropy", "energy", "bart")) {
     matched_data <- m_data
     weights <- method_result$result$weights
     matched_data$weights <- weights
     design <- svydesign(ids = ~e_mrn_deidentified, weights = ~weights, data = matched_data)
+
   } else if (method_name == "twang_gbm") {
-    # For TWANG model with weights
     m_data$twang_att_w <- get.weights(method_result$result, stop.method = "es.mean")
     design <- svydesign(ids = ~e_mrn_deidentified, weights = ~twang_att_w, data = m_data)
-  } else if(method_name == "subclass_glm") {
+
+  } else if (method_name == "subclass_glm") {
     matched_data <- MatchIt::match_data(method_result$result, subclass = "subclass")
-    design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights=~weights)
+    design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights = ~weights)
     design <- postStratify(design, ~subclass, xtabs(~subclass, data = matched_data))
-  }  else {
+
+  } else {
     matched_data <- MatchIt::get_matches(method_result$result)
-    design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights=~1)
+    design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights = ~1)
   }
-  
-  # Run logistic models and store results
-  method_results <- run_logistic_models(design, formulas, method_name)
-  all_results[[method_name]] <- method_results
+
+  # Run models and summaries
+  models <- fit_logistic_models(design, formulas)
+  model_summary <- summarize_logistic_models(models, method_name)
+
+  model_objects[[method_name]] <- models
+  all_results[[method_name]] <- model_summary
 }
 
-# Combine all results into a single data frame
-final_results <- do.call(rbind, all_results)
+# Combine all summary results
+final_results <- bind_rows(all_results)
 
 # Remove row names
 rownames(final_results) <- NULL
@@ -516,6 +517,7 @@ final_results |>
   kable(format = "markdown", caption = "Logistic Regression Results Across Matching Methods (Full Model)")
 
 
+saveRDS(final_models, file.path(ps_dir, paste0("ps_analysis_models.rds")))
 saveRDS(final_results, file.path(ps_dir, paste0("ps_results_summary.rds")))
 ```
 
