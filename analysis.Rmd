@@ -345,17 +345,17 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
 
 # Define a list of matching methods and parameters, each with a unique name
 methods <- list(
-  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE),
-  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
-  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
-  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = TRUE),
-  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = TRUE)
+  list(name = "nearest_glm", method = "nearest", distance = "glm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_gam", method = "nearest", distance = "gam", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_gbm", method = "nearest", distance = "gbm", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_lasso", method = "nearest", distance = "lasso", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_rpart", method = "nearest", distance = "rpart", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "subclass_glm", method = "subclass", distance = "glm", subclasses = 5, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "nearest_mahalanobis", method = "nearest", distance = "mahalanobis", replace = TRUE, estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE),
+  list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
+  list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
+  list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
+  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE)
 )
 
 results <- run_matching_methods(
@@ -574,6 +574,18 @@ for (method_name in method_names) {
   }
 }
 ```
+
+## Save the output model output for paper table
+
+```{r paper_table}
+
+output_model <- all_results$twang_gbm
+
+
+
+
+```
+
 
 ```{r save_diag_plots}
 
