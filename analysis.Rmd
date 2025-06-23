@@ -12,11 +12,16 @@ knitr::opts_chunk$set(echo = TRUE)
 
 source("settings.R")
 
+library(broom)
 library(cobalt)
 library(dplyr)
+library(flextable)
 library(gee)
 library(ggplot2)
+library(gt)
+library(gtsummary)
 library(kableExtra)
+library(jtools)
 library(margins)
 library(MatchIt)
 library(purrr)
@@ -512,7 +517,6 @@ for (method_name in method_names) {
     matched_data <- MatchIt::match_data(method_result$result, subclass = "subclass")
     design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights = ~weights)
     design <- postStratify(design, ~subclass, xtabs(~subclass, data = matched_data))
-
   } else {
     matched_data <- MatchIt::get_matches(method_result$result)
     design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights = ~1)
@@ -538,7 +542,7 @@ final_results |>
   kable(format = "markdown", caption = "Logistic Regression Results Across Matching Methods (Full Model)")
 
 
-saveRDS(final_models, file.path(ps_dir, paste0("ps_analysis_models.rds")))
+saveRDS(model_objects, file.path(ps_dir, paste0("ps_analysis_models.rds")))
 saveRDS(final_results, file.path(ps_dir, paste0("ps_results_summary.rds")))
 ```
 
@@ -580,9 +584,29 @@ for (method_name in method_names) {
 ## Save the output model output for paper table
 
 ```{r paper_table}
+# model_objects <- readRDS(file.path(ps_dir, paste0("ps_analysis_models.rds")))
 
-output_model <- all_results$twang_gbm
+output_model <- model_objects$twang_gbm$full
 
+tidy_output_model_formatted <- function(model, digits = 2) {
+  tidy(model, exponentiate = TRUE, conf.int = TRUE) |>
+    mutate(
+      estimate = round(estimate, digits),
+      std.error = round(std.error, digits),
+      statistic = round(statistic, digits),
+      conf.low = round(conf.low, digits),
+      conf.high = round(conf.high, digits),
+      p.value = round(p.value, digits + 1),
+      # OR_CI = paste0(estimate, " (", conf.low, ", ", conf.high, ")"),
+      p.value.sum = case_when(
+        p.value < 0.001 ~ "<.001",
+        TRUE ~ formatC(p.value, format="f", digits = 3)
+      )
+    )
+}
+tidy_output_model <- tidy_output_model_formatted(output_model)
+tidy_output_model
+flextable(tidy_output_model) |> save_as_docx(path = file.path(ps_dir, paste0("output_model_tidy_formatted.docx")))
 
 
 
