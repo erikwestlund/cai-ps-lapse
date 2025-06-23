@@ -764,19 +764,19 @@ nearest_glm_avg_mfx <- summary(margins(nearest_glm_model, design = nearest_glm_d
 nearest_glm_design_pdr_any_tx <- subset(nearest_glm_design, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
 nearest_glm_data_pdr_any_tx <- subset(nearest_glm_data, PDR == "Present" & (PRP_flag == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | other_inject == 1))
 nearest_glm_n_any_tx <- nearest_glm_data_pdr_any_tx |> nrow()
-nearest_glm_mfx_any_tx <- summary(margins(model, design = nearest_glm_design_pdr_any_tx, data = nearest_glm_data_pdr_any_tx, variables=c("ever_lapse_binary")))
+nearest_glm_mfx_any_tx <- summary(margins(nearest_glm_model, design = nearest_glm_design_pdr_any_tx, data = nearest_glm_data_pdr_any_tx, variables=c("ever_lapse_binary")))
 
 # PDR on anti-VEGF only
 nearest_glm_design_pdr_anti_vegf <- subset(nearest_glm_design, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
 nearest_glm_data_pdr_anti_vegf <- subset(nearest_glm_data, PDR == "Present" & PRP_flag == 0 & anti_VEGF == 1 & focal_laser_flag == 0 & other_inject == 0)
 nearest_glm_n_anti_vegf <- nearest_glm_data_pdr_anti_vegf |> nrow()
-nearest_glm_mfx_anti_vegf <- summary(margins(model, design = nearest_glm_design_pdr_anti_vegf, data = nearest_glm_data_pdr_anti_vegf, variables=c("ever_lapse_binary")))
+nearest_glm_mfx_anti_vegf <- summary(margins(nearest_glm_model, design = nearest_glm_design_pdr_anti_vegf, data = nearest_glm_data_pdr_anti_vegf, variables=c("ever_lapse_binary")))
 
 # PDR on PRP only
 nearest_glm_design_pdr_prp <- subset(nearest_glm_design, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
 nearest_glm_data_pdr_prp <- subset(nearest_glm_data, PDR == "Present" & PRP_flag == 1 & anti_VEGF == 0 & focal_laser_flag == 0 & other_inject == 0)
 nearest_glm_n_pdr_prp <- nearest_glm_data_pdr_prp |> nrow()
-nearest_glm_mfx_pdr_prp <- summary(margins(model, design = nearest_glm_design_pdr_prp, data = nearest_glm_data_pdr_prp, variables=c("ever_lapse_binary")))
+nearest_glm_mfx_pdr_prp <- summary(margins(nearest_glm_model, design = nearest_glm_design_pdr_prp, data = nearest_glm_data_pdr_prp, variables=c("ever_lapse_binary")))
 
 ```
 
