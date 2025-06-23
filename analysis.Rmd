@@ -44,7 +44,7 @@ data <- readr::read_csv(file.path(s_root, "Gina's Project/df_Final_240909.csv"))
     gender_cat = factor(gender),
     race_ethnic_cat = factor(race_ethnicity_gp),
     insurance_cat = factor(insurance_gp),
-    age_cat = cut(age, breaks = c(0, 20, 45, 65, Inf), laebsl = c("0-20", "21-45", "46-65", "65+")),
+    age_cat = cut(age, breaks = c(0, 20, 45, 65, Inf), labels = c("0-20", "21-45", "46-65", "65+")),
     person_dr = case_when(
       No_DR == TRUE ~ 0,
       NPDR == "Mild" ~ 1,
@@ -75,7 +75,7 @@ data <- readr::read_csv(file.path(s_root, "Gina's Project/df_Final_240909.csv"))
       Otherretina_bef_hitplus != "Present" | is.na(Otherretina_bef_hitplus) ~ FALSE,
       Otherretina_bef_hitplus == "Present" ~ TRUE
     ),
-    glaucoma_after_hitplus_cat = case_when(
+    otherretina_after_hitplus_cat = case_when(
       Otherretina_after_hitplus != "Present" | is.na(Otherretina_after_hitplus) ~ FALSE,
       Otherretina_after_hitplus == "Present" ~ TRUE
     ),
@@ -128,7 +128,7 @@ We will proceed with a data set that drops those patients.
 
 ```{r get_m_data}
 m_data <- data |> filter(
-  !is.na(!CCI) & !is.na(DCSI)
+  !is.na(CCI) & !is.na(DCSI)
 )
 
 m_data |> count()
@@ -360,7 +360,7 @@ methods <- list(
   list(name = "cbps", use="weightit", method="cbps", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
   list(name = "entropy", use="weightit", method="ebal", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
   list(name = "bart", use="weightit", method="bart", estimand="ATT", rerun_model=FALSE, rerun_diagnostics = FALSE),
-  list(name = "twang_gbm", use="twanng", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE)
+  list(name = "twang_gbm", use="twang", method = "twang", estimand="ATT", rerun_model = FALSE, rerun_diagnostics = FALSE)
 )
 
 results <- run_matching_methods(

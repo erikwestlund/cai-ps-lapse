@@ -129,6 +129,236 @@ mfx_npdr_severe_any_tx <- summary(margins(model, design = design_npdr_severe_any
 
 ```
 
+```{r forest_plots}
+library(ggplot2)
+library(dplyr)
+
+# Extract marginal effects data from all calculated objects
+# Each mfx object has columns: factor, AME, SE, z, p, lower, upper
+forest_data <- bind_rows(
+  # Overall population
+  all_mfx |> 
+    filter(factor == "ever_lapse_binary") |> 
+    mutate(
+      label = "Overall Population",
+      group_type = "overall",
+      n = nrow(m_data)
+    ),
+  
+  # No DR or NPDR subgroups
+  mfx_npdr_nodr_no_tx |> 
+    mutate(
+      label = "No DR or NPDR, no treatment",
+      group_type = "subgroup",
+      n = n_npdr_nodr_no_tx
+    ),
+  mfx_npdr_nodr_any_tx |> 
+    mutate(
+      label = "No DR or NPDR, any treatment",
+      group_type = "subgroup", 
+      n = n_npdr_nodr_any_tx
+    ),
+  
+  # NPDR overall
+  mfx_npdr_no_tx |> 
+    mutate(
+      label = "NPDR, no treatment",
+      group_type = "subgroup",
+      n = n_npdr_no_tx
+    ),
+  mfx_npdr_any_tx |> 
+    mutate(
+      label = "NPDR, any treatment",
+      group_type = "subgroup",
+      n = n_npdr_any_tx
+    ),
+  
+  # NPDR by severity
+  mfx_npdr_mild_no_tx |> 
+    mutate(
+      label = "Mild NPDR, no treatment",
+      group_type = "subgroup",
+      n = n_npdr_mild_no_tx
+    ),
+  mfx_npdr_mild_any_tx |> 
+    mutate(
+      label = "Mild NPDR, any treatment",
+      group_type = "subgroup",
+      n = n_npdr_mild_any_tx
+    ),
+  mfx_npdr_moderate_no_tx |> 
+    mutate(
+      label = "Moderate NPDR, no treatment",
+      group_type = "subgroup",
+      n = n_npdr_moderate_no_tx
+    ),
+  mfx_npdr_moderate_any_tx |> 
+    mutate(
+      label = "Moderate NPDR, any treatment",
+      group_type = "subgroup",
+      n = n_npdr_moderate_any_tx
+    ),
+  mfx_npdr_severe_no_tx |> 
+    mutate(
+      label = "Severe NPDR, no treatment",
+      group_type = "subgroup",
+      n = n_npdr_severe_no_tx
+    ),
+  mfx_npdr_severe_any_tx |> 
+    mutate(
+      label = "Severe NPDR, any treatment",
+      group_type = "subgroup",
+      n = n_npdr_severe_any_tx
+    ),
+  
+  # PDR subgroups
+  mfx_any_tx |> 
+    mutate(
+      label = "PDR, any treatment",
+      group_type = "subgroup",
+      n = n_any_tx
+    ),
+  mfx_anti_vegf |> 
+    mutate(
+      label = "PDR, on anti-VEGF only",
+      group_type = "subgroup",
+      n = n_anti_vegf
+    ),
+  mfx_pdr_prp |> 
+    mutate(
+      label = "PDR, on PRP only",
+      group_type = "subgroup",
+      n = n_pdr_prp
+    )
+) |>
+  mutate(
+    # Add sample sizes to labels
+    label_with_n = paste0(label, " (n=", n, ")"),
+    # Calculate confidence intervals
+    Lower = AME - 1.96 * SE,
+    Upper = AME + 1.96 * SE
+  )
+
+# Define order for plots (reversed to match original plot)
+subgroup_order <- rev(c(
+  "No DR or NPDR, no treatment", "No DR or NPDR, any treatment", "NPDR, no treatment",
+  "NPDR, any treatment", "Mild NPDR, no treatment", "Mild NPDR, any treatment",
+  "Moderate NPDR, no treatment", "Moderate NPDR, any treatment",
+  "Severe NPDR, no treatment", "Severe NPDR, any treatment",
+  "PDR, any treatment", "PDR, on anti-VEGF only", "PDR, on PRP only"
+))
+
+# Version 1: Subgroups only (matching original forest plot)
+data_subgroups <- forest_data |> 
+  filter(group_type == "subgroup") |>
+  mutate(Labels = factor(label, levels = subgroup_order))
+
+plot_subgroups <- ggplot(data_subgroups, aes(x = AME, y = Labels)) +
+  geom_vline(xintercept = 0, color = "#be123c", linetype = "solid", size = 0.5) +
+  geom_point(size = 3, color = "#2563eb") +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper), height = 0.2, color = "#2563eb") +
+  geom_text(
+    aes(x = Lower, label = sprintf("%.3f", Lower)), 
+    hjust = 1.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(x = Upper, label = sprintf("%.3f", Upper)), 
+    hjust = -0.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(label = sprintf("%.3f", AME)), 
+    hjust = -0.2, vjust = -1, size = 3, color = "black"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(
+    limits = c(-0.000, 0.06),
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+  labs(
+    title = "The Average Marginal Effects of Lapse Across Selected Groups",
+    x = "Average Marginal Effect (AME)",
+    y = "Treatment Group",
+    caption = paste0("All p-values < ", max(data_subgroups$p, na.rm = TRUE))
+  ) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10), 
+    axis.title.y = element_text(size = 12, face = "bold", margin = margin(r = 20)),
+    axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 20)),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = margin(b = 20)),
+    plot.margin = margin(10, 20, 30, 20),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    plot.caption = element_text(size = 10, face = "italic")
+  )
+
+# Version 2: With overall population included
+all_order <- c("Overall Population", subgroup_order)
+data_all <- forest_data |>
+  mutate(
+    Labels = factor(label, levels = rev(all_order)),
+    # Different colors for overall vs subgroups
+    point_color = ifelse(group_type == "overall", "#dc2626", "#2563eb"),
+    point_size = ifelse(group_type == "overall", 4, 3)
+  )
+
+plot_with_overall <- ggplot(data_all, aes(x = AME, y = Labels)) +
+  geom_vline(xintercept = 0, color = "#be123c", linetype = "solid", size = 0.5) +
+  # Add horizontal separator line after overall population
+  geom_hline(yintercept = length(subgroup_order) + 0.5, color = "gray50", linetype = "dashed", alpha = 0.5) +
+  geom_point(aes(color = point_color, size = point_size)) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper, color = point_color), height = 0.2) +
+  geom_text(
+    aes(x = Lower, label = sprintf("%.3f", Lower)), 
+    hjust = 1.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(x = Upper, label = sprintf("%.3f", Upper)), 
+    hjust = -0.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(label = sprintf("%.3f", AME)), 
+    hjust = -0.2, vjust = -1, size = 3, color = "black"
+  ) +
+  scale_color_identity() +
+  scale_size_identity() +
+  theme_minimal() +
+  scale_x_continuous(
+    limits = c(-0.000, 0.06),
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+  labs(
+    title = "The Average Marginal Effects of Lapse Across All Groups",
+    x = "Average Marginal Effect (AME)",
+    y = "Treatment Group",
+    caption = paste0("All p-values < ", max(data_all$p, na.rm = TRUE), 
+                    "\nOverall population shown in red, subgroups in blue")
+  ) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10), 
+    axis.title.y = element_text(size = 12, face = "bold", margin = margin(r = 20)),
+    axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 20)),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = margin(b = 20)),
+    plot.margin = margin(10, 20, 30, 20),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    plot.caption = element_text(size = 10, face = "italic")
+  )
+
+# Display the plots
+print(plot_subgroups)
+print(plot_with_overall)
+
+# Save the plots
+ggsave("forest_plot_subgroups_only.png", plot_subgroups, 
+       width = 10, height = 8, dpi = 300, bg = "white")
+ggsave("forest_plot_with_overall.png", plot_with_overall, 
+       width = 10, height = 8.5, dpi = 300, bg = "white")
+
+# Also save extracted data for reference
+write.csv(forest_data, "forest_plot_data.csv", row.names = FALSE)
+
+```
+
 ```{r report}
 
 # PDR on any treatment

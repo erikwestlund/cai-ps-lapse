@@ -55,3 +55,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Claude Code files
+CLAUDE.md
+.claude/
+claude.md
