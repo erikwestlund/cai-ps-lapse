@@ -2,6 +2,8 @@
 
 This repository contains R code for analyzing the effect of lapsing from care on vision loss outcomes in diabetic retinopathy patients using multiple propensity score methods.
 
+**IMPORTANT**: This repository contains code that processes protected health information and must be run in a secure computing environment.
+
 ## Project Overview
 
 **Research Question**: What is the effect of lapsing from care on vision impairment and blindness among diabetic retinopathy patients?
@@ -134,7 +136,8 @@ Primary results use the twang GBM method with inverse probability weighting. Key
 ## Contact
 
 **Author**: Erik Westlund  
-**Project**: Social Determinants of Health in Diabetic Retinopathy
+**Email**: ewestlund@jhu.edu  
+**Affiliation**: Department of Biostatistics, Johns Hopkins University
 
 ## License
 
