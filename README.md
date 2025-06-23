@@ -129,9 +129,7 @@ Primary results use the twang GBM method with inverse probability weighting. Key
 ## Notes and Limitations
 
 - Analysis handles clustered data (multiple eyes per patient) using survey methods
-- Some computationally intensive methods (genetic matching, optimal matching) are disabled
 - Results depend on the assumption that all confounders are measured and included
-- Current implementation focuses on ATT; ATE analysis would require modifications
 
 ## Contact
 
