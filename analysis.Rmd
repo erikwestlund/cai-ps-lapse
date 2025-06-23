@@ -328,6 +328,7 @@ run_matching_methods <- function(data, formula, methods, output_dir = "ps_result
       diagnostics <- readRDS(diagnostics_filename)
       love_plot <- diagnostics$love_plot
       balance_plot <- diagnostics$balance_plot
+      p_dist_plot <- diagnostics$p_dist_plot
       balance_summary <- diagnostics$summary
     }
 
