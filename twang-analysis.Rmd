@@ -348,14 +348,19 @@ plot_with_overall <- ggplot(data_all, aes(x = AME, y = Labels)) +
 print(plot_subgroups)
 print(plot_with_overall)
 
+# Create images directory if it doesn't exist
+if (!dir.exists("images")) {
+  dir.create("images")
+}
+
 # Save the plots
-ggsave("forest_plot_subgroups_only.png", plot_subgroups, 
+ggsave("images/forest_plot_subgroups_only.png", plot_subgroups, 
        width = 10, height = 8, dpi = 300, bg = "white")
-ggsave("forest_plot_with_overall.png", plot_with_overall, 
+ggsave("images/forest_plot_with_overall.png", plot_with_overall, 
        width = 10, height = 8.5, dpi = 300, bg = "white")
 
 # Also save extracted data for reference
-write.csv(forest_data, "forest_plot_data.csv", row.names = FALSE)
+write.csv(forest_data, "images/forest_plot_data.csv", row.names = FALSE)
 
 ```
 
