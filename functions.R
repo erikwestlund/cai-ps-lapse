@@ -176,6 +176,52 @@ create_balance_table <- function(matched_data, formula, method_name) {
   return(balance_summary)
 }
 
+# Define formulas used across analyses
+get_matching_formula <- function() {
+  as.formula("ever_lapse_binary ~ 
+    baseline_VA_logMAR +
+    gender_cat +
+    race_ethnic_cat +
+    insurance_cat +
+    age_cat +
+    CCI +
+    DCSI +
+    other_inject +
+    anti_VEGF +
+    focal_laser_flag +
+    PRP_flag +
+    glaucoma_bef_hitplus_cat +
+    otherretina_bef_hitplus_cat +
+    catsurg_before_hitplus_cat")
+}
+
+get_analysis_formulas <- function() {
+  list(
+    simple = as.formula("outcome_va_vi_binary ~ ever_lapse_binary"),
+    middle = as.formula("outcome_va_vi_binary ~ 
+      ever_lapse_binary + 
+      gender_cat +
+      race_ethnic_cat +
+      insurance_cat +
+      age_cat"),
+    full = as.formula("outcome_va_vi_binary ~
+      ever_lapse_binary + 
+      gender_cat +
+      race_ethnic_cat +
+      insurance_cat +
+      age_cat +
+      CCI +
+      DCSI +
+      other_inject +
+      anti_VEGF +
+      focal_laser_flag +
+      PRP_flag +
+      glaucoma_bef_hitplus_cat +
+      otherretina_bef_hitplus_cat +
+      catsurg_before_hitplus_cat")
+  )
+}
+
 # Model fitting and summary functions
 fit_logistic_models <- function(design, formulas) {
   models <- list()

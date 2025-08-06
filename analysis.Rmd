@@ -66,21 +66,8 @@ m_data |> count()
 We will model `p(lapse)` using this formula:
 
 ```{r init_ps, echo = FALSE}
-matchingFormula <- as.formula("ever_lapse_binary ~ 
-  baseline_VA_logMAR +
-  gender_cat +
-  race_ethnic_cat +
-  insurance_cat +
-  age_cat +
-  CCI +
-  DCSI +
-  other_inject +
-  anti_VEGF +
-  focal_laser_flag +
-  PRP_flag +
-  glaucoma_bef_hitplus_cat +
-  otherretina_bef_hitplus_cat +
-  catsurg_before_hitplus_cat")
+# Get the matching formula from functions.R
+matchingFormula <- get_matching_formula()
 
 print(matchingFormula)
 
@@ -307,37 +294,11 @@ Note that optimal pair matching would not run on our data. I have not tried opti
 ## Results Summary
 
 ```{r analysis_setup}
-analysisFormulaSimple <- formula(
-  outcome_va_vi_binary ~
-    ever_lapse_binary
-)
-
-analysisFormulaMiddle <- formula(
-  outcome_va_vi_binary ~
-    ever_lapse_binary + 
-    gender_cat +
-    race_ethnic_cat +
-    insurance_cat +
-    age_cat
-)
-
-analysisFormulaFull <- formula(
-  outcome_va_vi_binary ~
-    ever_lapse_binary + 
-    gender_cat +
-    race_ethnic_cat +
-    insurance_cat +
-    age_cat +
-    CCI +
-    DCSI +
-    other_inject +
-    anti_VEGF +
-    focal_laser_flag +
-    PRP_flag +
-    glaucoma_bef_hitplus_cat +
-    otherretina_bef_hitplus_cat +
-    catsurg_before_hitplus_cat
-)
+# Get the analysis formulas from functions.R
+analysis_formulas <- get_analysis_formulas()
+analysisFormulaSimple <- analysis_formulas$simple
+analysisFormulaMiddle <- analysis_formulas$middle
+analysisFormulaFull <- analysis_formulas$full
 
 # fit_logistic_models function is now loaded from functions.R
 
