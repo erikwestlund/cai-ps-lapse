@@ -177,8 +177,9 @@ for(subset_name in names(data_subsets)) {
   
   current_data <- data_subsets[[subset_name]]
   
-  cat("\n\n## Data Subset:", toupper(subset_name), "\n")
-  cat("Sample size:", nrow(current_data), "\n\n")
+  cat("\n\n")
+  cat("## Data Subset: ", toupper(subset_name), "\n")
+  cat("Sample size: ", nrow(current_data), "\n\n")
   
   # Update weights for current subset
   if("twang_att_w" %in% names(current_data)) {
@@ -189,7 +190,8 @@ for(subset_name in names(data_subsets)) {
   
   for(weight_type in c("unweighted", "weighted")) {
   
-    cat("\n### Analysis Type:", toupper(weight_type), "\n\n")
+    cat("\n")
+    cat("### Analysis Type: ", toupper(weight_type), "\n\n")
     
     # Create survey design for current subset
     current_design <- if(weight_type == "unweighted") {
@@ -207,7 +209,8 @@ for(subset_name in names(data_subsets)) {
     }
   
     # Fit Model 1: DR severity interaction
-    cat("\n#### DR Severity Interaction Model\n\n")
+    cat("\n")
+    cat("#### DR Severity Interaction Model\n\n")
     model_dr_interaction <- svyglm(
       formula = interaction_dr_formula,
       design = current_design,
@@ -226,7 +229,8 @@ for(subset_name in names(data_subsets)) {
       numeric(0)
     }
     
-    cat("\n**DR Severity Interaction P-values:**\n\n")
+    cat("\n")
+    cat("**DR Severity Interaction P-values:**\n\n")
     if(length(dr_interaction_terms) > 0) {
       dr_results <- data.frame(
         Term = dr_interaction_terms,
@@ -239,7 +243,8 @@ for(subset_name in names(data_subsets)) {
     }
     
     # Fit Model 2: Treatment type interaction  
-    cat("\n#### Treatment Type Interaction Model\n\n")
+    cat("\n")
+    cat("#### Treatment Type Interaction Model\n\n")
     model_treatment_interaction <- svyglm(
       formula = interaction_treatment_formula,
       design = current_design,
@@ -258,7 +263,8 @@ for(subset_name in names(data_subsets)) {
       numeric(0)
     }
     
-    cat("\n**Treatment Type Interaction P-values:**\n\n")
+    cat("\n")
+    cat("**Treatment Type Interaction P-values:**\n\n")
     if(length(treatment_interaction_terms) > 0) {
       tx_results <- data.frame(
         Term = treatment_interaction_terms,
@@ -326,7 +332,8 @@ knitr::kable(comparison_results,
 ```{r interpretation}
 # Check for significant interactions and report
 for(subset_name in names(interaction_results_list)) {
-  cat("\n### ", toupper(subset_name), "\n")
+  cat("\n")
+  cat("### ", toupper(subset_name), "\n")
   
   # Check unweighted results
   unweighted_results <- interaction_results_list[[subset_name]][["unweighted"]]
@@ -373,10 +380,11 @@ for(subset_name in names(interaction_results_list)) {
   }
 }
 
-cat("\n\n**NOTE:** Interaction p-values test whether the effect of lapsing differs")
-cat("\nsignificantly across subgroups. Non-significant p-values suggest")
-cat("\nconsistent effects across groups, supporting the main analysis.")
-cat("\nThe IPTW-weighted analysis adjusts for confounding using propensity scores.\n")
+cat("\n\n")
+cat("**NOTE:** Interaction p-values test whether the effect of lapsing differs ")
+cat("significantly across subgroups. Non-significant p-values suggest ")
+cat("consistent effects across groups, supporting the main analysis. ")
+cat("The IPTW-weighted analysis adjusts for confounding using propensity scores.\n")
 ```
 
 # Visualization of Interaction Effects
@@ -418,11 +426,38 @@ extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL)
     }
   }
   
-  # Get predictions
-  pred_data$predicted <- predict(model, newdata = pred_data, type = "response")
-  pred_data$se <- predict(model, newdata = pred_data, type = "response", se.fit = TRUE)$se.fit
-  pred_data$lower <- pred_data$predicted - 1.96 * pred_data$se
-  pred_data$upper <- pred_data$predicted + 1.96 * pred_data$se
+  # Get predictions (handle survey model output)
+  preds <- predict(model, newdata = pred_data, type = "response")
+  
+  # Extract values depending on the structure returned
+  if(is.matrix(preds) || is.data.frame(preds)) {
+    pred_data$predicted <- as.numeric(preds[,1])
+  } else {
+    pred_data$predicted <- as.numeric(preds)
+  }
+  
+  # Get standard errors
+  se_preds <- tryCatch({
+    predict(model, newdata = pred_data, type = "response", se.fit = TRUE)$se.fit
+  }, error = function(e) {
+    # If se.fit doesn't work, try to get SE another way
+    se_obj <- predict(model, newdata = pred_data, type = "link", se.fit = TRUE)
+    # Convert SE from link scale to response scale using delta method
+    link_pred <- se_obj$fit
+    link_se <- se_obj$se.fit
+    # For logit link: SE(p) ≈ SE(logit) * p * (1-p)
+    p <- plogis(link_pred)
+    return(link_se * p * (1 - p))
+  })
+  
+  if(is.matrix(se_preds) || is.data.frame(se_preds)) {
+    pred_data$se <- as.numeric(se_preds[,1])
+  } else {
+    pred_data$se <- as.numeric(se_preds)
+  }
+  
+  pred_data$lower <- pmax(0, pred_data$predicted - 1.96 * pred_data$se)
+  pred_data$upper <- pmin(1, pred_data$predicted + 1.96 * pred_data$se)
   
   return(pred_data)
 }
