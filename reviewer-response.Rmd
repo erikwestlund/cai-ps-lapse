@@ -444,48 +444,53 @@ extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL)
     }
   }
   
-  # Get predictions - be very careful with survey model output
+  # Initialize prediction columns with the correct length
+  n_rows <- nrow(pred_data)
+  pred_data$predicted <- rep(NA, n_rows)
+  pred_data$se <- rep(0.05, n_rows)  # Default SE
+  
+  # Try to get predictions
   tryCatch({
     preds <- predict(model, newdata = pred_data, type = "response")
     
     # Convert predictions to numeric vector
     if(inherits(preds, "svystat")) {
       pred_values <- as.numeric(as.vector(preds))
-      # For svystat objects, try to extract variance
-      # But be careful - it might not be the right dimension
-      tryCatch({
-        pred_var <- attr(preds, "var")
-        if(!is.null(pred_var) && is.matrix(pred_var)) {
-          # Only use diagonal if dimensions match
-          if(nrow(pred_var) == length(pred_values) && ncol(pred_var) == length(pred_values)) {
-            pred_se <- sqrt(diag(pred_var))
-          } else {
-            # Use a default SE
-            pred_se <- rep(0.05, length(pred_values))
-          }
-        } else {
-          pred_se <- rep(0.05, length(pred_values))
-        }
-      }, error = function(e) {
-        pred_se <- rep(0.05, length(pred_values))
-      })
     } else {
-      # Regular predictions
       pred_values <- as.numeric(as.vector(preds))
-      pred_se <- rep(0.05, length(pred_values))
     }
     
-    # Add to prediction data frame
-    pred_data$predicted <- pred_values
-    pred_data$se <- pred_se
+    # Check we got the right number of predictions
+    if(length(pred_values) == n_rows) {
+      pred_data$predicted <- pred_values
+      
+      # Try to get standard errors if available
+      if(inherits(preds, "svystat")) {
+        tryCatch({
+          pred_var <- attr(preds, "var")
+          if(!is.null(pred_var) && is.matrix(pred_var)) {
+            if(nrow(pred_var) == n_rows && ncol(pred_var) == n_rows) {
+              pred_data$se <- sqrt(diag(pred_var))
+            }
+          }
+        }, error = function(e) {
+          # Keep default SE
+        })
+      }
+    } else {
+      warning(paste("Got", length(pred_values), "predictions but expected", n_rows))
+      # Use fallback values
+      pred_data$predicted <- rep(0.5, n_rows)
+    }
     
   }, error = function(e) {
-    # If prediction fails, use fallback values
-    n_rows <- nrow(pred_data)
-    pred_data$predicted <- rep(0.5, n_rows)
-    pred_data$se <- rep(0.1, n_rows)
     warning(paste("Prediction failed:", e$message))
+    # Use fallback values
+    pred_data$predicted <- rep(0.5, n_rows)
   })
+  
+  # Fill any remaining NAs with fallback values
+  pred_data$predicted[is.na(pred_data$predicted)] <- 0.5
   
   # Calculate confidence intervals
   pred_data$lower <- pmax(0, pred_data$predicted - 1.96 * pred_data$se)
