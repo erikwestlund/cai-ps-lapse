@@ -432,8 +432,10 @@ dr_marginal_effects <- calculate_marginal_effects(
   "person_dr", 
   c(0, 1, 2)
 )
+
+# Add label column
 dr_marginal_effects$dr_label <- factor(dr_marginal_effects$level,
-                                      levels = c(0, 1, 2),
+                                      levels = c("0", "1", "2"),
                                       labels = c("0: No DR", "1: NPDR", "2: PDR"))
 
 # Calculate marginal effects for treatment type
@@ -443,18 +445,22 @@ tx_marginal_effects <- calculate_marginal_effects(
   "treatment_type",
   levels(m_data$treatment_type)
 )
+
+# Add treatment_type column (rename level)
 tx_marginal_effects$treatment_type <- tx_marginal_effects$level
 
 # Display marginal effects tables
 cat("### DR Severity - Marginal Effects of Lapsing\n")
-knitr::kable(dr_marginal_effects[, c("dr_label", "AME", "SE", "lower", "upper")],
+print(knitr::kable(dr_marginal_effects[, c("dr_label", "AME", "SE", "lower", "upper")],
              caption = "Marginal Effect of Lapsing by DR Severity",
-             digits = 4)
+             digits = 4,
+             row.names = FALSE))
 
 cat("\n### Treatment Type - Marginal Effects of Lapsing\n")
-knitr::kable(tx_marginal_effects[, c("treatment_type", "AME", "SE", "lower", "upper")],
+print(knitr::kable(tx_marginal_effects[, c("treatment_type", "AME", "SE", "lower", "upper")],
              caption = "Marginal Effect of Lapsing by Treatment Type", 
-             digits = 4)
+             digits = 4,
+             row.names = FALSE))
 ```
 
 ## Marginal Effects Plots
