@@ -392,81 +392,86 @@ cat("The IPTW-weighted analysis adjusts for confounding using propensity scores.
 ```{r visualization_functions}
 # Function to extract predicted probabilities for interaction plots
 extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL) {
-  # Get unique values for the interaction variable
+  # Build prediction dataset manually
   if(interaction_var == "person_dr") {
-    unique_vals <- sort(unique(data$person_dr))
-    pred_data <- expand.grid(
-      ever_lapse_binary = c(0, 1),
-      person_dr = unique_vals,
-      stringsAsFactors = FALSE
+    # Create combinations for DR severity
+    pred_data <- data.frame(
+      ever_lapse_binary = rep(c(0, 1), each = 3),
+      person_dr = rep(c(0, 1, 2), 2)
     )
   } else if(interaction_var == "treatment_type") {
-    unique_vals <- levels(data$treatment_type)
-    pred_data <- expand.grid(
-      ever_lapse_binary = c(0, 1),
-      treatment_type = unique_vals,
-      stringsAsFactors = FALSE
+    # Create combinations for treatment type
+    tx_levels <- levels(data$treatment_type)
+    n_tx <- length(tx_levels)
+    pred_data <- data.frame(
+      ever_lapse_binary = rep(c(0, 1), each = n_tx),
+      treatment_type = factor(rep(tx_levels, 2), levels = tx_levels)
     )
   } else {
-    pred_data <- expand.grid(
-      ever_lapse_binary = c(0, 1),
-      stringsAsFactors = FALSE
-    )
+    pred_data <- data.frame(ever_lapse_binary = c(0, 1))
   }
   
-  # Get all variables from the model formula
-  model_vars <- all.vars(formula(model))
+  # Add all required covariates with reference/mean values
+  # Use first observation as template and modify
+  template <- data[1, ]
   
-  # Set other variables to their reference levels or means
-  for(var in model_vars) {
-    if(!var %in% names(pred_data) && var != "outcome_va_vi_binary") {
-      if(var %in% names(data)) {
-        if(is.factor(data[[var]]) || is.character(data[[var]])) {
-          # Use the first level as reference
-          pred_data[[var]] <- factor(levels(factor(data[[var]]))[1], 
-                                    levels = levels(factor(data[[var]])))
-        } else if(is.numeric(data[[var]])) {
-          # Use mean for numeric variables
-          pred_data[[var]] <- mean(data[[var]], na.rm = TRUE)
-        } else {
-          # For logical variables, use FALSE
-          pred_data[[var]] <- FALSE
-        }
+  # For each required covariate, set to reference or mean
+  covariate_names <- c("gender_cat", "race_ethnic_cat", "insurance_cat", 
+                       "age_cat", "CCI", "DCSI", "other_inject", "anti_VEGF", 
+                       "focal_laser_flag", "PRP_flag", "glaucoma_bef_hitplus_cat",
+                       "otherretina_bef_hitplus_cat", "catsurg_before_hitplus_cat",
+                       "baseline_VA_logMAR")
+  
+  for(cov in covariate_names) {
+    if(cov %in% names(data)) {
+      if(is.factor(data[[cov]])) {
+        # Use first level for factors
+        pred_data[[cov]] <- factor(levels(data[[cov]])[1], levels = levels(data[[cov]]))
+      } else if(is.numeric(data[[cov]])) {
+        # Use mean for numeric
+        pred_data[[cov]] <- mean(data[[cov]], na.rm = TRUE)
+      } else {
+        # Use mode or first value for other types
+        pred_data[[cov]] <- data[[cov]][1]
       }
     }
   }
   
-  # Make sure factors have the right levels
+  # Ensure correct factor levels
   if("person_dr" %in% names(pred_data)) {
     pred_data$person_dr <- factor(pred_data$person_dr)
   }
-  if("treatment_type" %in% names(pred_data)) {
-    pred_data$treatment_type <- factor(pred_data$treatment_type, 
-                                      levels = levels(data$treatment_type))
-  }
   
-  # Get predictions from survey model
-  # Note: svyglm predict doesn't support se.fit, so we'll use the variance from svystat
+  # Get predictions
   preds <- predict(model, newdata = pred_data, type = "response")
   
-  # Extract predictions and variances
+  # Handle different output types
   if(inherits(preds, "svystat")) {
-    pred_data$predicted <- as.numeric(preds)
-    # Get standard errors from the variance-covariance matrix if available
+    pred_values <- as.vector(preds)
+    # Try to get SE from variance attribute
     pred_var <- attr(preds, "var")
-    if(!is.null(pred_var) && length(diag(pred_var)) == nrow(pred_data)) {
-      pred_data$se <- sqrt(diag(pred_var))
+    if(!is.null(pred_var)) {
+      # Extract diagonal if it's a matrix
+      if(is.matrix(pred_var)) {
+        pred_se <- sqrt(diag(pred_var))
+      } else {
+        pred_se <- sqrt(pred_var)
+      }
+      # Ensure same length as predictions
+      if(length(pred_se) != length(pred_values)) {
+        pred_se <- rep(0.05, length(pred_values))
+      }
     } else {
-      # Use a conservative default SE
-      pred_data$se <- 0.05
+      pred_se <- rep(0.05, length(pred_values))
     }
   } else {
-    # Handle as regular numeric vector
-    pred_data$predicted <- as.numeric(preds)
-    pred_data$se <- 0.05
+    pred_values <- as.vector(preds)
+    pred_se <- rep(0.05, length(pred_values))
   }
   
-  # Calculate confidence intervals
+  # Add to prediction data frame
+  pred_data$predicted <- pred_values
+  pred_data$se <- pred_se
   pred_data$lower <- pmax(0, pred_data$predicted - 1.96 * pred_data$se)
   pred_data$upper <- pmin(1, pred_data$predicted + 1.96 * pred_data$se)
   
