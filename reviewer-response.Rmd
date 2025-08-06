@@ -392,70 +392,70 @@ cat("The IPTW-weighted analysis adjusts for confounding using propensity scores.
 ```{r visualization_functions}
 # Function to extract predicted probabilities for interaction plots
 extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL) {
-  # Create prediction data
-  pred_data <- expand.grid(
-    ever_lapse_binary = c(0, 1),
-    stringsAsFactors = FALSE
-  )
-  
-  # Add the interaction variable levels
+  # Get unique values for the interaction variable
   if(interaction_var == "person_dr") {
+    unique_vals <- sort(unique(data$person_dr))
     pred_data <- expand.grid(
       ever_lapse_binary = c(0, 1),
-      person_dr = unique(data$person_dr),
+      person_dr = unique_vals,
       stringsAsFactors = FALSE
     )
-    pred_data$person_dr <- factor(pred_data$person_dr)
   } else if(interaction_var == "treatment_type") {
+    unique_vals <- levels(data$treatment_type)
     pred_data <- expand.grid(
       ever_lapse_binary = c(0, 1),
-      treatment_type = levels(data$treatment_type),
+      treatment_type = unique_vals,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    pred_data <- expand.grid(
+      ever_lapse_binary = c(0, 1),
       stringsAsFactors = FALSE
     )
   }
   
+  # Get all variables from the model formula
+  model_vars <- all.vars(formula(model))
+  
   # Set other variables to their reference levels or means
-  for(var in all.vars(formula(model))[-1]) {
-    if(!var %in% names(pred_data)) {
-      if(is.factor(data[[var]]) || is.character(data[[var]])) {
-        pred_data[[var]] <- factor(levels(factor(data[[var]]))[1], 
-                                  levels = levels(factor(data[[var]])))
-      } else {
-        pred_data[[var]] <- mean(data[[var]], na.rm = TRUE)
+  for(var in model_vars) {
+    if(!var %in% names(pred_data) && var != "outcome_va_vi_binary") {
+      if(var %in% names(data)) {
+        if(is.factor(data[[var]]) || is.character(data[[var]])) {
+          # Use the first level as reference
+          pred_data[[var]] <- factor(levels(factor(data[[var]]))[1], 
+                                    levels = levels(factor(data[[var]])))
+        } else if(is.numeric(data[[var]])) {
+          # Use mean for numeric variables
+          pred_data[[var]] <- mean(data[[var]], na.rm = TRUE)
+        } else {
+          # For logical variables, use FALSE
+          pred_data[[var]] <- FALSE
+        }
       }
     }
   }
   
-  # Get predictions (handle survey model output)
-  preds <- predict(model, newdata = pred_data, type = "response")
-  
-  # Extract values depending on the structure returned
-  if(is.matrix(preds) || is.data.frame(preds)) {
-    pred_data$predicted <- as.numeric(preds[,1])
-  } else {
-    pred_data$predicted <- as.numeric(preds)
+  # Make sure factors have the right levels
+  if("person_dr" %in% names(pred_data)) {
+    pred_data$person_dr <- factor(pred_data$person_dr)
+  }
+  if("treatment_type" %in% names(pred_data)) {
+    pred_data$treatment_type <- factor(pred_data$treatment_type, 
+                                      levels = levels(data$treatment_type))
   }
   
-  # Get standard errors
-  se_preds <- tryCatch({
-    predict(model, newdata = pred_data, type = "response", se.fit = TRUE)$se.fit
-  }, error = function(e) {
-    # If se.fit doesn't work, try to get SE another way
-    se_obj <- predict(model, newdata = pred_data, type = "link", se.fit = TRUE)
-    # Convert SE from link scale to response scale using delta method
-    link_pred <- se_obj$fit
-    link_se <- se_obj$se.fit
-    # For logit link: SE(p) ≈ SE(logit) * p * (1-p)
-    p <- plogis(link_pred)
-    return(link_se * p * (1 - p))
-  })
+  # Get predictions on link scale first
+  link_pred <- predict(model, newdata = pred_data, type = "link", se.fit = TRUE)
   
-  if(is.matrix(se_preds) || is.data.frame(se_preds)) {
-    pred_data$se <- as.numeric(se_preds[,1])
-  } else {
-    pred_data$se <- as.numeric(se_preds)
-  }
+  # Convert to response scale
+  pred_data$predicted <- plogis(as.numeric(link_pred$fit))
   
+  # Calculate SEs on response scale using delta method
+  link_se <- as.numeric(link_pred$se.fit)
+  pred_data$se <- link_se * pred_data$predicted * (1 - pred_data$predicted)
+  
+  # Calculate confidence intervals
   pred_data$lower <- pmax(0, pred_data$predicted - 1.96 * pred_data$se)
   pred_data$upper <- pmin(1, pred_data$predicted + 1.96 * pred_data$se)
   
