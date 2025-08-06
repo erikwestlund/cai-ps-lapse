@@ -369,41 +369,57 @@ calculate_marginal_effects <- function(model, data, subgroup_var, subgroup_level
   results <- data.frame()
   
   for(level in subgroup_levels) {
-    # Create prediction data for lapse = 0 and lapse = 1
-    pred_data_0 <- pred_data_1 <- data[1:100, ]  # Use subset for speed
+    # Use a smaller sample to avoid memory issues
+    sample_size <- min(100, nrow(data))
+    sample_data <- data[1:sample_size, ]
+    
+    # Create two copies for predictions
+    pred_data_0 <- sample_data
+    pred_data_1 <- sample_data
+    
+    # Set lapse status
     pred_data_0$ever_lapse_binary <- 0
     pred_data_1$ever_lapse_binary <- 1
     
     # Set the subgroup to current level
     if(subgroup_var == "person_dr") {
-      pred_data_0$person_dr <- level
-      pred_data_1$person_dr <- level
+      pred_data_0$person_dr <- factor(level)
+      pred_data_1$person_dr <- factor(level)
     } else if(subgroup_var == "treatment_type") {
       pred_data_0$treatment_type <- factor(level, levels = levels(data$treatment_type))
       pred_data_1$treatment_type <- factor(level, levels = levels(data$treatment_type))
     }
     
-    # Get predictions
-    pred_0 <- predict(model, newdata = pred_data_0, type = "response")
-    pred_1 <- predict(model, newdata = pred_data_1, type = "response")
-    
-    # Calculate marginal effect (difference in predictions)
-    if(inherits(pred_0, "svystat")) {
-      me <- mean(as.numeric(pred_1) - as.numeric(pred_0))
-      # Bootstrap CI
-      me_se <- sd(as.numeric(pred_1) - as.numeric(pred_0)) / sqrt(length(pred_1))
-    } else {
-      me <- mean(pred_1 - pred_0)
-      me_se <- sd(pred_1 - pred_0) / sqrt(length(pred_1))
-    }
-    
-    results <- rbind(results, data.frame(
-      level = level,
-      AME = me,
-      SE = me_se,
-      lower = me - 1.96 * me_se,
-      upper = me + 1.96 * me_se
-    ))
+    # Get predictions - handle survey model output carefully
+    tryCatch({
+      pred_0 <- predict(model, newdata = pred_data_0, type = "response")
+      pred_1 <- predict(model, newdata = pred_data_1, type = "response")
+      
+      # Convert to numeric vectors
+      p0 <- as.numeric(as.vector(pred_0))
+      p1 <- as.numeric(as.vector(pred_1))
+      
+      # Calculate marginal effect (average difference)
+      me <- mean(p1 - p0, na.rm = TRUE)
+      me_se <- sd(p1 - p0, na.rm = TRUE) / sqrt(length(p1))
+      
+      results <- rbind(results, data.frame(
+        level = as.character(level),
+        AME = me,
+        SE = me_se,
+        lower = me - 1.96 * me_se,
+        upper = me + 1.96 * me_se
+      ))
+    }, error = function(e) {
+      warning(paste("Error calculating marginal effect for", level, ":", e$message))
+      results <- rbind(results, data.frame(
+        level = as.character(level),
+        AME = NA,
+        SE = NA,
+        lower = NA,
+        upper = NA
+      ))
+    })
   }
   
   return(results)
