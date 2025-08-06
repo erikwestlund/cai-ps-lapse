@@ -11,88 +11,18 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 source("settings.R")
+source("functions.R")
 
-library(broom)
-library(cobalt)
-library(dplyr)
-library(flextable)
-library(gee)
-library(ggplot2)
-library(gt)
-library(gtsummary)
-library(kableExtra)
-library(jtools)
-library(margins)
-library(MatchIt)
-library(purrr)
-library(readr)
-library(survey)
-library(twang)
-library(WeightIt)
+# Load all required libraries
+load_required_libraries()
 
 shouldCache <- TRUE
 
-data <- readr::read_csv(file.path(s_root, "Gina's Project/df_Final_240909.csv")) |> 
-  mutate(
-    outcome_va_vi = outcome_VA_logMAR >= 0.3,
-    outcome_va_blind = outcome_VA_logMAR >= 1,
-    outcome_va_vi_binary = if_else(outcome_va_vi, 1, 0),
-    outcome_va_blind_binary = if_else(outcome_va_blind, 1, 0),
-    ever_lapse_cat = factor(person_ever_lapse),
-    ever_lapse_binary = if_else(ever_lapse_cat == TRUE, 1, 0),
-    MRN = dplyr::min_rank(e_mrn_deidentified),
-    gender_cat = factor(gender),
-    race_ethnic_cat = factor(race_ethnicity_gp),
-    insurance_cat = factor(insurance_gp),
-    age_cat = cut(age, breaks = c(0, 20, 45, 65, Inf), labels = c("0-20", "21-45", "46-65", "65+")),
-    person_dr = case_when(
-      No_DR == TRUE ~ 0,
-      NPDR == "Mild" ~ 1,
-      NPDR == "Moderate" ~ 1,
-      NPDR == "Severe" ~ 1,
-      PDR == "Present" ~ 2,
-    ),
-    person_dr_severity = case_when(
-      No_DR == TRUE ~ 0,
-      NPDR == "Mild" ~ 1,
-      NPDR == "Moderate" ~ 2,
-      NPDR == "Severe" ~ 3,
-      PDR == "Present" ~ 4,
-    ),
-    person_ever_treat = case_when(
-      other_inject == 0 & anti_VEGF == 0 & focal_laser_flag == 0 & PRP_flag == 0 ~ FALSE,
-      other_inject == 1 | anti_VEGF == 1 | focal_laser_flag == 1 | PRP_flag == 1 ~ TRUE
-    ),
-    glaucoma_bef_hitplus_cat = case_when(
-      Glaucoma_bef_hitplus != "Present" | is.na(Glaucoma_bef_hitplus) ~ FALSE,
-      Glaucoma_bef_hitplus == "Present" ~ TRUE
-    ),
-    glaucoma_after_hitplus_cat = case_when(
-      Glaucoma_after_hitplus != "Present" | is.na(Glaucoma_after_hitplus) ~ FALSE,
-      Glaucoma_after_hitplus == "Present" ~ TRUE
-    ),
-    otherretina_bef_hitplus_cat = case_when(
-      Otherretina_bef_hitplus != "Present" | is.na(Otherretina_bef_hitplus) ~ FALSE,
-      Otherretina_bef_hitplus == "Present" ~ TRUE
-    ),
-    otherretina_after_hitplus_cat = case_when(
-      Otherretina_after_hitplus != "Present" | is.na(Otherretina_after_hitplus) ~ FALSE,
-      Otherretina_after_hitplus == "Present" ~ TRUE
-    ),
-    other_inject = factor(other_inject),
-    anti_VEGF = factor(anti_VEGF),
-    focal_laser_flag = factor(focal_laser_flag),
-    PRP_flag = factor(PRP_flag),
-    glaucoma_bef_hitplus_cat = factor(glaucoma_bef_hitplus_cat),
-    otherretina_bef_hitplus_cat = factor(otherretina_bef_hitplus_cat),
-    catsurg_before_hitplus_cat = factor(cataract_surgery_bef_hitplus)
-  )
+# Load and prepare data
+data_path <- file.path(s_root, "Gina's Project/df_Final_240909.csv")
+data <- load_and_prepare_data(data_path)
 
-save_og_image <- function(plot, filename, width=800, height=1000) {
-  png(filename=filename, width=width, height=height)
-  plot
-  dev.off()
-} 
+# save_og_image function is now loaded from functions.R 
 
 ```
 
@@ -127,9 +57,8 @@ missing |> kable()
 We will proceed with a data set that drops those patients.
 
 ```{r get_m_data}
-m_data <- data |> filter(
-  !is.na(CCI) & !is.na(DCSI)
-)
+# Apply exclusions (removes missing CCI/DCSI)
+m_data <- apply_exclusions(data)
 
 m_data |> count()
 ```
@@ -410,67 +339,9 @@ analysisFormulaFull <- formula(
     catsurg_before_hitplus_cat
 )
 
-fit_logistic_models <- function(design, formulas) {
-  models <- list()
-  for (i in seq_along(formulas)) {
-    model <- svyglm(
-      formula = formulas[[i]],
-      design = design,
-      family = quasibinomial(),
-      contrasts = NULL
-    )
-    models[[names(formulas)[i]]] <- model
-  }
-  models
-}
+# fit_logistic_models function is now loaded from functions.R
 
-summarize_logistic_models <- function(models, method_name) {
-  roundTo <- 2
-  roundP <- 3
-
-  results <- lapply(names(models), function(name) {
-    model <- models[[name]]
-
-    model_summary <- summary(model)
-    coef_table <- model_summary$coefficients
-    estimate <- coef_table[2, "Estimate"]
-
-    or <- formatC(exp(estimate), format = "f", digits = roundTo)
-    estimate <- formatC(estimate, format = "f", digits = roundTo)
-    se <- formatC(coef_table[2, "Std. Error"], format = "f", digits = roundTo)
-    t_value <- formatC(coef_table[2, "t value"], format = "f", digits = roundTo)
-    p_value <- formatC(coef_table[2, "Pr(>|t|)"], format = "f", digits = roundP)
-
-    confint_values <- confint(model, level = 0.95)[2, ]
-    ci_lb_or <- formatC(exp(confint_values[1]), format = "f", digits = roundTo)
-    ci_ub_or <- formatC(exp(confint_values[2]), format = "f", digits = roundTo)
-
-    package <- if (method_name %in% c("cbps", "entropy", "bart")) "WeightIt"
-    else if (method_name %in% c("twang_gbm")) "twang"
-    else "MatchIt"
-
-    approach <- if (method_name %in% c("cbps", "entropy", "bart", "twang_gbm")) "ipw"
-    else if (method_name == "subclass_glm") "subclassification"
-    else "match w/ replacement"
-
-    tibble::tibble(
-      package = package,
-      method = method_name,
-      approach = approach,
-      estimand = "ATT",
-      formula = name,
-      estimate = estimate,
-      estimate_or = or,
-      se = se,
-      t_value = t_value,
-      p_value = p_value,
-      lb_95_or = ci_lb_or,
-      ub_95_or = ci_ub_or
-    )
-  })
-
-  bind_rows(results)
-}
+# summarize_logistic_models function is now loaded from functions.R
 
 ```
 
@@ -589,22 +460,7 @@ for (method_name in method_names) {
 
 output_model <- model_objects$twang_gbm$full
 
-tidy_output_model_formatted <- function(model, digits = 2) {
-  tidy(model, exponentiate = TRUE, conf.int = TRUE) |>
-    mutate(
-      estimate = round(estimate, digits),
-      std.error = round(std.error, digits),
-      statistic = round(statistic, digits),
-      conf.low = round(conf.low, digits),
-      conf.high = round(conf.high, digits),
-      p.value = round(p.value, digits + 1),
-      # OR_CI = paste0(estimate, " (", conf.low, ", ", conf.high, ")"),
-      p.value.sum = case_when(
-        p.value < 0.001 ~ "<.001",
-        TRUE ~ formatC(p.value, format="f", digits = 3)
-      )
-    )
-}
+# tidy_output_model_formatted function is now loaded from functions.R
 tidy_output_model <- tidy_output_model_formatted(output_model)
 tidy_output_model
 flextable(tidy_output_model) |> save_as_docx(path = file.path(ps_dir, paste0("output_model_tidy_formatted.docx")))
