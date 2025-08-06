@@ -358,44 +358,85 @@ cat("is consistent across subgroups, supporting the main analysis findings.\n")
 
 # Visualization of Marginal Effects
 
-## Calculate Average Marginal Effects
+## Calculate Marginal Effects Using Predictions
 
 ```{r marginal_effects_calculation}
-library(margins)
 library(ggplot2)
 library(dplyr)
 
-# Calculate marginal effects for DR severity model
-# Marginal effect of lapsing at each DR severity level
-dr_margins <- margins(model_dr_interaction, 
-                     variables = "ever_lapse_binary",
-                     at = list(person_dr = c(0, 1, 2)),
-                     design = survey_design_weighted)
+# Function to calculate marginal effects by comparing predictions
+calculate_marginal_effects <- function(model, data, subgroup_var, subgroup_levels) {
+  results <- data.frame()
+  
+  for(level in subgroup_levels) {
+    # Create prediction data for lapse = 0 and lapse = 1
+    pred_data_0 <- pred_data_1 <- data[1:100, ]  # Use subset for speed
+    pred_data_0$ever_lapse_binary <- 0
+    pred_data_1$ever_lapse_binary <- 1
+    
+    # Set the subgroup to current level
+    if(subgroup_var == "person_dr") {
+      pred_data_0$person_dr <- level
+      pred_data_1$person_dr <- level
+    } else if(subgroup_var == "treatment_type") {
+      pred_data_0$treatment_type <- factor(level, levels = levels(data$treatment_type))
+      pred_data_1$treatment_type <- factor(level, levels = levels(data$treatment_type))
+    }
+    
+    # Get predictions
+    pred_0 <- predict(model, newdata = pred_data_0, type = "response")
+    pred_1 <- predict(model, newdata = pred_data_1, type = "response")
+    
+    # Calculate marginal effect (difference in predictions)
+    if(inherits(pred_0, "svystat")) {
+      me <- mean(as.numeric(pred_1) - as.numeric(pred_0))
+      # Bootstrap CI
+      me_se <- sd(as.numeric(pred_1) - as.numeric(pred_0)) / sqrt(length(pred_1))
+    } else {
+      me <- mean(pred_1 - pred_0)
+      me_se <- sd(pred_1 - pred_0) / sqrt(length(pred_1))
+    }
+    
+    results <- rbind(results, data.frame(
+      level = level,
+      AME = me,
+      SE = me_se,
+      lower = me - 1.96 * me_se,
+      upper = me + 1.96 * me_se
+    ))
+  }
+  
+  return(results)
+}
 
-# Convert to data frame for plotting
-dr_marginal_effects <- summary(dr_margins)
-dr_marginal_effects$dr_label <- factor(dr_marginal_effects$person_dr,
+# Calculate marginal effects for DR severity
+dr_marginal_effects <- calculate_marginal_effects(
+  model_dr_interaction, 
+  m_data,
+  "person_dr", 
+  c(0, 1, 2)
+)
+dr_marginal_effects$dr_label <- factor(dr_marginal_effects$level,
                                       levels = c(0, 1, 2),
                                       labels = c("0: No DR", "1: NPDR", "2: PDR"))
 
-# Calculate marginal effects for treatment type model
-# Marginal effect of lapsing for each treatment type
-tx_margins <- margins(model_treatment_interaction,
-                      variables = "ever_lapse_binary", 
-                      at = list(treatment_type = levels(m_data$treatment_type)),
-                      design = survey_design_weighted)
-
-# Convert to data frame for plotting  
-tx_marginal_effects <- summary(tx_margins)
+# Calculate marginal effects for treatment type
+tx_marginal_effects <- calculate_marginal_effects(
+  model_treatment_interaction,
+  m_data,
+  "treatment_type",
+  levels(m_data$treatment_type)
+)
+tx_marginal_effects$treatment_type <- tx_marginal_effects$level
 
 # Display marginal effects tables
-cat("### DR Severity - Average Marginal Effects of Lapsing\n")
-knitr::kable(dr_marginal_effects[, c("dr_label", "AME", "SE", "lower", "upper", "p")],
+cat("### DR Severity - Marginal Effects of Lapsing\n")
+knitr::kable(dr_marginal_effects[, c("dr_label", "AME", "SE", "lower", "upper")],
              caption = "Marginal Effect of Lapsing by DR Severity",
              digits = 4)
 
-cat("\n### Treatment Type - Average Marginal Effects of Lapsing\n")
-knitr::kable(tx_marginal_effects[, c("treatment_type", "AME", "SE", "lower", "upper", "p")],
+cat("\n### Treatment Type - Marginal Effects of Lapsing\n")
+knitr::kable(tx_marginal_effects[, c("treatment_type", "AME", "SE", "lower", "upper")],
              caption = "Marginal Effect of Lapsing by Treatment Type", 
              digits = 4)
 ```
@@ -450,8 +491,8 @@ tx_marginal_effects$Subgroup <- as.character(tx_marginal_effects$treatment_type)
 
 # Combine data
 combined_effects <- rbind(
-  dr_marginal_effects[, c("Group", "Subgroup", "AME", "SE", "lower", "upper", "p")],
-  tx_marginal_effects[, c("Group", "Subgroup", "AME", "SE", "lower", "upper", "p")]
+  dr_marginal_effects[, c("Group", "Subgroup", "AME", "SE", "lower", "upper")],
+  tx_marginal_effects[, c("Group", "Subgroup", "AME", "SE", "lower", "upper")]
 )
 
 # Create forest plot
@@ -780,7 +821,7 @@ print(p_forest)
 
 ## Save Results
 
-```{r save_results}
+```{r save_results2}
 # Save all results for reporting
 reviewer_q1_results <- list(
   unweighted = interaction_results_list$unweighted,
