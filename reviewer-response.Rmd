@@ -96,28 +96,63 @@ summary(m_data$twang_att_w)
 ## Create Analysis Variables
 
 ```{r create_variables}
-# Create the treatment type variable with expanded categories
+# Create the treatment type variable
 m_data <- m_data |>
   mutate(
     treatment_type = case_when(
       anti_VEGF == 1 ~ "anti_VEGF",
       PRP_flag == 1 ~ "PRP",
-      other_inject == 1 ~ "other_inject",
-      focal_laser_flag == 1 ~ "focal_laser",
+      other_inject == 1 | focal_laser_flag == 1 ~ "other_treatment",
       TRUE ~ "no_treatment"
     ),
     treatment_type = factor(treatment_type, 
-                           levels = c("no_treatment", "anti_VEGF", "PRP", 
-                                    "other_inject", "focal_laser")),
-    # Also create a severe DR indicator
+                           levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment")),
+    # Also create a severe DR indicator (not used in simplified analysis)
     severe_dr = (NPDR == "Severe" | PDR == "Present")
   )
 
 # Check distribution of treatment types
+cat("Treatment Type Distribution:\n")
 table(m_data$treatment_type)
 
 # Check severe DR distribution
+cat("\nSevere DR Distribution:\n")
 table(m_data$severe_dr)
+
+# Display person_dr coding
+cat("\n\nDR Severity Coding (person_dr variable):\n")
+cat("0 = No DR (No diabetic retinopathy)\n")
+cat("1 = NPDR (Non-proliferative diabetic retinopathy - all severities)\n")
+cat("2 = PDR (Proliferative diabetic retinopathy)\n")
+
+# Check actual distribution
+cat("\nDR Severity Distribution:\n")
+dr_dist <- table(m_data$person_dr)
+dr_labels <- c("0 (No DR)", "1 (NPDR)", "2 (PDR)")
+names(dr_dist) <- dr_labels[as.numeric(names(dr_dist)) + 1]
+print(dr_dist)
+```
+
+## Variable Definitions
+
+```{r variable_definitions}
+# Create a reference table for all key variables
+variable_definitions <- data.frame(
+  Variable = c("ever_lapse_binary", "outcome_va_vi_binary", "person_dr", 
+               "treatment_type", "severe_dr", "person_dr_severity"),
+  Type = c("Binary", "Binary", "Factor", "Factor", "Binary", "Ordinal"),
+  Values = c("0 = No lapse, 1 = Lapsed from care",
+             "0 = No vision impairment, 1 = Vision impairment (VA ≥ 0.3 logMAR)",
+             "0 = No DR, 1 = NPDR, 2 = PDR",
+             "no_treatment, anti_VEGF, PRP, other_treatment",
+             "FALSE = No/Mild/Moderate NPDR, TRUE = Severe NPDR or PDR",
+             "0 = No DR, 1 = Mild NPDR, 2 = Moderate NPDR, 3 = Severe NPDR, 4 = PDR"),
+  stringsAsFactors = FALSE
+)
+
+knitr::kable(variable_definitions, 
+             caption = "Key Variable Definitions",
+             col.names = c("Variable", "Type", "Possible Values/Coding"))
 ```
 
 ## Define Model Formulas
@@ -160,244 +195,325 @@ print("\nTreatment Interaction Formula:")
 print(interaction_treatment_formula)
 ```
 
-## Run Interaction Models
+## Run Interaction Models (IPTW Weighted)
 
 ```{r interaction_models, results='asis'}
-# Store results for both weighted and unweighted analyses
-interaction_results_list <- list()
+# Store results for weighted analyses only
+interaction_results <- list()
 
-# Create separate data subsets for analysis
-data_subsets <- list(
-  all_cases = m_data,
-  severe_dr_only = m_data |> filter(severe_dr == TRUE)
+# Create weighted survey design
+survey_design_weighted <- svydesign(
+  ids = ~e_mrn_deidentified,
+  data = m_data,
+  weights = ~twang_att_w
 )
 
-# Loop through both data subsets and both weighted and unweighted designs
-for(subset_name in names(data_subsets)) {
-  
-  current_data <- data_subsets[[subset_name]]
-  
-  cat("\n\n")
-  cat("## Data Subset: ", toupper(subset_name), "\n")
-  cat("Sample size: ", nrow(current_data), "\n\n")
-  
-  # Update weights for current subset
-  if("twang_att_w" %in% names(current_data)) {
-    # Weights already exist from full dataset
-  } else {
-    current_data$twang_att_w <- m_data$twang_att_w[m_data$e_mrn_deidentified %in% current_data$e_mrn_deidentified]
-  }
-  
-  for(weight_type in c("unweighted", "weighted")) {
-  
-    cat("\n")
-    cat("### Analysis Type: ", toupper(weight_type), "\n\n")
-    
-    # Create survey design for current subset
-    current_design <- if(weight_type == "unweighted") {
-      svydesign(
-        ids = ~e_mrn_deidentified,
-        data = current_data,
-        weights = ~1
-      )
-    } else {
-      svydesign(
-        ids = ~e_mrn_deidentified,
-        data = current_data,
-        weights = ~twang_att_w
-      )
-    }
-  
-    # Fit Model 1: DR severity interaction
-    cat("\n")
-    cat("#### DR Severity Interaction Model\n\n")
-    model_dr_interaction <- svyglm(
-      formula = interaction_dr_formula,
-      design = current_design,
-      family = quasibinomial()
-    )
-    
-    # Summary of DR interaction model
-    summary_dr <- summary(model_dr_interaction)
-    
-    # Extract interaction p-values for DR model
-    dr_interaction_terms <- grep("ever_lapse_binary:factor\\(person_dr\\)", 
-                                names(coef(model_dr_interaction)), value = TRUE)
-    dr_interaction_pvals <- if(length(dr_interaction_terms) > 0) {
-      summary_dr$coefficients[dr_interaction_terms, "Pr(>|t|)"]
-    } else {
-      numeric(0)
-    }
-    
-    cat("\n")
-    cat("**DR Severity Interaction P-values:**\n\n")
-    if(length(dr_interaction_terms) > 0) {
-      dr_results <- data.frame(
-        Term = dr_interaction_terms,
-        P_Value = round(dr_interaction_pvals, 4),
-        Significant = ifelse(dr_interaction_pvals < 0.05, "Yes", "No")
-      )
-      print(knitr::kable(dr_results))
-    } else {
-      cat("No interaction terms found\n")
-    }
-    
-    # Fit Model 2: Treatment type interaction  
-    cat("\n")
-    cat("#### Treatment Type Interaction Model\n\n")
-    model_treatment_interaction <- svyglm(
-      formula = interaction_treatment_formula,
-      design = current_design,
-      family = quasibinomial()
-    )
-    
-    # Summary of treatment interaction model
-    summary_treatment <- summary(model_treatment_interaction)
-    
-    # Extract interaction p-values for treatment model
-    treatment_interaction_terms <- grep("ever_lapse_binary:treatment_type", 
-                                       names(coef(model_treatment_interaction)), value = TRUE)
-    treatment_interaction_pvals <- if(length(treatment_interaction_terms) > 0) {
-      summary_treatment$coefficients[treatment_interaction_terms, "Pr(>|t|)"]
-    } else {
-      numeric(0)
-    }
-    
-    cat("\n")
-    cat("**Treatment Type Interaction P-values:**\n\n")
-    if(length(treatment_interaction_terms) > 0) {
-      tx_results <- data.frame(
-        Term = treatment_interaction_terms,
-        P_Value = round(treatment_interaction_pvals, 4),
-        Significant = ifelse(treatment_interaction_pvals < 0.05, "Yes", "No")
-      )
-      print(knitr::kable(tx_results))
-    } else {
-      cat("No interaction terms found\n")
-    }
-    
-    # Store results for this weight type and subset
-    if(!subset_name %in% names(interaction_results_list)) {
-      interaction_results_list[[subset_name]] <- list()
-    }
-    interaction_results_list[[subset_name]][[weight_type]] <- list(
-      dr_model = model_dr_interaction,
-      treatment_model = model_treatment_interaction,
-      dr_pvalues = dr_interaction_pvals,
-      treatment_pvalues = treatment_interaction_pvals
-    )
-  } # end weight_type loop
-} # end subset_name loop
+### DR Severity Interaction Model
+
+```{r dr_interaction}
+# Fit Model 1: DR severity interaction
+model_dr_interaction <- svyglm(
+  formula = interaction_dr_formula,
+  design = survey_design_weighted,
+  family = quasibinomial()
+)
+
+# Summary of DR interaction model
+summary_dr <- summary(model_dr_interaction)
+
+# Extract interaction p-values for DR model
+dr_interaction_terms <- grep("ever_lapse_binary:factor\\(person_dr\\)", 
+                            names(coef(model_dr_interaction)), value = TRUE)
+dr_interaction_pvals <- if(length(dr_interaction_terms) > 0) {
+  summary_dr$coefficients[dr_interaction_terms, "Pr(>|t|)"]
+} else {
+  numeric(0)
+}
+
+# Display results
+dr_results <- data.frame(
+  Term = dr_interaction_terms,
+  Coefficient = summary_dr$coefficients[dr_interaction_terms, "Estimate"],
+  SE = summary_dr$coefficients[dr_interaction_terms, "Std. Error"],
+  P_Value = round(dr_interaction_pvals, 4),
+  Significant = ifelse(dr_interaction_pvals < 0.05, "Yes", "No")
+)
+
+knitr::kable(dr_results, caption = "DR Severity Interaction Terms")
+```
+
+### Treatment Type Interaction Model
+
+```{r treatment_interaction}
+# Fit Model 2: Treatment type interaction
+model_treatment_interaction <- svyglm(
+  formula = interaction_treatment_formula,
+  design = survey_design_weighted,
+  family = quasibinomial()
+)
+
+# Summary of treatment interaction model
+summary_treatment <- summary(model_treatment_interaction)
+
+# Extract interaction p-values for treatment model
+treatment_interaction_terms <- grep("ever_lapse_binary:treatment_type", 
+                                   names(coef(model_treatment_interaction)), value = TRUE)
+treatment_interaction_pvals <- if(length(treatment_interaction_terms) > 0) {
+  summary_treatment$coefficients[treatment_interaction_terms, "Pr(>|t|)"]
+} else {
+  numeric(0)
+}
+
+# Display results
+tx_results <- data.frame(
+  Term = treatment_interaction_terms,
+  Coefficient = summary_treatment$coefficients[treatment_interaction_terms, "Estimate"],
+  SE = summary_treatment$coefficients[treatment_interaction_terms, "Std. Error"],
+  P_Value = round(treatment_interaction_pvals, 4),
+  Significant = ifelse(treatment_interaction_pvals < 0.05, "Yes", "No")
+)
+
+knitr::kable(tx_results, caption = "Treatment Type Interaction Terms")
+
+# Store results
+interaction_results <- list(
+  dr_model = model_dr_interaction,
+  treatment_model = model_treatment_interaction,
+  dr_pvalues = dr_interaction_pvals,
+  treatment_pvalues = treatment_interaction_pvals
+)
 ```
 
 ## Summary of Interaction Tests
 
 ```{r summary_table}
-# Create a comparison summary table of interaction effects
-comparison_rows <- list()
-for(subset_name in names(interaction_results_list)) {
-  for(weight_type in c("unweighted", "weighted")) {
-    subset_results <- interaction_results_list[[subset_name]][[weight_type]]
-    
-    comparison_rows[[paste(subset_name, weight_type, sep="_")]] <- data.frame(
-      Subset = subset_name,
-      Model = c("DR Severity", "Treatment Type"),
-      Weight_Type = weight_type,
-      N_Interactions = c(
-        length(subset_results$dr_pvalues),
-        length(subset_results$treatment_pvalues)
-      ),
-      Min_P_Value = c(
-        ifelse(length(subset_results$dr_pvalues) > 0, 
-               min(subset_results$dr_pvalues), NA),
-        ifelse(length(subset_results$treatment_pvalues) > 0, 
-               min(subset_results$treatment_pvalues), NA)
-      ),
-      Significant_at_05 = c(
-        sum(subset_results$dr_pvalues < 0.05),
-        sum(subset_results$treatment_pvalues < 0.05)
-      )
-    )
-  }
-}
-comparison_results <- do.call(rbind, comparison_rows)
+# Create summary table of interaction effects
+summary_results <- data.frame(
+  Model = c("DR Severity", "Treatment Type"),
+  N_Interactions = c(
+    length(interaction_results$dr_pvalues),
+    length(interaction_results$treatment_pvalues)
+  ),
+  Min_P_Value = c(
+    ifelse(length(interaction_results$dr_pvalues) > 0, 
+           min(interaction_results$dr_pvalues), NA),
+    ifelse(length(interaction_results$treatment_pvalues) > 0, 
+           min(interaction_results$treatment_pvalues), NA)
+  ),
+  Significant_at_05 = c(
+    sum(interaction_results$dr_pvalues < 0.05),
+    sum(interaction_results$treatment_pvalues < 0.05)
+  )
+)
 
-knitr::kable(comparison_results, 
-             caption = "Summary of Interaction Test Results",
+knitr::kable(summary_results, 
+             caption = "Summary of IPTW-Weighted Interaction Test Results",
              digits = 4)
 ```
+
+## Key Terms and Interpretation Guide
+
+### Understanding the Interaction Models
+
+**What do interaction terms test?**
+- Interaction p-values test whether the effect of lapsing on vision impairment differs across subgroups
+- A significant interaction (p < 0.05) suggests the effect of lapsing varies by DR severity or treatment type
+- Non-significant interactions suggest consistent effects across subgroups
+
+**Variable Coding Reminder:**
+- **person_dr**: 0 = No DR, 1 = NPDR (any severity), 2 = PDR
+- **treatment_type**: no_treatment, anti_VEGF, PRP, other_treatment (includes other injections and focal laser)
+- **ever_lapse_binary**: 0 = No lapse, 1 = Lapsed from care
+- **outcome_va_vi_binary**: 0 = No vision impairment, 1 = Vision impaired (VA ≥ 0.3 logMAR)
 
 ## Interpretation of Results
 
 ```{r interpretation}
 # Check for significant interactions and report
-for(subset_name in names(interaction_results_list)) {
-  cat("\n")
-  cat("### ", toupper(subset_name), "\n")
-  
-  # Check unweighted results
-  unweighted_results <- interaction_results_list[[subset_name]][["unweighted"]]
-  if(any(unweighted_results$dr_pvalues < 0.05)) {
-    cat("\n**UNWEIGHTED: Significant DR severity interactions detected**\n")
-    sig_terms <- names(unweighted_results$dr_pvalues)[
-      unweighted_results$dr_pvalues < 0.05
-    ]
-    cat("Significant terms:", paste(sig_terms, collapse = ", "), "\n")
-  } else {
-    cat("\n**UNWEIGHTED: No significant DR severity interactions**\n")
-  }
-  
-  if(any(unweighted_results$treatment_pvalues < 0.05)) {
-    cat("\n**UNWEIGHTED: Significant treatment type interactions detected**\n")
-    sig_terms <- names(unweighted_results$treatment_pvalues)[
-      unweighted_results$treatment_pvalues < 0.05
-    ]
-    cat("Significant terms:", paste(sig_terms, collapse = ", "), "\n")
-  } else {
-    cat("\n**UNWEIGHTED: No significant treatment type interactions**\n")
-  }
-  
-  # Check weighted results
-  weighted_results <- interaction_results_list[[subset_name]][["weighted"]]
-  if(any(weighted_results$dr_pvalues < 0.05)) {
-    cat("\n**WEIGHTED (IPTW): Significant DR severity interactions detected**\n")
-    sig_terms <- names(weighted_results$dr_pvalues)[
-      weighted_results$dr_pvalues < 0.05
-    ]
-    cat("Significant terms:", paste(sig_terms, collapse = ", "), "\n")
-  } else {
-    cat("\n**WEIGHTED (IPTW): No significant DR severity interactions**\n")
-  }
-  
-  if(any(weighted_results$treatment_pvalues < 0.05)) {
-    cat("\n**WEIGHTED (IPTW): Significant treatment type interactions detected**\n")
-    sig_terms <- names(weighted_results$treatment_pvalues)[
-      weighted_results$treatment_pvalues < 0.05
-    ]
-    cat("Significant terms:", paste(sig_terms, collapse = ", "), "\n")
-  } else {
-    cat("\n**WEIGHTED (IPTW): No significant treatment type interactions**\n")
-  }
+if(any(interaction_results$dr_pvalues < 0.05)) {
+  cat("\n**Significant DR severity interactions detected**\n")
+  sig_terms <- names(interaction_results$dr_pvalues)[
+    interaction_results$dr_pvalues < 0.05
+  ]
+  cat("Significant terms:", paste(sig_terms, collapse = ", "), "\n")
+} else {
+  cat("\n**No significant DR severity interactions**\n")
+}
+
+if(any(interaction_results$treatment_pvalues < 0.05)) {
+  cat("\n**Significant treatment type interactions detected**\n")
+  sig_terms <- names(interaction_results$treatment_pvalues)[
+    interaction_results$treatment_pvalues < 0.05
+  ]
+  cat("Significant terms:", paste(sig_terms, collapse = ", "), "\n")
+} else {
+  cat("\n**No significant treatment type interactions**\n")
 }
 
 cat("\n\n")
-cat("**NOTE:** Interaction p-values test whether the effect of lapsing differs ")
-cat("significantly across subgroups. Non-significant p-values suggest ")
-cat("consistent effects across groups, supporting the main analysis. ")
-cat("The IPTW-weighted analysis adjusts for confounding using propensity scores.\n")
+cat("**NOTE:** These IPTW-weighted analyses adjust for confounding using propensity scores. ")
+cat("Non-significant interaction p-values suggest the effect of lapsing on vision impairment ")
+cat("is consistent across subgroups, supporting the main analysis findings.\n")
 ```
 
-# Visualization of Interaction Effects
+# Visualization of Marginal Effects
 
-```{r visualization_functions}
-# Function to extract predicted probabilities for interaction plots
-extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL) {
-  # Build prediction dataset manually
-  if(interaction_var == "person_dr") {
-    # Note: In the model formula, person_dr is wrapped in factor()
-    # So we need to match the factor levels exactly as the model sees them
-    # Get actual person_dr values and ensure they're treated as factors
-    dr_values <- sort(unique(data$person_dr))
+## Calculate Average Marginal Effects
+
+```{r marginal_effects_calculation}
+library(margins)
+library(ggplot2)
+library(dplyr)
+
+# Calculate marginal effects for DR severity model
+# Marginal effect of lapsing at each DR severity level
+dr_margins <- margins(model_dr_interaction, 
+                     variables = "ever_lapse_binary",
+                     at = list(person_dr = c(0, 1, 2)),
+                     design = survey_design_weighted)
+
+# Convert to data frame for plotting
+dr_marginal_effects <- summary(dr_margins)
+dr_marginal_effects$dr_label <- factor(dr_marginal_effects$person_dr,
+                                      levels = c(0, 1, 2),
+                                      labels = c("0: No DR", "1: NPDR", "2: PDR"))
+
+# Calculate marginal effects for treatment type model
+# Marginal effect of lapsing for each treatment type
+tx_margins <- margins(model_treatment_interaction,
+                      variables = "ever_lapse_binary", 
+                      at = list(treatment_type = levels(m_data$treatment_type)),
+                      design = survey_design_weighted)
+
+# Convert to data frame for plotting  
+tx_marginal_effects <- summary(tx_margins)
+
+# Display marginal effects tables
+cat("### DR Severity - Average Marginal Effects of Lapsing\n")
+knitr::kable(dr_marginal_effects[, c("dr_label", "AME", "SE", "lower", "upper", "p")],
+             caption = "Marginal Effect of Lapsing by DR Severity",
+             digits = 4)
+
+cat("\n### Treatment Type - Average Marginal Effects of Lapsing\n")
+knitr::kable(tx_marginal_effects[, c("treatment_type", "AME", "SE", "lower", "upper", "p")],
+             caption = "Marginal Effect of Lapsing by Treatment Type", 
+             digits = 4)
+```
+
+## Marginal Effects Plots
+
+```{r marginal_effects_plots, fig.height=6, fig.width=10}
+# Create DR severity marginal effects plot
+p_dr_margins <- ggplot(dr_marginal_effects, 
+                       aes(x = dr_label, y = AME)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), 
+                width = 0.2, size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  labs(title = "Average Marginal Effect of Lapsing by DR Severity",
+       subtitle = "IPTW-weighted estimates with 95% confidence intervals",
+       x = "DR Severity Level",
+       y = "Average Marginal Effect on P(Vision Impairment)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 11),
+        plot.subtitle = element_text(size = 10, color = "gray40"))
+
+print(p_dr_margins)
+
+# Create treatment type marginal effects plot  
+p_tx_margins <- ggplot(tx_marginal_effects,
+                       aes(x = treatment_type, y = AME)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                width = 0.2, size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  labs(title = "Average Marginal Effect of Lapsing by Treatment Type",
+       subtitle = "IPTW-weighted estimates with 95% confidence intervals",
+       x = "Treatment Type",
+       y = "Average Marginal Effect on P(Vision Impairment)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        plot.subtitle = element_text(size = 10, color = "gray40"))
+
+print(p_tx_margins)
+```
+
+## Combined Forest Plot
+
+```{r forest_plot, fig.height=8, fig.width=10}
+# Combine both marginal effects for a forest plot
+dr_marginal_effects$Group <- "DR Severity"
+dr_marginal_effects$Subgroup <- as.character(dr_marginal_effects$dr_label)
+
+tx_marginal_effects$Group <- "Treatment Type"  
+tx_marginal_effects$Subgroup <- as.character(tx_marginal_effects$treatment_type)
+
+# Combine data
+combined_effects <- rbind(
+  dr_marginal_effects[, c("Group", "Subgroup", "AME", "SE", "lower", "upper", "p")],
+  tx_marginal_effects[, c("Group", "Subgroup", "AME", "SE", "lower", "upper", "p")]
+)
+
+# Create forest plot
+p_forest <- ggplot(combined_effects,
+                  aes(x = AME, y = reorder(paste(Group, Subgroup, sep = ": "), AME))) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.3) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  facet_wrap(~Group, scales = "free_y", ncol = 1) +
+  labs(title = "Average Marginal Effects of Lapsing Across Subgroups",
+       subtitle = "IPTW-weighted estimates",
+       x = "Average Marginal Effect (AME)",
+       y = "") +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 12, face = "bold"))
+
+print(p_forest)
+```
+
+## Save Results
+
+```{r save_results}
+# Save all results for reporting
+reviewer_q1_results <- list(
+  models = interaction_results,
+  dr_marginal_effects = dr_marginal_effects,
+  tx_marginal_effects = tx_marginal_effects,
+  combined_effects = combined_effects,
+  summary_table = summary_results
+)
+
+saveRDS(reviewer_q1_results, file = "reviewer_q1_interaction_results.rds")
+
+# Save plots
+ggsave("marginal_effects_dr.png", p_dr_margins, width = 10, height = 6, dpi = 300)
+ggsave("marginal_effects_treatment.png", p_tx_margins, width = 10, height = 6, dpi = 300)
+ggsave("marginal_effects_forest.png", p_forest, width = 10, height = 8, dpi = 300)
+
+cat("\nResults and plots saved successfully.\n")
+```
+
+# Reviewer Question 2
+
+*[Add content for reviewer question 2 here]*
+
+# Reviewer Question 3
+
+*[Add content for reviewer question 3 here]*
+
+# Summary
+
+This analysis addresses the reviewer's concern about inadequate subgroup testing by:
+
+1. **Formal Interaction Testing**: We tested interaction terms between lapse status and both DR severity and treatment type using IPTW-weighted logistic regression models.
+
+2. **Average Marginal Effects**: We calculated and visualized the average marginal effect of lapsing on vision impairment for each subgroup, providing interpretable effect sizes.
+
+3. **IPTW Adjustment**: All analyses use inverse probability of treatment weighting from twang propensity scores to adjust for confounding.
+
+4. **Clear Visualization**: Forest plots and marginal effects plots clearly show whether the effect of lapsing varies meaningfully across patient subgroups.
+
+The results from these formal interaction tests and marginal effects analyses provide statistical evidence for whether the effect of lapsing on vision impairment truly differs across patient subgroups or remains consistent as suggested by the main analysis.
     n_dr <- length(dr_values)
     
     # Create prediction data
@@ -523,7 +639,7 @@ for(subset_name in names(interaction_results_list)) {
                                    labels = c("No Lapse", "Lapse"))
     dr_pred$dr_label <- factor(dr_pred$person_dr,
                                levels = c(0, 1, 2),
-                               labels = c("No DR", "NPDR", "PDR"))
+                               labels = c("0: No DR", "1: NPDR", "2: PDR"))
     
     p_dr <- ggplot(dr_pred, aes(x = dr_label, y = predicted, 
                                 color = lapse_status, group = lapse_status)) +
@@ -532,11 +648,13 @@ for(subset_name in names(interaction_results_list)) {
                    width = 0.2, position = position_dodge(0.2)) +
       geom_line(position = position_dodge(0.2), alpha = 0.5) +
       labs(title = paste("DR Severity Interaction:", subset_name, "-", weight_type),
-           x = "DR Severity", 
+           subtitle = "DR Severity: 0 = No DR, 1 = NPDR (Non-proliferative), 2 = PDR (Proliferative)",
+           x = "DR Severity Level", 
            y = "Predicted Probability of Vision Impairment",
            color = "Lapse Status") +
       theme_minimal() +
-      theme(legend.position = "bottom") +
+      theme(legend.position = "bottom",
+            plot.subtitle = element_text(size = 10, color = "gray40")) +
       scale_y_continuous(limits = c(0, 1))
     
     print(p_dr)
