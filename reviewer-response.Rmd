@@ -440,7 +440,7 @@ print(p_tx_margins)
 
 ## Combined Forest Plot
 
-```{r forest_plot, fig.height=8, fig.width=10}
+```{r combined_forest_plot, fig.height=8, fig.width=10}
 # Combine both marginal effects for a forest plot
 dr_marginal_effects$Group <- "DR Severity"
 dr_marginal_effects$Subgroup <- as.character(dr_marginal_effects$dr_label)
