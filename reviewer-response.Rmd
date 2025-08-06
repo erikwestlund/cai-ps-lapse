@@ -394,11 +394,21 @@ cat("The IPTW-weighted analysis adjusts for confounding using propensity scores.
 extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL) {
   # Build prediction dataset manually
   if(interaction_var == "person_dr") {
-    # Create combinations for DR severity
+    # Note: In the model formula, person_dr is wrapped in factor()
+    # So we need to match the factor levels exactly as the model sees them
+    # Get actual person_dr values and ensure they're treated as factors
+    dr_values <- sort(unique(data$person_dr))
+    n_dr <- length(dr_values)
+    
+    # Create prediction data
     pred_data <- data.frame(
-      ever_lapse_binary = rep(c(0, 1), each = 3),
-      person_dr = rep(c(0, 1, 2), 2)
+      ever_lapse_binary = rep(c(0, 1), each = n_dr)
     )
+    
+    # Add person_dr as a factor column - the model uses factor(person_dr)
+    # so we need to match the levels the model expects
+    pred_data$person_dr <- factor(rep(dr_values, 2))
+    
   } else if(interaction_var == "treatment_type") {
     # Create combinations for treatment type
     tx_levels <- levels(data$treatment_type)
@@ -412,9 +422,6 @@ extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL)
   }
   
   # Add all required covariates with reference/mean values
-  # Use first observation as template and modify
-  template <- data[1, ]
-  
   # For each required covariate, set to reference or mean
   covariate_names <- c("gender_cat", "race_ethnic_cat", "insurance_cat", 
                        "age_cat", "CCI", "DCSI", "other_inject", "anti_VEGF", 
@@ -435,11 +442,6 @@ extract_predictions <- function(model, data, interaction_var, fixed_vars = NULL)
         pred_data[[cov]] <- data[[cov]][1]
       }
     }
-  }
-  
-  # Ensure correct factor levels
-  if("person_dr" %in% names(pred_data)) {
-    pred_data$person_dr <- factor(pred_data$person_dr)
   }
   
   # Get predictions
