@@ -131,22 +131,12 @@ m_data <- m_data |>
       TRUE ~ "no_treatment"
     ),
     treatment_type = factor(treatment_type, 
-                           levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment")),
-    # Create a severe DR indicator - check both NPDR and PDR columns
-    severe_dr = case_when(
-      PDR == "Present" ~ TRUE,
-      NPDR == "Severe" ~ TRUE, 
-      TRUE ~ FALSE
-    )
+                           levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment"))
   )
 
 # Check distribution of treatment types
 print("Treatment Type Distribution:")
 table(m_data$treatment_type)
-
-# Check severe DR distribution  
-print("Severe DR Distribution:")
-table(m_data$severe_dr)
 
 # Display DR severity coding and distribution
 print("DR Severity Distribution:")
@@ -162,13 +152,12 @@ print(dr_dist)
 # Create a reference table for all key variables
 variable_definitions <- data.frame(
   Variable = c("ever_lapse_binary", "outcome_va_vi_binary", "person_dr", 
-               "treatment_type", "severe_dr", "person_dr_severity"),
-  Type = c("Binary", "Binary", "Factor", "Factor", "Binary", "Ordinal"),
+               "treatment_type", "person_dr_severity"),
+  Type = c("Binary", "Binary", "Factor", "Factor", "Ordinal"),
   Values = c("0 = No lapse, 1 = Lapsed from care",
              "0 = No vision impairment, 1 = Vision impairment (VA ≥ 0.3 logMAR)",
              "0 = No DR, 1 = NPDR, 2 = PDR",
              "no_treatment, anti_VEGF, PRP, other_treatment",
-             "FALSE = No/Mild/Moderate NPDR, TRUE = Severe NPDR or PDR",
              "0 = No DR, 1 = Mild NPDR, 2 = Moderate NPDR, 3 = Severe NPDR, 4 = PDR"),
   stringsAsFactors = FALSE
 )
