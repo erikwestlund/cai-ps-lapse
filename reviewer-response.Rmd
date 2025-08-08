@@ -308,17 +308,13 @@ if(joint_test$`Pr(>Chisq)`[2] < 0.05) {
 
 ```{r lapse_effects_by_dr}
 
-# Method 1: Use emmeans with nuisance factors specified
-# All covariates except lapse and DR severity are nuisance factors
-nuisance_vars <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
-                   "CCI", "DCSI", "other_inject", "anti_VEGF", "focal_laser_flag",
-                   "PRP_flag", "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
-                   "catsurg_before_hitplus_cat")
+# Method 1: Use emmeans WITHOUT nuisance factors for true marginalization
+# Increase reference grid limit to handle the full factorial
+emm_options(rg.limit = 200000)  # Increase limit to handle large reference grid
 
-# Calculate marginal means with nuisance factors
+# Calculate marginal means - this will average over all covariate combinations
 emm <- emmeans(model_dr_interaction, 
-               ~ ever_lapse_binary | dr_severity,
-               nuisance = nuisance_vars)
+               ~ ever_lapse_binary | dr_severity)
 
 # Get contrasts: effect of lapse (1 vs 0) within each DR severity
 lapse_contrasts <- contrast(emm, method = "revpairwise", by = "dr_severity")
@@ -473,33 +469,157 @@ p_magnitude <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds, fill = DR_Se
 print(p_magnitude)
 ```
 
-## Probability Difference by Lapse Status
+## Predicted Probabilities and Differences by Lapse Status
 
-```{r probability_differences, fig.height=5, fig.width=8}
-# Calculate the actual probabilities for lapsers vs non-lapsers
-# This shows the DIFFERENCE IN PROBABILITY of vision impairment between groups
+```{r probability_table_emmeans}
+# Use emmeans to get predicted probabilities for each combination
+# WITHOUT nuisance specification for TRUE marginalization
 
-# Get baseline predicted probabilities (at means of covariates)
-intercept <- coef(model_dr_interaction)["(Intercept)"]
-baseline_prob <- exp(intercept) / (1 + exp(intercept))
+# IMPORTANT: How emmeans works without nuisance specification:
+# - It creates a reference grid with all unique combinations of covariates
+# - Then averages predictions across this grid
+# - This gives us the AVERAGE predicted probability across all covariate patterns
+# - This IS true marginalization over the covariate distribution
 
-# Convert log odds effects to probability differences
-# Using the derivative of the logistic function
-prob_scale_factor <- baseline_prob * (1 - baseline_prob)
+# Increase reference grid limit to handle all combinations
+emm_options(rg.limit = 200000)
 
-# Create probability scale effects
-plot_data_prob <- plot_data |>
+# Get predicted probabilities on the response scale
+# This will average over all covariate combinations
+emm_probs <- emmeans(model_dr_interaction, 
+                     ~ ever_lapse_binary | dr_severity,
+                     type = "response")
+
+# Show what emmeans is doing
+cat("EMmeans is averaging over all covariate combinations in the reference grid\n")
+cat("Reference grid size information:\n")
+print(str(emm_probs@grid))
+cat("\n")
+
+# Convert to data frame for manipulation
+prob_summary <- as.data.frame(emm_probs)
+
+# Create a clean table with probabilities for each group
+prob_table <- data.frame(
+  DR_Severity = rep(unique(prob_summary$dr_severity), each = 2),
+  Lapse_Status = rep(c("No Lapse", "Lapse"), length(unique(prob_summary$dr_severity))),
+  Probability = prob_summary$prob,
+  SE = prob_summary$SE,
+  Lower_CI = prob_summary$asymp.LCL,
+  Upper_CI = prob_summary$asymp.UCL
+)
+
+# Calculate differences manually from the emmeans object
+prob_contrasts <- contrast(emm_probs, method = "revpairwise", by = "dr_severity")
+prob_diff_emmeans <- as.data.frame(prob_contrasts)
+
+# Create final table combining probabilities and differences
+final_prob_table <- data.frame(
+  DR_Severity = c("No_DR", "NPDR", "PDR"),
+  Prob_No_Lapse = prob_table$Probability[prob_table$Lapse_Status == "No Lapse"],
+  Prob_Lapse = prob_table$Probability[prob_table$Lapse_Status == "Lapse"],
+  Difference = prob_diff_emmeans$estimate,
+  CI_Lower = prob_diff_emmeans$asymp.LCL,
+  CI_Upper = prob_diff_emmeans$asymp.UCL,
+  P_Value = prob_diff_emmeans$p.value
+)
+
+# Format the table for display
+display_table <- final_prob_table |>
   mutate(
-    # This is the DIFFERENCE in probability between lapsers and non-lapsers
-    Prob_Difference = Log_Odds * prob_scale_factor,
-    CI_Lower_Prob = CI_Lower * prob_scale_factor,
-    CI_Upper_Prob = CI_Upper * prob_scale_factor
-  )
+    Prob_No_Lapse = round(Prob_No_Lapse, 3),
+    Prob_Lapse = round(Prob_Lapse, 3),
+    Difference = round(Difference, 3),
+    CI = paste0("(", round(CI_Lower, 3), ", ", round(CI_Upper, 3), ")"),
+    P_Value = format.pval(P_Value, digits = 3, eps = 0.001)
+  ) |>
+  select(DR_Severity, Prob_No_Lapse, Prob_Lapse, Difference, CI, P_Value)
+
+knitr::kable(display_table,
+             caption = "Predicted Probability of Vision Impairment by DR Severity and Lapse Status (Averaged Over All Covariate Patterns)",
+             col.names = c("DR Severity", "P(VI | No Lapse)", "P(VI | Lapse)", 
+                          "Difference", "95% CI", "P-value"),
+             row.names = FALSE,
+             digits = 3)
+```
+
+## Alternative: Manual Verification of Average Marginal Effects
+
+```{r true_marginal_effects}
+# If you want TRUE marginalization (averaging over the distribution of covariates),
+# we need to calculate predictions for every observation and then average
+
+cat("Calculating average marginal effects by averaging over all observations...\n\n")
+
+# For each DR severity group, calculate the average effect
+marginal_effects <- data.frame(
+  DR_Severity = c("No_DR", "NPDR", "PDR"),
+  Avg_Prob_No_Lapse = numeric(3),
+  Avg_Prob_Lapse = numeric(3),
+  Difference = numeric(3),
+  SE = numeric(3)
+)
+
+for(i in 1:3) {
+  dr_level <- c("No_DR", "NPDR", "PDR")[i]
+  
+  # Get subset of data for this DR severity
+  subset_data <- m_data[m_data$dr_severity == dr_level, ]
+  
+  # Predict for everyone with lapse = 0
+  subset_data_0 <- subset_data
+  subset_data_0$ever_lapse_binary <- 0
+  pred_0 <- predict(model_dr_interaction, newdata = subset_data_0, type = "response")
+  
+  # Predict for everyone with lapse = 1
+  subset_data_1 <- subset_data
+  subset_data_1$ever_lapse_binary <- 1
+  pred_1 <- predict(model_dr_interaction, newdata = subset_data_1, type = "response")
+  
+  # Calculate average probabilities
+  marginal_effects$Avg_Prob_No_Lapse[i] <- mean(as.numeric(pred_0), na.rm = TRUE)
+  marginal_effects$Avg_Prob_Lapse[i] <- mean(as.numeric(pred_1), na.rm = TRUE)
+  marginal_effects$Difference[i] <- marginal_effects$Avg_Prob_Lapse[i] - marginal_effects$Avg_Prob_No_Lapse[i]
+  
+  # Bootstrap or delta method for SE would go here
+  # For now, using a rough approximation
+  marginal_effects$SE[i] <- sd(as.numeric(pred_1) - as.numeric(pred_0), na.rm = TRUE) / sqrt(nrow(subset_data))
+}
+
+# Format for display
+marginal_display <- marginal_effects |>
+  mutate(
+    Avg_Prob_No_Lapse = round(Avg_Prob_No_Lapse, 3),
+    Avg_Prob_Lapse = round(Avg_Prob_Lapse, 3),
+    Difference = round(Difference, 3),
+    CI_Lower = round(Difference - 1.96 * SE, 3),
+    CI_Upper = round(Difference + 1.96 * SE, 3),
+    CI = paste0("(", CI_Lower, ", ", CI_Upper, ")")
+  ) |>
+  select(DR_Severity, Avg_Prob_No_Lapse, Avg_Prob_Lapse, Difference, CI)
+
+knitr::kable(marginal_display,
+             caption = "Average Marginal Effects: Predicted Probabilities Averaged Over Observed Covariate Distribution",
+             col.names = c("DR Severity", "Avg P(VI | No Lapse)", "Avg P(VI | Lapse)", 
+                          "Difference", "95% CI"),
+             row.names = FALSE,
+             digits = 3)
+
+cat("\nNote: The 'at reference/mean' table shows predictions for a typical patient.")
+cat("\nThe 'average marginal effects' table averages predictions across all patients in each DR group.")
+cat("\nThe difference represents how these approaches handle heterogeneity in the covariates.\n")
+```
+
+## Visualization of Probability Differences
+
+```{r probability_differences_plot, fig.height=5, fig.width=8}
+# Use the emmeans-based differences for plotting
+plot_data_prob <- final_prob_table
 
 # Plot the probability differences
-prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Prob_Difference)) +
+prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Difference)) +
   geom_point(size = 5, color = "darkblue") +
-  geom_errorbar(aes(ymin = CI_Lower_Prob, ymax = CI_Upper_Prob), 
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
                 width = 0.15, size = 1.2, color = "darkblue") +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
   labs(title = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
@@ -512,33 +632,14 @@ prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Prob_Differenc
         axis.title = element_text(size = 12)) +
   scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
   # Add annotations for sample sizes
-  annotate("text", x = 1, y = min(plot_data_prob$CI_Lower_Prob) - 0.01, 
+  annotate("text", x = 1, y = min(plot_data_prob$CI_Lower) - 0.01, 
            label = "n=16,130", size = 3.5, color = "gray50") +
-  annotate("text", x = 2, y = min(plot_data_prob$CI_Lower_Prob) - 0.01, 
+  annotate("text", x = 2, y = min(plot_data_prob$CI_Lower) - 0.01, 
            label = "n=5,695", size = 3.5, color = "gray50") +
-  annotate("text", x = 3, y = min(plot_data_prob$CI_Lower_Prob) - 0.01, 
+  annotate("text", x = 3, y = min(plot_data_prob$CI_Lower) - 0.01, 
            label = "n=3,187", size = 3.5, color = "gray50")
 
 print(prob_diff_plot)
-
-# Display the probability differences in a table
-prob_diff_table <- plot_data_prob |>
-  mutate(
-    Prob_Diff_Pct = sprintf("%.1f%%", Prob_Difference * 100),
-    CI_Lower_Pct = sprintf("%.1f%%", CI_Lower_Prob * 100),
-    CI_Upper_Pct = sprintf("%.1f%%", CI_Upper_Prob * 100),
-    Effect = paste0(Prob_Diff_Pct, " (", CI_Lower_Pct, ", ", CI_Upper_Pct, ")")
-  ) |>
-  select(DR_Severity, Prob_Difference, Effect)
-
-knitr::kable(prob_diff_table[, c("DR_Severity", "Effect")],
-             caption = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
-             col.names = c("DR Severity", "Probability Difference (95% CI)"),
-             row.names = FALSE)
-
-# Also show the raw probabilities
-cat("\nFor context, the baseline probability of vision impairment (at intercept) is approximately:", 
-    sprintf("%.1f%%", baseline_prob * 100), "\n")
 ```
 
 ## Complete Coefficient Interpretation
