@@ -312,12 +312,37 @@ if(joint_test$`Pr(>Chisq)`[2] < 0.05) {
 # Increase reference grid limit to handle the full factorial
 emm_options(rg.limit = 200000)  # Increase limit to handle large reference grid
 
-# Calculate marginal means - this will average over all covariate combinations
-emm <- emmeans(model_dr_interaction, 
-               ~ ever_lapse_binary | dr_severity)
-
-# Get contrasts: effect of lapse (1 vs 0) within each DR severity
-lapse_contrasts <- contrast(emm, method = "revpairwise", by = "dr_severity")
+# Check for cached emmeans results
+emmeans_cache_file <- "ps_results/emmeans_dr_interaction.rds"
+if(file.exists(emmeans_cache_file)) {
+  cat("Loading cached emmeans results...\n")
+  emmeans_results <- readRDS(emmeans_cache_file)
+  emm <- emmeans_results$emm
+  lapse_contrasts <- emmeans_results$lapse_contrasts
+  cat("Cached results loaded successfully.\n\n")
+} else {
+  cat("Computing emmeans (this may take several minutes)...\n")
+  start_time <- Sys.time()
+  
+  # Calculate marginal means - this will average over all covariate combinations
+  emm <- emmeans(model_dr_interaction, 
+                 ~ ever_lapse_binary | dr_severity)
+  
+  # Get contrasts: effect of lapse (1 vs 0) within each DR severity
+  lapse_contrasts <- contrast(emm, method = "revpairwise", by = "dr_severity")
+  
+  # Save to cache
+  emmeans_results <- list(
+    emm = emm,
+    lapse_contrasts = lapse_contrasts,
+    computed_at = Sys.time()
+  )
+  saveRDS(emmeans_results, file = emmeans_cache_file)
+  
+  end_time <- Sys.time()
+  cat("Emmeans computation completed in", round(difftime(end_time, start_time, units = "mins"), 2), "minutes\n")
+  cat("Results cached to:", emmeans_cache_file, "\n\n")
+}
 
 # Convert to data frame and clean up
 lapse_effects <- as.data.frame(lapse_contrasts)
