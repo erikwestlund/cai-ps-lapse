@@ -567,21 +567,46 @@ compute_prob_table <- tryCatch({
 
 # Only create and display table if computation succeeded
 if(compute_prob_table == TRUE && exists("prob_table") && nrow(prob_table) > 0) {
-  # Format the table for display
+  # Format the table for display - check which columns exist
   display_table <- prob_table |>
     mutate(
       Prob_No_Lapse = round(Prob_No_Lapse, 3),
-      Prob_Lapse = round(Prob_Lapse, 3),
-      Difference = round(Difference, 3),
-      CI = paste0("(", round(CI_Lower, 3), ", ", round(CI_Upper, 3), ")"),
-      P_Value = format.pval(P_Value, digits = 3, eps = 0.001)
-    ) |>
-    select(DR_Severity, Prob_No_Lapse, Prob_Lapse, Difference, CI, P_Value)
+      Prob_Lapse = round(Prob_Lapse, 3)
+    )
+  
+  # Add optional columns if they exist
+  if("Difference" %in% names(prob_table)) {
+    display_table <- display_table |>
+      mutate(Difference = round(Difference, 3))
+  }
+  
+  if(all(c("CI_Lower", "CI_Upper") %in% names(prob_table))) {
+    display_table <- display_table |>
+      mutate(CI = paste0("(", round(CI_Lower, 3), ", ", round(CI_Upper, 3), ")"))
+  }
+  
+  if("P_Value" %in% names(prob_table)) {
+    display_table <- display_table |>
+      mutate(P_Value = format.pval(P_Value, digits = 3, eps = 0.001))
+  }
+  
+  # Select only columns that exist
+  cols_to_select <- c("DR_Severity", "Prob_No_Lapse", "Prob_Lapse")
+  if("Difference" %in% names(display_table)) cols_to_select <- c(cols_to_select, "Difference")
+  if("CI" %in% names(display_table)) cols_to_select <- c(cols_to_select, "CI")
+  if("P_Value" %in% names(display_table)) cols_to_select <- c(cols_to_select, "P_Value")
+  
+  display_table <- display_table |> select(all_of(cols_to_select))
+  
+  # Adjust column names based on what's available
+  col_names <- c("DR Severity", "P(VI | No Lapse)", "P(VI | Lapse)")
+  if("Difference" %in% names(display_table)) col_names <- c(col_names, "Difference")
+  if("CI" %in% names(display_table)) col_names <- c(col_names, "95% CI")
+  if("P_Value" %in% names(display_table)) col_names <- c(col_names, "P-value")
   
   knitr::kable(display_table,
                caption = "Predicted Probability of Vision Impairment by DR Severity and Lapse Status (Averaged Over All Covariate Patterns)",
-               col.names = c("DR Severity", "P(VI | No Lapse)", "P(VI | Lapse)", 
-                            "Difference", "95% CI", "P-value"),
+               col.names = col_names,
                row.names = FALSE,
                digits = 3)
 } else {
