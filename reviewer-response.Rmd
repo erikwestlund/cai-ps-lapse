@@ -40,8 +40,8 @@ data <- load_and_prepare_data(data_path)
 # Apply the same exclusions as main analysis
 m_data <- apply_exclusions(data)
 
-cat(sprintf("Total observations after exclusions: %d\n", nrow(m_data)))
-cat(sprintf("Total unique patients: %d\n", length(unique(m_data$e_mrn_deidentified))))
+print(sprintf("Total observations after exclusions: %d", nrow(m_data)))
+print(sprintf("Total unique patients: %d", length(unique(m_data$e_mrn_deidentified))))
 ```
 
 ## Load IPTW Weights from Analysis
@@ -55,14 +55,14 @@ if(!"twang_gbm" %in% names(cached_results)) {
   stop("No cached twang model found. Please run analysis.Rmd first to generate IPTW weights.")
 }
 
-cat("Loading cached twang model for IPTW weights...\n")
+print("Loading cached twang model for IPTW weights...")
 twang_model <- cached_results$twang_gbm$result
 
 # Extract IPTW weights from twang model (same as in analysis.Rmd)
 m_data$twang_att_w <- get.weights(twang_model, stop.method = "es.mean")
 
 # Summary of weights
-cat("\nWeight distribution:\n")
+print("Weight distribution:")
 summary(m_data$twang_att_w)
 ```
 
@@ -132,26 +132,24 @@ m_data <- m_data |>
     ),
     treatment_type = factor(treatment_type, 
                            levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment")),
-    # Also create a severe DR indicator (not used in simplified analysis)
-    severe_dr = (NPDR == "Severe" | PDR == "Present")
+    # Create a severe DR indicator - check both NPDR and PDR columns
+    severe_dr = case_when(
+      PDR == "Present" ~ TRUE,
+      NPDR == "Severe" ~ TRUE, 
+      TRUE ~ FALSE
+    )
   )
 
 # Check distribution of treatment types
-cat("Treatment Type Distribution:\n")
+print("Treatment Type Distribution:")
 table(m_data$treatment_type)
 
-# Check severe DR distribution
-cat("\nSevere DR Distribution:\n")
+# Check severe DR distribution  
+print("Severe DR Distribution:")
 table(m_data$severe_dr)
 
-# Display person_dr coding
-cat("\n\nDR Severity Coding (person_dr variable):\n")
-cat("0 = No DR (No diabetic retinopathy)\n")
-cat("1 = NPDR (Non-proliferative diabetic retinopathy - all severities)\n")
-cat("2 = PDR (Proliferative diabetic retinopathy)\n")
-
-# Check actual distribution
-cat("\nDR Severity Distribution:\n")
+# Display DR severity coding and distribution
+print("DR Severity Distribution:")
 dr_dist <- table(m_data$person_dr)
 dr_labels <- c("0 (No DR)", "1 (NPDR)", "2 (PDR)")
 names(dr_dist) <- dr_labels[as.numeric(names(dr_dist)) + 1]
@@ -265,6 +263,15 @@ dr_results <- data.frame(
 )
 
 knitr::kable(dr_results, caption = "DR Severity Interaction Terms")
+
+# Interpret interaction significance
+if(any(dr_interaction_pvals < 0.05)) {
+  sig_terms <- dr_interaction_terms[dr_interaction_pvals < 0.05]
+  print(paste("Significant DR severity interaction terms detected:", 
+              paste(sig_terms, collapse = ", ")))
+} else {
+  print("No significant DR severity interactions detected at p < 0.05")
+}
 ```
 
 # Summary
