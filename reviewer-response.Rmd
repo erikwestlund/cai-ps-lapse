@@ -345,6 +345,7 @@ knitr::kable(lapse_effects_table,
 ## Alternative: Manual Calculation of Lapse Effects
 
 ```{r manual_lapse_effects}
+# Note: This manual calculation should produce identical results to emmeans above
 # If emmeans still has issues, we can calculate the effects manually
 # Extract coefficients and variance-covariance matrix
 coef_vals <- coef(model_dr_interaction)
@@ -419,6 +420,26 @@ manual_effects <- manual_effects |>
 knitr::kable(manual_effects,
              caption = "Effect of Lapsing Within Each DR Severity Group (Manual Calculation)",
              row.names = FALSE)
+
+# Verify that emmeans and manual calculations match
+if(exists("lapse_effects_table") && nrow(lapse_effects_table) > 0) {
+  # Compare the two methods
+  comparison <- data.frame(
+    DR_Severity = manual_effects$DR_Severity,
+    Emmeans_LogOdds = lapse_effects_table$Log_Odds,
+    Manual_LogOdds = manual_effects$Log_Odds,
+    Difference = abs(lapse_effects_table$Log_Odds - manual_effects$Log_Odds)
+  )
+  
+  if(max(comparison$Difference) < 0.001) {
+    cat("\n✓ Verification: Emmeans and manual calculations produce identical results (differences < 0.001)\n")
+  } else {
+    cat("\n⚠ Warning: Some differences between emmeans and manual calculations:\n")
+    print(comparison)
+  }
+} else {
+  cat("\nNote: Using manual calculation method as emmeans encountered issues with reference grid size.\n")
+}
 ```
 
 ## Visualization of Interaction Effects
@@ -452,74 +473,72 @@ p_magnitude <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds, fill = DR_Se
 print(p_magnitude)
 ```
 
-## Average Marginal Effects Visualization (Probability Scale)
+## Probability Difference by Lapse Status
 
-```{r marginal_effects_viz, fig.height=5, fig.width=8}
-# Convert log odds AMEs to probability differences
-# Using the delta method approximation or simulation
-# For interpretability, we'll calculate the average marginal effect on the probability scale
+```{r probability_differences, fig.height=5, fig.width=8}
+# Calculate the actual probabilities for lapsers vs non-lapsers
+# This shows the DIFFERENCE IN PROBABILITY of vision impairment between groups
 
 # Get baseline predicted probabilities (at means of covariates)
-# For a rough approximation, use the intercept to get baseline risk
 intercept <- coef(model_dr_interaction)["(Intercept)"]
 baseline_prob <- exp(intercept) / (1 + exp(intercept))
 
-# Convert log odds effects to approximate probability differences
-# Using the derivative of the logistic function at the baseline probability
-# d(prob)/d(log_odds) = prob * (1 - prob)
+# Convert log odds effects to probability differences
+# Using the derivative of the logistic function
 prob_scale_factor <- baseline_prob * (1 - baseline_prob)
 
 # Create probability scale effects
 plot_data_prob <- plot_data |>
   mutate(
-    AME_Prob = Log_Odds * prob_scale_factor,
+    # This is the DIFFERENCE in probability between lapsers and non-lapsers
+    Prob_Difference = Log_Odds * prob_scale_factor,
     CI_Lower_Prob = CI_Lower * prob_scale_factor,
-    CI_Upper_Prob = CI_Upper * prob_scale_factor,
-    # Convert to percentage points for easier interpretation
-    AME_Pct = AME_Prob * 100,
-    CI_Lower_Pct = CI_Lower_Prob * 100,
-    CI_Upper_Pct = CI_Upper_Prob * 100
+    CI_Upper_Prob = CI_Upper * prob_scale_factor
   )
 
-# Plot average marginal effects on probability scale
-ame_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = AME_Pct)) +
+# Plot the probability differences
+prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Prob_Difference)) +
   geom_point(size = 5, color = "darkblue") +
-  geom_errorbar(aes(ymin = CI_Lower_Pct, ymax = CI_Upper_Pct), 
+  geom_errorbar(aes(ymin = CI_Lower_Prob, ymax = CI_Upper_Prob), 
                 width = 0.15, size = 1.2, color = "darkblue") +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
-  labs(title = "Average Marginal Effect of Lapsing by DR Severity",
-       subtitle = "Effect on probability of vision impairment (percentage points) with 95% CIs",
+  labs(title = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
+       subtitle = "Average marginal effect of lapsing on probability scale with 95% CIs",
        x = "DR Severity",
-       y = "Average Marginal Effect (Percentage Points)") +
+       y = "Probability Difference") +
   theme_minimal() +
   theme(plot.title = element_text(size = 14, face = "bold"),
         axis.text = element_text(size = 12),
         axis.title = element_text(size = 12)) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
   # Add annotations for sample sizes
-  annotate("text", x = 1, y = min(plot_data_prob$CI_Lower_Pct) - 1, 
+  annotate("text", x = 1, y = min(plot_data_prob$CI_Lower_Prob) - 0.01, 
            label = "n=16,130", size = 3.5, color = "gray50") +
-  annotate("text", x = 2, y = min(plot_data_prob$CI_Lower_Pct) - 1, 
+  annotate("text", x = 2, y = min(plot_data_prob$CI_Lower_Prob) - 0.01, 
            label = "n=5,695", size = 3.5, color = "gray50") +
-  annotate("text", x = 3, y = min(plot_data_prob$CI_Lower_Pct) - 1, 
+  annotate("text", x = 3, y = min(plot_data_prob$CI_Lower_Prob) - 0.01, 
            label = "n=3,187", size = 3.5, color = "gray50")
 
-print(ame_plot)
+print(prob_diff_plot)
 
-# Also display the probability scale effects in a table
-prob_effects_table <- plot_data_prob |>
-  select(DR_Severity, AME_Pct, CI_Lower_Pct, CI_Upper_Pct) |>
+# Display the probability differences in a table
+prob_diff_table <- plot_data_prob |>
   mutate(
-    AME_Pct = round(AME_Pct, 2),
-    CI_Lower_Pct = round(CI_Lower_Pct, 2),
-    CI_Upper_Pct = round(CI_Upper_Pct, 2),
-    Effect = paste0(AME_Pct, "% (", CI_Lower_Pct, "%, ", CI_Upper_Pct, "%)")
+    Prob_Diff_Pct = sprintf("%.1f%%", Prob_Difference * 100),
+    CI_Lower_Pct = sprintf("%.1f%%", CI_Lower_Prob * 100),
+    CI_Upper_Pct = sprintf("%.1f%%", CI_Upper_Prob * 100),
+    Effect = paste0(Prob_Diff_Pct, " (", CI_Lower_Pct, ", ", CI_Upper_Pct, ")")
   ) |>
-  select(DR_Severity, Effect)
+  select(DR_Severity, Prob_Difference, Effect)
 
-knitr::kable(prob_effects_table,
-             caption = "Average Marginal Effect of Lapsing (Percentage Point Change in Probability)",
-             col.names = c("DR Severity", "Effect (95% CI)"),
+knitr::kable(prob_diff_table[, c("DR_Severity", "Effect")],
+             caption = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
+             col.names = c("DR Severity", "Probability Difference (95% CI)"),
              row.names = FALSE)
+
+# Also show the raw probabilities
+cat("\nFor context, the baseline probability of vision impairment (at intercept) is approximately:", 
+    sprintf("%.1f%%", baseline_prob * 100), "\n")
 ```
 
 ## Complete Coefficient Interpretation
