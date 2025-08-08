@@ -1020,59 +1020,75 @@ for(tx_type in c("no_treatment", "anti_VEGF", "PRP", "other_treatment")) {
   subset_data_tx <- m_data[m_data$treatment_type == tx_type, ]
   n_subset_tx <- nrow(subset_data_tx)
   
+  cat(paste("Processing", tx_type, "with n =", n_subset_tx, "\n"))
+  
   if(n_subset_tx > 0) {
-    # Create predictions with lapse = 0 and lapse = 1
-    subset_data_tx_0 <- subset_data_tx
-    subset_data_tx_0$ever_lapse_binary <- 0
-    
-    subset_data_tx_1 <- subset_data_tx
-    subset_data_tx_1$ever_lapse_binary <- 1
-    
-    # Get predictions (probabilities)
-    pred_0_tx <- predict(model_treatment_interaction, newdata = subset_data_tx_0, type = "response")
-    pred_1_tx <- predict(model_treatment_interaction, newdata = subset_data_tx_1, type = "response")
-    
-    # Calculate individual-level effects
-    individual_effects_tx <- as.numeric(pred_1_tx) - as.numeric(pred_0_tx)
-    
-    # Calculate AME with weights if available
-    if("twang_att_w" %in% names(subset_data_tx)) {
-      subset_weights_tx <- subset_data_tx$twang_att_w
+    # Try to calculate AME with error handling
+    ame_calc_success <- tryCatch({
+      # Create predictions with lapse = 0 and lapse = 1
+      subset_data_tx_0 <- subset_data_tx
+      subset_data_tx_0$ever_lapse_binary <- 0
       
-      # Ensure equal lengths and remove NAs
-      valid_idx_tx <- !is.na(individual_effects_tx) & !is.na(subset_weights_tx)
-      if(sum(valid_idx_tx) > 0) {
-        ame_value_tx <- weighted.mean(individual_effects_tx[valid_idx_tx], 
-                                      w = subset_weights_tx[valid_idx_tx])
-        weighted_var_tx <- sum(subset_weights_tx[valid_idx_tx] * 
-                              (individual_effects_tx[valid_idx_tx] - ame_value_tx)^2) / 
-                          sum(subset_weights_tx[valid_idx_tx])
-        se_value_tx <- sqrt(weighted_var_tx / sum(valid_idx_tx))
+      subset_data_tx_1 <- subset_data_tx
+      subset_data_tx_1$ever_lapse_binary <- 1
+      
+      # Get predictions (probabilities)
+      pred_0_tx <- predict(model_treatment_interaction, newdata = subset_data_tx_0, type = "response")
+      pred_1_tx <- predict(model_treatment_interaction, newdata = subset_data_tx_1, type = "response")
+      
+      # Calculate individual-level effects
+      individual_effects_tx <- as.numeric(pred_1_tx) - as.numeric(pred_0_tx)
+      
+      # Calculate AME with weights if available
+      if("twang_att_w" %in% names(subset_data_tx)) {
+        subset_weights_tx <- subset_data_tx$twang_att_w
+        
+        # Check lengths match
+        if(length(individual_effects_tx) != length(subset_weights_tx)) {
+          min_length <- min(length(individual_effects_tx), length(subset_weights_tx))
+          individual_effects_tx <- individual_effects_tx[1:min_length]
+          subset_weights_tx <- subset_weights_tx[1:min_length]
+        }
+        
+        # Ensure equal lengths and remove NAs
+        valid_idx_tx <- !is.na(individual_effects_tx) & !is.na(subset_weights_tx)
+        if(sum(valid_idx_tx) > 0) {
+          ame_value_tx <- weighted.mean(individual_effects_tx[valid_idx_tx], 
+                                        w = subset_weights_tx[valid_idx_tx])
+          weighted_var_tx <- sum(subset_weights_tx[valid_idx_tx] * 
+                                (individual_effects_tx[valid_idx_tx] - ame_value_tx)^2) / 
+                            sum(subset_weights_tx[valid_idx_tx])
+          se_value_tx <- sqrt(weighted_var_tx / sum(valid_idx_tx))
+        } else {
+          ame_value_tx <- mean(individual_effects_tx, na.rm = TRUE)
+          se_value_tx <- sd(individual_effects_tx, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects_tx)))
+        }
       } else {
         ame_value_tx <- mean(individual_effects_tx, na.rm = TRUE)
         se_value_tx <- sd(individual_effects_tx, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects_tx)))
       }
-    } else {
-      ame_value_tx <- mean(individual_effects_tx, na.rm = TRUE)
-      se_value_tx <- sd(individual_effects_tx, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects_tx)))
-    }
-    
-    # Calculate confidence intervals and p-value
-    ci_lower_tx <- ame_value_tx - 1.96 * se_value_tx
-    ci_upper_tx <- ame_value_tx + 1.96 * se_value_tx
-    z_stat_tx <- ame_value_tx / se_value_tx
-    p_value_tx <- 2 * pnorm(-abs(z_stat_tx))
-    
-    # Add to results
-    ame_results_tx <- rbind(ame_results_tx, data.frame(
-      Treatment_Type = tx_type,
-      N = n_subset_tx,
-      AME = ame_value_tx,
-      SE = se_value_tx,
-      CI_Lower = ci_lower_tx,
-      CI_Upper = ci_upper_tx,
-      P_Value = p_value_tx
-    ))
+      
+      # Calculate confidence intervals and p-value
+      ci_lower_tx <- ame_value_tx - 1.96 * se_value_tx
+      ci_upper_tx <- ame_value_tx + 1.96 * se_value_tx
+      z_stat_tx <- ame_value_tx / se_value_tx
+      p_value_tx <- 2 * pnorm(-abs(z_stat_tx))
+      
+      # Add to results
+      ame_results_tx <- rbind(ame_results_tx, data.frame(
+        Treatment_Type = tx_type,
+        N = n_subset_tx,
+        AME = ame_value_tx,
+        SE = se_value_tx,
+        CI_Lower = ci_lower_tx,
+        CI_Upper = ci_upper_tx,
+        P_Value = p_value_tx
+      ))
+      TRUE
+    }, error = function(e) {
+      cat(paste("  Error calculating AME for", tx_type, ":", e$message, "\n"))
+      FALSE
+    })
   }
 }
 
@@ -1092,6 +1108,9 @@ if(nrow(ame_results_tx) > 0) {
                col.names = c("Treatment Type", "N", "AME", "SE", "95% CI", "P-value"),
                row.names = FALSE,
                digits = 4)
+} else {
+  cat("Could not calculate AMEs for treatment types due to prediction errors.\n")
+  cat("This may be due to missing factor levels or data structure issues.\n")
 }
 ```
 
