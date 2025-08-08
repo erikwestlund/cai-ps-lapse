@@ -685,8 +685,11 @@ cat("\nThe difference represents how these approaches handle heterogeneity in th
 ## Visualization of Probability Differences
 
 ```{r probability_differences_plot, fig.height=5, fig.width=8}
-# Check if we have probability table data
-if(exists("prob_table") && nrow(prob_table) > 0 && !any(is.na(prob_table$Difference))) {
+# Check if we have probability table data with required columns
+if(exists("prob_table") && nrow(prob_table) > 0 && 
+   "Difference" %in% names(prob_table) && 
+   all(c("CI_Lower", "CI_Upper") %in% names(prob_table)) &&
+   !any(is.na(prob_table$Difference))) {
   # Use the emmeans-based differences for plotting
   plot_data_prob <- prob_table
   
@@ -704,18 +707,29 @@ if(exists("prob_table") && nrow(prob_table) > 0 && !any(is.na(prob_table$Differe
     theme(plot.title = element_text(size = 14, face = "bold"),
           axis.text = element_text(size = 12),
           axis.title = element_text(size = 12)) +
-    scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
-    # Add annotations for sample sizes
-    annotate("text", x = 1, y = min(plot_data_prob$CI_Lower) - 0.01, 
+    scale_y_continuous(labels = scales::number_format(accuracy = 0.001))
+  
+  # Add sample size annotations with safe positioning
+  y_position <- if(exists("plot_data_prob") && "CI_Lower" %in% names(plot_data_prob)) {
+    min(plot_data_prob$CI_Lower, na.rm = TRUE) - 0.01
+  } else {
+    -0.05  # Default position
+  }
+  
+  prob_diff_plot <- prob_diff_plot +
+    annotate("text", x = 1, y = y_position, 
              label = "n=16,130", size = 3.5, color = "gray50") +
-    annotate("text", x = 2, y = min(plot_data_prob$CI_Lower) - 0.01, 
+    annotate("text", x = 2, y = y_position, 
              label = "n=5,695", size = 3.5, color = "gray50") +
-    annotate("text", x = 3, y = min(plot_data_prob$CI_Lower) - 0.01, 
+    annotate("text", x = 3, y = y_position, 
              label = "n=3,187", size = 3.5, color = "gray50")
   
   print(prob_diff_plot)
 } else {
-  cat("Skipping probability differences plot - data not available from emmeans calculation.\n")
+  cat("Skipping probability differences plot - required data not available from emmeans calculation.\n")
+  if(exists("prob_table")) {
+    cat("Available columns in prob_table:", paste(names(prob_table), collapse=", "), "\n")
+  }
   cat("See manual calculation results for probability differences.\n")
 }
 ```
