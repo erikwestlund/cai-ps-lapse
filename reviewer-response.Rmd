@@ -615,122 +615,136 @@ if(compute_prob_table == TRUE && exists("prob_table") && nrow(prob_table) > 0) {
 }
 ```
 
-## Alternative: Manual Verification of Average Marginal Effects
+## Average Marginal Effects by DR Severity Using Margins Package
 
-```{r true_marginal_effects}
-# If you want TRUE marginalization (averaging over the distribution of covariates),
-# we need to calculate predictions for every observation and then average
+```{r margins_dr_severity}
+# Calculate AMEs for each DR severity group using margins package
+# This matches the approach in twang-analysis.Rmd
 
-cat("Calculating average marginal effects by averaging over all observations...\n\n")
+cat("Calculating Average Marginal Effects using margins package...\n\n")
 
-# For each DR severity group, calculate the average effect
-marginal_effects <- data.frame(
-  DR_Severity = c("No_DR", "NPDR", "PDR"),
-  Avg_Prob_No_Lapse = numeric(3),
-  Avg_Prob_Lapse = numeric(3),
-  Difference = numeric(3),
-  SE = numeric(3)
+# Overall AME
+avg_margfx_overall <- margins(model_dr_interaction, design = survey_design_weighted, 
+                              variables = "ever_lapse_binary")
+mfx_overall <- summary(avg_margfx_overall)
+
+# For each DR severity group
+# No DR
+design_no_dr <- subset(survey_design_weighted, dr_severity == "No_DR")
+data_no_dr <- subset(m_data, dr_severity == "No_DR")
+n_no_dr <- nrow(data_no_dr)
+mfx_no_dr <- summary(margins(model_dr_interaction, 
+                             design = design_no_dr, 
+                             data = data_no_dr, 
+                             variables = "ever_lapse_binary"))
+
+# NPDR
+design_npdr <- subset(survey_design_weighted, dr_severity == "NPDR")
+data_npdr <- subset(m_data, dr_severity == "NPDR")
+n_npdr <- nrow(data_npdr)
+mfx_npdr <- summary(margins(model_dr_interaction, 
+                            design = design_npdr, 
+                            data = data_npdr, 
+                            variables = "ever_lapse_binary"))
+
+# PDR
+design_pdr <- subset(survey_design_weighted, dr_severity == "PDR")
+data_pdr <- subset(m_data, dr_severity == "PDR")
+n_pdr <- nrow(data_pdr)
+mfx_pdr <- summary(margins(model_dr_interaction, 
+                           design = design_pdr, 
+                           data = data_pdr, 
+                           variables = "ever_lapse_binary"))
+
+# Combine results into a table
+ame_results <- data.frame(
+  DR_Severity = c("Overall", "No_DR", "NPDR", "PDR"),
+  N = c(nrow(m_data), n_no_dr, n_npdr, n_pdr),
+  AME = c(mfx_overall$AME, mfx_no_dr$AME, mfx_npdr$AME, mfx_pdr$AME),
+  SE = c(mfx_overall$SE, mfx_no_dr$SE, mfx_npdr$SE, mfx_pdr$SE),
+  CI_Lower = c(mfx_overall$lower, mfx_no_dr$lower, mfx_npdr$lower, mfx_pdr$lower),
+  CI_Upper = c(mfx_overall$upper, mfx_no_dr$upper, mfx_npdr$upper, mfx_pdr$upper),
+  P_Value = c(mfx_overall$p, mfx_no_dr$p, mfx_npdr$p, mfx_pdr$p)
 )
 
-for(i in 1:3) {
-  dr_level <- c("No_DR", "NPDR", "PDR")[i]
-  
-  # Get subset of data for this DR severity
-  subset_data <- m_data[m_data$dr_severity == dr_level, ]
-  
-  # Predict for everyone with lapse = 0
-  subset_data_0 <- subset_data
-  subset_data_0$ever_lapse_binary <- 0
-  pred_0 <- predict(model_dr_interaction, newdata = subset_data_0, type = "response")
-  
-  # Predict for everyone with lapse = 1
-  subset_data_1 <- subset_data
-  subset_data_1$ever_lapse_binary <- 1
-  pred_1 <- predict(model_dr_interaction, newdata = subset_data_1, type = "response")
-  
-  # Calculate average probabilities
-  marginal_effects$Avg_Prob_No_Lapse[i] <- mean(as.numeric(pred_0), na.rm = TRUE)
-  marginal_effects$Avg_Prob_Lapse[i] <- mean(as.numeric(pred_1), na.rm = TRUE)
-  marginal_effects$Difference[i] <- marginal_effects$Avg_Prob_Lapse[i] - marginal_effects$Avg_Prob_No_Lapse[i]
-  
-  # Bootstrap or delta method for SE would go here
-  # For now, using a rough approximation
-  marginal_effects$SE[i] <- sd(as.numeric(pred_1) - as.numeric(pred_0), na.rm = TRUE) / sqrt(nrow(subset_data))
-}
-
 # Format for display
-marginal_display <- marginal_effects |>
+ame_display <- ame_results |>
   mutate(
-    Avg_Prob_No_Lapse = round(Avg_Prob_No_Lapse, 3),
-    Avg_Prob_Lapse = round(Avg_Prob_Lapse, 3),
-    Difference = round(Difference, 3),
-    CI_Lower = round(Difference - 1.96 * SE, 3),
-    CI_Upper = round(Difference + 1.96 * SE, 3),
-    CI = paste0("(", CI_Lower, ", ", CI_Upper, ")")
+    AME = round(AME, 4),
+    SE = round(SE, 4),
+    CI = paste0("(", round(CI_Lower, 4), ", ", round(CI_Upper, 4), ")"),
+    P_Value = format.pval(P_Value, digits = 4, eps = 0.0001)
   ) |>
-  select(DR_Severity, Avg_Prob_No_Lapse, Avg_Prob_Lapse, Difference, CI)
+  select(DR_Severity, N, AME, SE, CI, P_Value)
 
-knitr::kable(marginal_display,
-             caption = "Average Marginal Effects: Predicted Probabilities Averaged Over Observed Covariate Distribution",
-             col.names = c("DR Severity", "Avg P(VI | No Lapse)", "Avg P(VI | Lapse)", 
-                          "Difference", "95% CI"),
+knitr::kable(ame_display,
+             caption = "Average Marginal Effects of Lapsing on Vision Impairment by DR Severity",
+             col.names = c("DR Severity", "N", "AME", "SE", "95% CI", "P-value"),
              row.names = FALSE,
-             digits = 3)
+             digits = 4)
 
-cat("\nNote: The 'at reference/mean' table shows predictions for a typical patient.")
-cat("\nThe 'average marginal effects' table averages predictions across all patients in each DR group.")
-cat("\nThe difference represents how these approaches handle heterogeneity in the covariates.\n")
+cat("\nNote: AME represents the average change in probability of vision impairment when lapsing occurs,")
+cat("\naveraged over the covariate distribution within each DR severity group.")
+cat("\nThis approach matches the methodology used in twang-analysis.Rmd.\n")
 ```
 
-## Visualization of Probability Differences
+## Visualization of Average Marginal Effects
 
-```{r probability_differences_plot, fig.height=5, fig.width=8}
-# Check if we have probability table data with required columns
-if(exists("prob_table") && nrow(prob_table) > 0 && 
-   "Difference" %in% names(prob_table) && 
-   all(c("CI_Lower", "CI_Upper") %in% names(prob_table)) &&
-   !any(is.na(prob_table$Difference))) {
-  # Use the emmeans-based differences for plotting
-  plot_data_prob <- prob_table
+```{r ame_visualization, fig.height=6, fig.width=10}
+# Plot the AMEs from margins package
+if(exists("ame_results") && nrow(ame_results) > 0) {
+  # Exclude overall from plot, focus on DR severity groups
+  plot_data_ame <- ame_results[ame_results$DR_Severity != "Overall", ]
   
-  # Plot the probability differences
-  prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Difference)) +
-    geom_point(size = 5, color = "darkblue") +
+  # Create forest plot of AMEs
+  ame_plot <- ggplot(plot_data_ame, aes(x = DR_Severity, y = AME)) +
+    geom_point(size = 4, color = "darkblue") +
     geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
-                  width = 0.15, size = 1.2, color = "darkblue") +
+                  width = 0.15, size = 1, color = "darkblue") +
     geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
-    labs(title = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
-         subtitle = "Average marginal effect of lapsing on probability scale with 95% CIs",
+    labs(title = "Average Marginal Effect of Lapsing on Vision Impairment by DR Severity",
+         subtitle = "Change in probability of vision impairment (IPTW-weighted, with 95% CIs)",
          x = "DR Severity",
-         y = "Probability Difference") +
+         y = "Average Marginal Effect (Probability Scale)") +
     theme_minimal() +
     theme(plot.title = element_text(size = 14, face = "bold"),
-          axis.text = element_text(size = 12),
+          plot.subtitle = element_text(size = 11, color = "gray30"),
+          axis.text = element_text(size = 11),
           axis.title = element_text(size = 12)) +
-    scale_y_continuous(labels = scales::number_format(accuracy = 0.001))
+    scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
+    # Add sample size annotations
+    geom_text(aes(label = paste0("n=", format(N, big.mark=","))),
+              vjust = -2.5, size = 3.5, color = "gray50")
   
-  # Add sample size annotations with safe positioning
-  y_position <- if(exists("plot_data_prob") && "CI_Lower" %in% names(plot_data_prob)) {
-    min(plot_data_prob$CI_Lower, na.rm = TRUE) - 0.01
-  } else {
-    -0.05  # Default position
-  }
+  print(ame_plot)
   
-  prob_diff_plot <- prob_diff_plot +
-    annotate("text", x = 1, y = y_position, 
-             label = "n=16,130", size = 3.5, color = "gray50") +
-    annotate("text", x = 2, y = y_position, 
-             label = "n=5,695", size = 3.5, color = "gray50") +
-    annotate("text", x = 3, y = y_position, 
-             label = "n=3,187", size = 3.5, color = "gray50")
+  # Create a second plot comparing AME magnitudes
+  ame_bar_plot <- ggplot(plot_data_ame, aes(x = reorder(DR_Severity, AME), y = AME, fill = DR_Severity)) +
+    geom_col(alpha = 0.7) +
+    geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                  width = 0.2, size = 1) +
+    geom_hline(yintercept = 0, linetype = "solid", alpha = 0.5) +
+    coord_flip() +
+    labs(title = "Magnitude of Lapse Effect Across DR Severity",
+         subtitle = "Average marginal effects with 95% confidence intervals",
+         x = "",
+         y = "Average Marginal Effect") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          axis.text = element_text(size = 11),
+          axis.title = element_text(size = 12),
+          legend.position = "none") +
+    scale_fill_manual(values = c("No_DR" = "#1f77b4", 
+                                 "NPDR" = "#ff7f0e", 
+                                 "PDR" = "#d62728")) +
+    scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
+    geom_text(aes(label = sprintf("%.3f", AME)),
+              hjust = ifelse(plot_data_ame$AME > 0, -0.2, 1.2),
+              size = 3.5)
   
-  print(prob_diff_plot)
+  print(ame_bar_plot)
 } else {
-  cat("Skipping probability differences plot - required data not available from emmeans calculation.\n")
-  if(exists("prob_table")) {
-    cat("Available columns in prob_table:", paste(names(prob_table), collapse=", "), "\n")
-  }
-  cat("See manual calculation results for probability differences.\n")
+  cat("AME results not available for visualization.\n")
 }
 ```
 
