@@ -427,26 +427,6 @@ knitr::kable(manual_effects,
 # Use the manual_effects data for visualization
 plot_data <- manual_effects
 
-# Forest plot - Odds ratios only
-p_forest <- ggplot(plot_data, aes(x = DR_Severity, y = Odds_Ratio)) +
-  geom_point(size = 4, color = "darkred") +
-  geom_errorbar(aes(ymin = exp(CI_Lower), ymax = exp(CI_Upper)), 
-                width = 0.2, size = 1, color = "darkred") +
-  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
-  labs(title = "Odds Ratio of Vision Impairment for Lapsers vs Non-Lapsers",
-       subtitle = "By DR severity with 95% confidence intervals",
-       x = "DR Severity",
-       y = "Odds Ratio") +
-  theme_minimal() +
-  theme(plot.title = element_text(size = 14, face = "bold"),
-        axis.text = element_text(size = 11),
-        axis.title = element_text(size = 12)) +
-  scale_y_continuous(trans = "log2", 
-                     breaks = c(0.5, 1, 2, 4, 8),
-                     labels = c("0.5", "1", "2", "4", "8"))
-
-print(p_forest)
-
 # Bar chart showing magnitude of effects with error bars
 p_magnitude <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds, fill = DR_Severity)) +
   geom_col(alpha = 0.7) +
@@ -472,33 +452,74 @@ p_magnitude <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds, fill = DR_Se
 print(p_magnitude)
 ```
 
-## Average Marginal Effects Visualization
+## Average Marginal Effects Visualization (Probability Scale)
 
 ```{r marginal_effects_viz, fig.height=5, fig.width=8}
-# Calculate average marginal effects using margins or emmeans
-# This shows the actual effect of lapsing within each group
-ame_plot <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds)) +
+# Convert log odds AMEs to probability differences
+# Using the delta method approximation or simulation
+# For interpretability, we'll calculate the average marginal effect on the probability scale
+
+# Get baseline predicted probabilities (at means of covariates)
+# For a rough approximation, use the intercept to get baseline risk
+intercept <- coef(model_dr_interaction)["(Intercept)"]
+baseline_prob <- exp(intercept) / (1 + exp(intercept))
+
+# Convert log odds effects to approximate probability differences
+# Using the derivative of the logistic function at the baseline probability
+# d(prob)/d(log_odds) = prob * (1 - prob)
+prob_scale_factor <- baseline_prob * (1 - baseline_prob)
+
+# Create probability scale effects
+plot_data_prob <- plot_data |>
+  mutate(
+    AME_Prob = Log_Odds * prob_scale_factor,
+    CI_Lower_Prob = CI_Lower * prob_scale_factor,
+    CI_Upper_Prob = CI_Upper * prob_scale_factor,
+    # Convert to percentage points for easier interpretation
+    AME_Pct = AME_Prob * 100,
+    CI_Lower_Pct = CI_Lower_Prob * 100,
+    CI_Upper_Pct = CI_Upper_Prob * 100
+  )
+
+# Plot average marginal effects on probability scale
+ame_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = AME_Pct)) +
   geom_point(size = 5, color = "darkblue") +
-  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+  geom_errorbar(aes(ymin = CI_Lower_Pct, ymax = CI_Upper_Pct), 
                 width = 0.15, size = 1.2, color = "darkblue") +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
   labs(title = "Average Marginal Effect of Lapsing by DR Severity",
-       subtitle = "Effect on log odds of vision impairment with 95% CIs",
+       subtitle = "Effect on probability of vision impairment (percentage points) with 95% CIs",
        x = "DR Severity",
-       y = "Average Marginal Effect (Log Odds)") +
+       y = "Average Marginal Effect (Percentage Points)") +
   theme_minimal() +
   theme(plot.title = element_text(size = 14, face = "bold"),
         axis.text = element_text(size = 12),
         axis.title = element_text(size = 12)) +
   # Add annotations for sample sizes
-  annotate("text", x = 1, y = min(plot_data$CI_Lower) - 0.1, 
+  annotate("text", x = 1, y = min(plot_data_prob$CI_Lower_Pct) - 1, 
            label = "n=16,130", size = 3.5, color = "gray50") +
-  annotate("text", x = 2, y = min(plot_data$CI_Lower) - 0.1, 
+  annotate("text", x = 2, y = min(plot_data_prob$CI_Lower_Pct) - 1, 
            label = "n=5,695", size = 3.5, color = "gray50") +
-  annotate("text", x = 3, y = min(plot_data$CI_Lower) - 0.1, 
+  annotate("text", x = 3, y = min(plot_data_prob$CI_Lower_Pct) - 1, 
            label = "n=3,187", size = 3.5, color = "gray50")
 
 print(ame_plot)
+
+# Also display the probability scale effects in a table
+prob_effects_table <- plot_data_prob |>
+  select(DR_Severity, AME_Pct, CI_Lower_Pct, CI_Upper_Pct) |>
+  mutate(
+    AME_Pct = round(AME_Pct, 2),
+    CI_Lower_Pct = round(CI_Lower_Pct, 2),
+    CI_Upper_Pct = round(CI_Upper_Pct, 2),
+    Effect = paste0(AME_Pct, "% (", CI_Lower_Pct, "%, ", CI_Upper_Pct, "%)")
+  ) |>
+  select(DR_Severity, Effect)
+
+knitr::kable(prob_effects_table,
+             caption = "Average Marginal Effect of Lapsing (Percentage Point Change in Probability)",
+             col.names = c("DR Severity", "Effect (95% CI)"),
+             row.names = FALSE)
 ```
 
 ## Complete Coefficient Interpretation
