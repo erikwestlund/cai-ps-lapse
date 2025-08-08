@@ -44,57 +44,70 @@ cat(sprintf("Total observations after exclusions: %d\n", nrow(m_data)))
 cat(sprintf("Total unique patients: %d\n", length(unique(m_data$e_mrn_deidentified))))
 ```
 
-## Load or Generate IPTW Weights
+## Load IPTW Weights from Analysis
 
 ```{r twang_weights}
-# Load cached results if available
+# Load cached results from the main analysis pipeline
 cached_results <- load_cached_results("ps_results")
 
-# Load or generate twang weights for IPTW
-if("twang_gbm" %in% names(cached_results)) {
-  cat("Loading cached twang model for IPTW weights...\n")
-  twang_model <- cached_results$twang_gbm$result
-} else {
-  cat("Running twang model to generate IPTW weights...\n")
-  # Get the matching formula from functions.R
-  matchingFormula <- get_matching_formula()
-  
-  # Run twang ps model
-  library(twang)
-  twang_model <- ps(
-    formula = matchingFormula, 
-    data = data.frame(m_data),
-    n.trees = 10000,
-    interaction.depth = 3,
-    shrinkage = 0.01,
-    estimand = "ATT",
-    stop.method = c("es.mean", "ks.max")
-  )
-  
-  # Save for future use
-  if(!dir.exists("ps_results")) {
-    dir.create("ps_results")
-  }
-  saveRDS(list(result = twang_model), file = "ps_results/twang_gbm.rds")
+# Check if twang model exists in cached results
+if(!"twang_gbm" %in% names(cached_results)) {
+  stop("No cached twang model found. Please run analysis.Rmd first to generate IPTW weights.")
 }
 
-# Extract IPTW weights from twang model
+cat("Loading cached twang model for IPTW weights...\n")
+twang_model <- cached_results$twang_gbm$result
+
+# Extract IPTW weights from twang model (same as in analysis.Rmd)
 m_data$twang_att_w <- get.weights(twang_model, stop.method = "es.mean")
 
 # Summary of weights
+cat("\nWeight distribution:\n")
 summary(m_data$twang_att_w)
 ```
 
-## Twang Model Summary
+## Main Effect of Lapsing (IPTW-Weighted)
 
-```{r twang_summary}
-# Display twang model summary for verification
-print(twang_model)
+```{r main_effect}
+# Run the main model with full covariates to get the lapse effect
+# Using the same formula as analysisFormulaFull from functions.R
+main_formula <- get_analysis_formulas()$full
 
-# Show the number of iterations and balance achieved
-cat("\nOptimal iteration (es.mean):", twang_model$desc$es.mean.ATT$n.trees, "\n")
-cat("Maximum effect size at optimal iteration:", 
-    round(max(abs(twang_model$desc$es.mean.ATT$results$std.eff.sz)), 4), "\n")
+# Create weighted survey design
+survey_design_weighted <- svydesign(
+  ids = ~e_mrn_deidentified,
+  data = m_data,
+  weights = ~twang_att_w
+)
+
+# Fit the main model
+main_model <- svyglm(
+  formula = main_formula,
+  design = survey_design_weighted,
+  family = quasibinomial()
+)
+
+# Extract lapse effect
+coef_summary <- summary(main_model)$coefficients
+lapse_est <- coef_summary["ever_lapse_binary", "Estimate"]
+lapse_se <- coef_summary["ever_lapse_binary", "Std. Error"]
+lapse_p <- coef_summary["ever_lapse_binary", "Pr(>|t|)"]
+
+# Calculate confidence intervals
+lapse_ci <- confint(main_model)["ever_lapse_binary", ]
+
+# Create results table
+lapse_results <- data.frame(
+  Log_Odds = round(lapse_est, 4),
+  Odds_Ratio = round(exp(lapse_est), 4),
+  CI_Lower = round(lapse_ci[1], 4),
+  CI_Upper = round(lapse_ci[2], 4),
+  P_Value = format.pval(lapse_p, digits = 4, eps = 0.0001)
+)
+
+knitr::kable(lapse_results, 
+             caption = "Effect of Lapsing on Vision Impairment (IPTW-Weighted)",
+             row.names = FALSE)
 ```
 
 # Reviewer Question 1: Subgroup Testing with Formal Interaction Terms
