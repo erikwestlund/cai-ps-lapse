@@ -310,8 +310,17 @@ if(joint_test$`Pr(>Chisq)`[2] < 0.05) {
 ```{r lapse_effects_by_dr}
 library(emmeans)
 
-# Calculate marginal means for each combination of lapse and DR severity
-emm <- emmeans(model_dr_interaction, ~ ever_lapse_binary | dr_severity)
+# Method 1: Use emmeans with nuisance factors specified
+# All covariates except lapse and DR severity are nuisance factors
+nuisance_vars <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
+                   "CCI", "DCSI", "other_inject", "anti_VEGF", "focal_laser_flag",
+                   "PRP_flag", "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
+                   "catsurg_before_hitplus_cat")
+
+# Calculate marginal means with nuisance factors
+emm <- emmeans(model_dr_interaction, 
+               ~ ever_lapse_binary | dr_severity,
+               nuisance = nuisance_vars)
 
 # Get contrasts: effect of lapse (1 vs 0) within each DR severity
 lapse_contrasts <- contrast(emm, method = "revpairwise", by = "dr_severity")
@@ -332,6 +341,85 @@ lapse_effects_table <- data.frame(
 
 knitr::kable(lapse_effects_table,
              caption = "Effect of Lapsing Within Each DR Severity Group",
+             row.names = FALSE)
+```
+
+## Alternative: Manual Calculation of Lapse Effects
+
+```{r manual_lapse_effects}
+# If emmeans still has issues, we can calculate the effects manually
+# Extract coefficients and variance-covariance matrix
+coef_vals <- coef(model_dr_interaction)
+vcov_mat <- vcov(model_dr_interaction)
+
+# Define the linear combinations for each DR group
+# Effect in No DR: just the main effect
+# Effect in NPDR: main effect + NPDR interaction
+# Effect in PDR: main effect + PDR interaction
+
+# Create contrast matrix
+contrast_names <- c("Lapse effect in No DR",
+                    "Lapse effect in NPDR", 
+                    "Lapse effect in PDR")
+
+# Initialize results
+manual_effects <- data.frame(
+  DR_Severity = c("No_DR", "NPDR", "PDR"),
+  Log_Odds = numeric(3),
+  SE = numeric(3),
+  stringsAsFactors = FALSE
+)
+
+# Effect for No DR (just main effect)
+manual_effects$Log_Odds[1] <- coef_vals["ever_lapse_binary"]
+manual_effects$SE[1] <- sqrt(vcov_mat["ever_lapse_binary", "ever_lapse_binary"])
+
+# Effect for NPDR (main + interaction)
+if("ever_lapse_binary:dr_severityNPDR" %in% names(coef_vals)) {
+  manual_effects$Log_Odds[2] <- coef_vals["ever_lapse_binary"] + 
+                                 coef_vals["ever_lapse_binary:dr_severityNPDR"]
+  # SE calculation for sum of coefficients
+  manual_effects$SE[2] <- sqrt(
+    vcov_mat["ever_lapse_binary", "ever_lapse_binary"] +
+    vcov_mat["ever_lapse_binary:dr_severityNPDR", "ever_lapse_binary:dr_severityNPDR"] +
+    2 * vcov_mat["ever_lapse_binary", "ever_lapse_binary:dr_severityNPDR"]
+  )
+}
+
+# Effect for PDR (main + interaction)
+if("ever_lapse_binary:dr_severityPDR" %in% names(coef_vals)) {
+  manual_effects$Log_Odds[3] <- coef_vals["ever_lapse_binary"] + 
+                                 coef_vals["ever_lapse_binary:dr_severityPDR"]
+  # SE calculation for sum of coefficients
+  manual_effects$SE[3] <- sqrt(
+    vcov_mat["ever_lapse_binary", "ever_lapse_binary"] +
+    vcov_mat["ever_lapse_binary:dr_severityPDR", "ever_lapse_binary:dr_severityPDR"] +
+    2 * vcov_mat["ever_lapse_binary", "ever_lapse_binary:dr_severityPDR"]
+  )
+}
+
+# Calculate CIs and OR
+manual_effects <- manual_effects |>
+  mutate(
+    CI_Lower = Log_Odds - 1.96 * SE,
+    CI_Upper = Log_Odds + 1.96 * SE,
+    Odds_Ratio = exp(Log_Odds),
+    # Calculate p-values (two-sided test)
+    Z_stat = Log_Odds / SE,
+    P_Value = 2 * pnorm(-abs(Z_stat))
+  ) |>
+  mutate(
+    Log_Odds = round(Log_Odds, 4),
+    SE = round(SE, 4),
+    CI_Lower = round(CI_Lower, 4),
+    CI_Upper = round(CI_Upper, 4),
+    Odds_Ratio = round(Odds_Ratio, 4),
+    P_Value = format.pval(P_Value, digits = 4, eps = 0.0001)
+  ) |>
+  select(-Z_stat)
+
+knitr::kable(manual_effects,
+             caption = "Effect of Lapsing Within Each DR Severity Group (Manual Calculation)",
              row.names = FALSE)
 ```
 
