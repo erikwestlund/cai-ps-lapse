@@ -497,75 +497,97 @@ print(p_magnitude)
 ## Predicted Probabilities and Differences by Lapse Status
 
 ```{r probability_table_emmeans}
-# Use emmeans to get predicted probabilities for each combination
-# WITHOUT nuisance specification for TRUE marginalization
+# Try to compute emmeans on probability scale with error handling
+compute_prob_table <- tryCatch({
+  # Increase reference grid limit to handle all combinations
+  emm_options(rg.limit = 200000)
+  
+  # Get predicted probabilities on the response scale
+  # This will average over all covariate combinations
+  emm_probs <- emmeans(model_dr_interaction, 
+                       ~ ever_lapse_binary | dr_severity,
+                       type = "response")
+  
+  # Convert to data frame for manipulation
+  prob_summary <- as.data.frame(emm_probs)
+  
+  # Check if we have the expected structure
+  if(nrow(prob_summary) == 0) {
+    stop("emmeans returned empty results")
+  }
+  
+  # Calculate differences manually from the emmeans object
+  prob_contrasts <- contrast(emm_probs, method = "revpairwise", by = "dr_severity")
+  prob_diff_emmeans <- as.data.frame(prob_contrasts)
+  
+  # Check structure before creating table
+  n_dr_levels <- length(unique(prob_summary$dr_severity))
+  expected_rows <- n_dr_levels * 2
+  
+  if(nrow(prob_summary) != expected_rows) {
+    warning(paste("Expected", expected_rows, "rows but got", nrow(prob_summary)))
+  }
+  
+  # Create a clean table with probabilities for each group
+  # Reorganize the data more carefully
+  prob_table <- data.frame()
+  for(dr_level in unique(prob_summary$dr_severity)) {
+    dr_data <- prob_summary[prob_summary$dr_severity == dr_level, ]
+    if(nrow(dr_data) == 2) {
+      prob_table <- rbind(prob_table,
+                          data.frame(
+                            DR_Severity = dr_level,
+                            Prob_No_Lapse = dr_data$prob[dr_data$ever_lapse_binary == 0],
+                            Prob_Lapse = dr_data$prob[dr_data$ever_lapse_binary == 1]
+                          ))
+    }
+  }
+  
+  # Add differences if available
+  if(nrow(prob_diff_emmeans) > 0 && nrow(prob_table) > 0) {
+    prob_table$Difference = prob_diff_emmeans$estimate
+    prob_table$CI_Lower = prob_diff_emmeans$asymp.LCL
+    prob_table$CI_Upper = prob_diff_emmeans$asymp.UCL
+    prob_table$P_Value = prob_diff_emmeans$p.value
+  } else {
+    prob_table$Difference = NA
+    prob_table$CI_Lower = NA
+    prob_table$CI_Upper = NA
+    prob_table$P_Value = NA
+  }
+  
+  TRUE  # Success indicator
+}, error = function(e) {
+  cat("Note: Could not compute emmeans probabilities on response scale.\n")
+  cat("Error:", e$message, "\n")
+  cat("This may be due to the large reference grid size.\n")
+  cat("Using manual calculation method instead (see next section).\n\n")
+  FALSE  # Failure indicator
+})
 
-# IMPORTANT: How emmeans works without nuisance specification:
-# - It creates a reference grid with all unique combinations of covariates
-# - Then averages predictions across this grid
-# - This gives us the AVERAGE predicted probability across all covariate patterns
-# - This IS true marginalization over the covariate distribution
-
-# Increase reference grid limit to handle all combinations
-emm_options(rg.limit = 200000)
-
-# Get predicted probabilities on the response scale
-# This will average over all covariate combinations
-emm_probs <- emmeans(model_dr_interaction, 
-                     ~ ever_lapse_binary | dr_severity,
-                     type = "response")
-
-# Show what emmeans is doing
-cat("EMmeans is averaging over all covariate combinations in the reference grid\n")
-cat("Reference grid size information:\n")
-print(str(emm_probs@grid))
-cat("\n")
-
-# Convert to data frame for manipulation
-prob_summary <- as.data.frame(emm_probs)
-
-# Create a clean table with probabilities for each group
-prob_table <- data.frame(
-  DR_Severity = rep(unique(prob_summary$dr_severity), each = 2),
-  Lapse_Status = rep(c("No Lapse", "Lapse"), length(unique(prob_summary$dr_severity))),
-  Probability = prob_summary$prob,
-  SE = prob_summary$SE,
-  Lower_CI = prob_summary$asymp.LCL,
-  Upper_CI = prob_summary$asymp.UCL
-)
-
-# Calculate differences manually from the emmeans object
-prob_contrasts <- contrast(emm_probs, method = "revpairwise", by = "dr_severity")
-prob_diff_emmeans <- as.data.frame(prob_contrasts)
-
-# Create final table combining probabilities and differences
-final_prob_table <- data.frame(
-  DR_Severity = c("No_DR", "NPDR", "PDR"),
-  Prob_No_Lapse = prob_table$Probability[prob_table$Lapse_Status == "No Lapse"],
-  Prob_Lapse = prob_table$Probability[prob_table$Lapse_Status == "Lapse"],
-  Difference = prob_diff_emmeans$estimate,
-  CI_Lower = prob_diff_emmeans$asymp.LCL,
-  CI_Upper = prob_diff_emmeans$asymp.UCL,
-  P_Value = prob_diff_emmeans$p.value
-)
-
-# Format the table for display
-display_table <- final_prob_table |>
-  mutate(
-    Prob_No_Lapse = round(Prob_No_Lapse, 3),
-    Prob_Lapse = round(Prob_Lapse, 3),
-    Difference = round(Difference, 3),
-    CI = paste0("(", round(CI_Lower, 3), ", ", round(CI_Upper, 3), ")"),
-    P_Value = format.pval(P_Value, digits = 3, eps = 0.001)
-  ) |>
-  select(DR_Severity, Prob_No_Lapse, Prob_Lapse, Difference, CI, P_Value)
-
-knitr::kable(display_table,
-             caption = "Predicted Probability of Vision Impairment by DR Severity and Lapse Status (Averaged Over All Covariate Patterns)",
-             col.names = c("DR Severity", "P(VI | No Lapse)", "P(VI | Lapse)", 
-                          "Difference", "95% CI", "P-value"),
-             row.names = FALSE,
-             digits = 3)
+# Only create and display table if computation succeeded
+if(compute_prob_table == TRUE && exists("prob_table") && nrow(prob_table) > 0) {
+  # Format the table for display
+  display_table <- prob_table |>
+    mutate(
+      Prob_No_Lapse = round(Prob_No_Lapse, 3),
+      Prob_Lapse = round(Prob_Lapse, 3),
+      Difference = round(Difference, 3),
+      CI = paste0("(", round(CI_Lower, 3), ", ", round(CI_Upper, 3), ")"),
+      P_Value = format.pval(P_Value, digits = 3, eps = 0.001)
+    ) |>
+    select(DR_Severity, Prob_No_Lapse, Prob_Lapse, Difference, CI, P_Value)
+  
+  knitr::kable(display_table,
+               caption = "Predicted Probability of Vision Impairment by DR Severity and Lapse Status (Averaged Over All Covariate Patterns)",
+               col.names = c("DR Severity", "P(VI | No Lapse)", "P(VI | Lapse)", 
+                            "Difference", "95% CI", "P-value"),
+               row.names = FALSE,
+               digits = 3)
+} else {
+  cat("Skipping emmeans probability table due to computation issues.\n")
+  cat("See manual calculation in the next section for probability differences.\n")
+}
 ```
 
 ## Alternative: Manual Verification of Average Marginal Effects
@@ -638,33 +660,39 @@ cat("\nThe difference represents how these approaches handle heterogeneity in th
 ## Visualization of Probability Differences
 
 ```{r probability_differences_plot, fig.height=5, fig.width=8}
-# Use the emmeans-based differences for plotting
-plot_data_prob <- final_prob_table
-
-# Plot the probability differences
-prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Difference)) +
-  geom_point(size = 5, color = "darkblue") +
-  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
-                width = 0.15, size = 1.2, color = "darkblue") +
-  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
-  labs(title = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
-       subtitle = "Average marginal effect of lapsing on probability scale with 95% CIs",
-       x = "DR Severity",
-       y = "Probability Difference") +
-  theme_minimal() +
-  theme(plot.title = element_text(size = 14, face = "bold"),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 12)) +
-  scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
-  # Add annotations for sample sizes
-  annotate("text", x = 1, y = min(plot_data_prob$CI_Lower) - 0.01, 
-           label = "n=16,130", size = 3.5, color = "gray50") +
-  annotate("text", x = 2, y = min(plot_data_prob$CI_Lower) - 0.01, 
-           label = "n=5,695", size = 3.5, color = "gray50") +
-  annotate("text", x = 3, y = min(plot_data_prob$CI_Lower) - 0.01, 
-           label = "n=3,187", size = 3.5, color = "gray50")
-
-print(prob_diff_plot)
+# Check if we have probability table data
+if(exists("prob_table") && nrow(prob_table) > 0 && !any(is.na(prob_table$Difference))) {
+  # Use the emmeans-based differences for plotting
+  plot_data_prob <- prob_table
+  
+  # Plot the probability differences
+  prob_diff_plot <- ggplot(plot_data_prob, aes(x = DR_Severity, y = Difference)) +
+    geom_point(size = 5, color = "darkblue") +
+    geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                  width = 0.15, size = 1.2, color = "darkblue") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
+    labs(title = "Difference in Probability of Vision Impairment: Lapsers vs Non-Lapsers",
+         subtitle = "Average marginal effect of lapsing on probability scale with 95% CIs",
+         x = "DR Severity",
+         y = "Probability Difference") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12)) +
+    scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
+    # Add annotations for sample sizes
+    annotate("text", x = 1, y = min(plot_data_prob$CI_Lower) - 0.01, 
+             label = "n=16,130", size = 3.5, color = "gray50") +
+    annotate("text", x = 2, y = min(plot_data_prob$CI_Lower) - 0.01, 
+             label = "n=5,695", size = 3.5, color = "gray50") +
+    annotate("text", x = 3, y = min(plot_data_prob$CI_Lower) - 0.01, 
+             label = "n=3,187", size = 3.5, color = "gray50")
+  
+  print(prob_diff_plot)
+} else {
+  cat("Skipping probability differences plot - data not available from emmeans calculation.\n")
+  cat("See manual calculation results for probability differences.\n")
+}
 ```
 
 ## Complete Coefficient Interpretation
