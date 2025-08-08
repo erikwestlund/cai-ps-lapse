@@ -760,29 +760,7 @@ if(exists("ame_results") && nrow(ame_results) > 0) {
   # Exclude overall from plot, focus on DR severity groups
   plot_data_ame <- ame_results[ame_results$DR_Severity != "Overall", ]
   
-  # Create forest plot of AMEs
-  ame_plot <- ggplot(plot_data_ame, aes(x = DR_Severity, y = AME)) +
-    geom_point(size = 4, color = "darkblue") +
-    geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
-                  width = 0.15, size = 1, color = "darkblue") +
-    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5, color = "gray50") +
-    labs(title = "Average Marginal Effect of Lapsing on Vision Impairment by DR Severity",
-         subtitle = "Change in probability of vision impairment (IPTW-weighted, with 95% CIs)",
-         x = "DR Severity",
-         y = "Average Marginal Effect (Probability Scale)") +
-    theme_minimal() +
-    theme(plot.title = element_text(size = 14, face = "bold"),
-          plot.subtitle = element_text(size = 11, color = "gray30"),
-          axis.text = element_text(size = 11),
-          axis.title = element_text(size = 12)) +
-    scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
-    # Add sample size annotations
-    geom_text(aes(label = paste0("n=", format(N, big.mark=","))),
-              vjust = -2.5, size = 3.5, color = "gray50")
-  
-  print(ame_plot)
-  
-  # Create a second plot comparing AME magnitudes
+  # Create bar plot comparing AME magnitudes
   ame_bar_plot <- ggplot(plot_data_ame, aes(x = reorder(DR_Severity, AME), y = AME, fill = DR_Severity)) +
     geom_col(alpha = 0.7) +
     geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
@@ -801,7 +779,8 @@ if(exists("ame_results") && nrow(ame_results) > 0) {
     scale_fill_manual(values = c("No_DR" = "#1f77b4", 
                                  "NPDR" = "#ff7f0e", 
                                  "PDR" = "#d62728")) +
-    scale_y_continuous(labels = scales::number_format(accuracy = 0.001)) +
+    scale_y_continuous(labels = scales::number_format(accuracy = 0.001),
+                       limits = c(NA, 0.5)) +
     geom_text(aes(label = sprintf("%.3f", AME)),
               hjust = ifelse(plot_data_ame$AME > 0, -0.2, 1.2),
               size = 3.5)
@@ -872,11 +851,295 @@ knitr::kable(interp_data,
              row.names = FALSE)
 ```
 
+# Treatment Type Interaction Analysis
+
+## Treatment Type Interaction Model
+
+```{r treatment_interaction_model}
+# Fit the treatment type interaction model
+model_treatment_interaction <- svyglm(
+  formula = interaction_treatment_formula,
+  design = survey_design_weighted,
+  family = quasibinomial()
+)
+
+# Summary of treatment interaction model
+summary_treatment <- summary(model_treatment_interaction)
+
+# Extract interaction p-values for treatment model
+treatment_interaction_terms <- grep("ever_lapse_binary:treatment_type", 
+                                   names(coef(model_treatment_interaction)), value = TRUE)
+treatment_interaction_pvals <- if(length(treatment_interaction_terms) > 0) {
+  summary_treatment$coefficients[treatment_interaction_terms, "Pr(>|t|)"]
+} else {
+  numeric(0)
+}
+
+# Display results
+tx_results <- data.frame(
+  Term = treatment_interaction_terms,
+  Coefficient = summary_treatment$coefficients[treatment_interaction_terms, "Estimate"],
+  SE = summary_treatment$coefficients[treatment_interaction_terms, "Std. Error"],
+  P_Value = round(treatment_interaction_pvals, 4),
+  Significant = ifelse(treatment_interaction_pvals < 0.05, "Yes", "No")
+)
+
+knitr::kable(tx_results, caption = "Treatment Type Interaction Terms (Individual Coefficients)")
+```
+
+## Joint Test of Treatment Interaction Terms
+
+```{r joint_treatment_test}
+# Joint Wald test for treatment interactions
+# H0: All interaction terms equal zero
+# This tests whether the effect of lapsing is the same across all treatment types
+
+if(length(treatment_interaction_terms) > 0) {
+  # Create hypothesis strings for all interaction terms
+  hypothesis_strings <- paste0(treatment_interaction_terms, " = 0")
+  
+  joint_test_treatment <- linearHypothesis(
+    model_treatment_interaction,
+    hypothesis_strings,
+    vcov = vcov(model_treatment_interaction)
+  )
+  
+  # Display joint test results
+  joint_results_treatment <- data.frame(
+    Test = "Joint interaction test",
+    Chisq = round(joint_test_treatment$Chisq[2], 3),
+    Df = joint_test_treatment$Df[2],
+    P_Value = format.pval(joint_test_treatment$`Pr(>Chisq)`[2], digits = 4, eps = 0.0001)
+  )
+  
+  knitr::kable(joint_results_treatment, 
+               caption = "Joint Wald Test for Treatment Type Interactions",
+               row.names = FALSE)
+  
+  # Interpret the joint test
+  if(joint_test_treatment$`Pr(>Chisq)`[2] < 0.05) {
+    cat("Joint test is significant: The effect of lapsing varies by treatment type\n")
+  } else {
+    cat("Joint test is not significant: The effect of lapsing is similar across treatment types\n")
+  }
+} else {
+  cat("No interaction terms found for joint testing\n")
+}
+```
+
+## Effect of Lapsing Within Each Treatment Type
+
+```{r lapse_effects_by_treatment}
+# Calculate the effect of lapsing within each treatment group
+# Extract coefficients and variance-covariance matrix
+coef_vals_tx <- coef(model_treatment_interaction)
+vcov_mat_tx <- vcov(model_treatment_interaction)
+
+# Initialize results
+treatment_effects <- data.frame(
+  Treatment_Type = c("no_treatment", "anti_VEGF", "PRP", "other_treatment"),
+  Log_Odds = numeric(4),
+  SE = numeric(4),
+  stringsAsFactors = FALSE
+)
+
+# Effect for no_treatment (reference - just main effect)
+treatment_effects$Log_Odds[1] <- coef_vals_tx["ever_lapse_binary"]
+treatment_effects$SE[1] <- sqrt(vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary"])
+
+# Effect for anti_VEGF (main + interaction)
+if("ever_lapse_binary:treatment_typeanti_VEGF" %in% names(coef_vals_tx)) {
+  treatment_effects$Log_Odds[2] <- coef_vals_tx["ever_lapse_binary"] + 
+                                    coef_vals_tx["ever_lapse_binary:treatment_typeanti_VEGF"]
+  treatment_effects$SE[2] <- sqrt(
+    vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary"] +
+    vcov_mat_tx["ever_lapse_binary:treatment_typeanti_VEGF", "ever_lapse_binary:treatment_typeanti_VEGF"] +
+    2 * vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary:treatment_typeanti_VEGF"]
+  )
+}
+
+# Effect for PRP (main + interaction)
+if("ever_lapse_binary:treatment_typePRP" %in% names(coef_vals_tx)) {
+  treatment_effects$Log_Odds[3] <- coef_vals_tx["ever_lapse_binary"] + 
+                                    coef_vals_tx["ever_lapse_binary:treatment_typePRP"]
+  treatment_effects$SE[3] <- sqrt(
+    vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary"] +
+    vcov_mat_tx["ever_lapse_binary:treatment_typePRP", "ever_lapse_binary:treatment_typePRP"] +
+    2 * vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary:treatment_typePRP"]
+  )
+}
+
+# Effect for other_treatment (main + interaction)
+if("ever_lapse_binary:treatment_typeother_treatment" %in% names(coef_vals_tx)) {
+  treatment_effects$Log_Odds[4] <- coef_vals_tx["ever_lapse_binary"] + 
+                                    coef_vals_tx["ever_lapse_binary:treatment_typeother_treatment"]
+  treatment_effects$SE[4] <- sqrt(
+    vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary"] +
+    vcov_mat_tx["ever_lapse_binary:treatment_typeother_treatment", "ever_lapse_binary:treatment_typeother_treatment"] +
+    2 * vcov_mat_tx["ever_lapse_binary", "ever_lapse_binary:treatment_typeother_treatment"]
+  )
+}
+
+# Calculate CIs, ORs, and p-values
+treatment_effects <- treatment_effects |>
+  mutate(
+    CI_Lower = Log_Odds - 1.96 * SE,
+    CI_Upper = Log_Odds + 1.96 * SE,
+    Odds_Ratio = exp(Log_Odds),
+    Z_stat = Log_Odds / SE,
+    P_Value = 2 * pnorm(-abs(Z_stat))
+  ) |>
+  mutate(
+    Log_Odds = round(Log_Odds, 4),
+    SE = round(SE, 4),
+    CI_Lower = round(CI_Lower, 4),
+    CI_Upper = round(CI_Upper, 4),
+    Odds_Ratio = round(Odds_Ratio, 4),
+    P_Value = format.pval(P_Value, digits = 4, eps = 0.0001)
+  ) |>
+  select(-Z_stat)
+
+knitr::kable(treatment_effects,
+             caption = "Effect of Lapsing Within Each Treatment Type",
+             row.names = FALSE)
+```
+
+## Average Marginal Effects by Treatment Type
+
+```{r margins_treatment}
+# Calculate AMEs for each treatment type group
+cat("Calculating Average Marginal Effects by treatment type...\n\n")
+
+# Initialize results storage
+ame_results_tx <- data.frame()
+
+# For each treatment type
+for(tx_type in c("no_treatment", "anti_VEGF", "PRP", "other_treatment")) {
+  
+  # Get subset of data for this treatment type
+  subset_data_tx <- m_data[m_data$treatment_type == tx_type, ]
+  n_subset_tx <- nrow(subset_data_tx)
+  
+  if(n_subset_tx > 0) {
+    # Create predictions with lapse = 0 and lapse = 1
+    subset_data_tx_0 <- subset_data_tx
+    subset_data_tx_0$ever_lapse_binary <- 0
+    
+    subset_data_tx_1 <- subset_data_tx
+    subset_data_tx_1$ever_lapse_binary <- 1
+    
+    # Get predictions (probabilities)
+    pred_0_tx <- predict(model_treatment_interaction, newdata = subset_data_tx_0, type = "response")
+    pred_1_tx <- predict(model_treatment_interaction, newdata = subset_data_tx_1, type = "response")
+    
+    # Calculate individual-level effects
+    individual_effects_tx <- as.numeric(pred_1_tx) - as.numeric(pred_0_tx)
+    
+    # Calculate AME with weights if available
+    if("twang_att_w" %in% names(subset_data_tx)) {
+      subset_weights_tx <- subset_data_tx$twang_att_w
+      
+      # Ensure equal lengths and remove NAs
+      valid_idx_tx <- !is.na(individual_effects_tx) & !is.na(subset_weights_tx)
+      if(sum(valid_idx_tx) > 0) {
+        ame_value_tx <- weighted.mean(individual_effects_tx[valid_idx_tx], 
+                                      w = subset_weights_tx[valid_idx_tx])
+        weighted_var_tx <- sum(subset_weights_tx[valid_idx_tx] * 
+                              (individual_effects_tx[valid_idx_tx] - ame_value_tx)^2) / 
+                          sum(subset_weights_tx[valid_idx_tx])
+        se_value_tx <- sqrt(weighted_var_tx / sum(valid_idx_tx))
+      } else {
+        ame_value_tx <- mean(individual_effects_tx, na.rm = TRUE)
+        se_value_tx <- sd(individual_effects_tx, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects_tx)))
+      }
+    } else {
+      ame_value_tx <- mean(individual_effects_tx, na.rm = TRUE)
+      se_value_tx <- sd(individual_effects_tx, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects_tx)))
+    }
+    
+    # Calculate confidence intervals and p-value
+    ci_lower_tx <- ame_value_tx - 1.96 * se_value_tx
+    ci_upper_tx <- ame_value_tx + 1.96 * se_value_tx
+    z_stat_tx <- ame_value_tx / se_value_tx
+    p_value_tx <- 2 * pnorm(-abs(z_stat_tx))
+    
+    # Add to results
+    ame_results_tx <- rbind(ame_results_tx, data.frame(
+      Treatment_Type = tx_type,
+      N = n_subset_tx,
+      AME = ame_value_tx,
+      SE = se_value_tx,
+      CI_Lower = ci_lower_tx,
+      CI_Upper = ci_upper_tx,
+      P_Value = p_value_tx
+    ))
+  }
+}
+
+# Format for display
+if(nrow(ame_results_tx) > 0) {
+  ame_display_tx <- ame_results_tx |>
+    mutate(
+      AME = round(AME, 4),
+      SE = round(SE, 4),
+      CI = paste0("(", round(CI_Lower, 4), ", ", round(CI_Upper, 4), ")"),
+      P_Value = format.pval(P_Value, digits = 4, eps = 0.0001)
+    ) |>
+    select(Treatment_Type, N, AME, SE, CI, P_Value)
+  
+  knitr::kable(ame_display_tx,
+               caption = "Average Marginal Effects of Lapsing by Treatment Type",
+               col.names = c("Treatment Type", "N", "AME", "SE", "95% CI", "P-value"),
+               row.names = FALSE,
+               digits = 4)
+}
+```
+
+## Visualization of Treatment Type Effects
+
+```{r treatment_visualization, fig.height=6, fig.width=10}
+# Plot the AMEs by treatment type
+if(exists("ame_results_tx") && nrow(ame_results_tx) > 0) {
+  
+  # Create bar plot comparing AME magnitudes
+  ame_bar_plot_tx <- ggplot(ame_results_tx, 
+                            aes(x = reorder(Treatment_Type, AME), y = AME, fill = Treatment_Type)) +
+    geom_col(alpha = 0.7) +
+    geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                  width = 0.2, size = 1) +
+    geom_hline(yintercept = 0, linetype = "solid", alpha = 0.5) +
+    coord_flip() +
+    labs(title = "Magnitude of Lapse Effect Across Treatment Types",
+         subtitle = "Average marginal effects with 95% confidence intervals",
+         x = "",
+         y = "Average Marginal Effect") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          axis.text = element_text(size = 11),
+          axis.title = element_text(size = 12),
+          legend.position = "none") +
+    scale_fill_manual(values = c("no_treatment" = "#2ca02c",
+                                 "anti_VEGF" = "#d62728", 
+                                 "PRP" = "#ff7f0e", 
+                                 "other_treatment" = "#9467bd")) +
+    scale_y_continuous(labels = scales::number_format(accuracy = 0.001),
+                       limits = c(NA, 0.5)) +
+    geom_text(aes(label = sprintf("%.3f", AME)),
+              hjust = ifelse(ame_results_tx$AME > 0, -0.2, 1.2),
+              size = 3.5)
+  
+  print(ame_bar_plot_tx)
+} else {
+  cat("AME results by treatment type not available for visualization.\n")
+}
+```
+
 # Summary
 
 ## Key Findings
 
-A formal interaction analysis provides evidence that **==he effect of lapsing from care on vision impairment depends significantly on patients' baseline DR severity (joint interaction test p < 0.05).
+### DR Severity Interaction
+A formal interaction analysis provides evidence that **the effect of lapsing from care on vision impairment depends significantly on patients' baseline DR severity (joint interaction test p < 0.05).
 
 ### Substantive Results:
 
