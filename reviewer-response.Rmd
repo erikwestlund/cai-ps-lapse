@@ -651,7 +651,6 @@ overall_success <- tryCatch({
 # For each DR severity group - use a different approach
 # Calculate AMEs by predicting with and without lapse for each group
 for(dr_level in c("No_DR", "NPDR", "PDR")) {
-  cat(paste("Calculating AME for", dr_level, "...\n"))
   
   # Get subset of data for this DR severity
   subset_data <- m_data[m_data$dr_severity == dr_level, ]
@@ -675,14 +674,37 @@ for(dr_level in c("No_DR", "NPDR", "PDR")) {
   if("twang_att_w" %in% names(subset_data)) {
     # Use the weights for this subset
     subset_weights <- subset_data$twang_att_w
-    ame_value <- weighted.mean(individual_effects, w = subset_weights, na.rm = TRUE)
-    # Weighted standard error
-    weighted_var <- sum(subset_weights * (individual_effects - ame_value)^2) / sum(subset_weights)
-    se_value <- sqrt(weighted_var / n_subset)
+    
+    # Check and ensure equal lengths
+    if(length(individual_effects) != length(subset_weights)) {
+      cat(paste("  Note: Adjusting for length mismatch in", dr_level, 
+                "- effects:", length(individual_effects), 
+                "weights:", length(subset_weights), "\n"))
+      # Try to match lengths
+      min_length <- min(length(individual_effects), length(subset_weights))
+      individual_effects <- individual_effects[1:min_length]
+      subset_weights <- subset_weights[1:min_length]
+    }
+    
+    # Remove any NAs
+    valid_idx <- !is.na(individual_effects) & !is.na(subset_weights)
+    individual_effects_clean <- individual_effects[valid_idx]
+    subset_weights_clean <- subset_weights[valid_idx]
+    
+    if(length(individual_effects_clean) > 0 && length(subset_weights_clean) > 0) {
+      ame_value <- weighted.mean(individual_effects_clean, w = subset_weights_clean)
+      # Weighted standard error
+      weighted_var <- sum(subset_weights_clean * (individual_effects_clean - ame_value)^2) / sum(subset_weights_clean)
+      se_value <- sqrt(weighted_var / length(individual_effects_clean))
+    } else {
+      cat("  Warning: No valid data after removing NAs, using unweighted mean\n")
+      ame_value <- mean(individual_effects, na.rm = TRUE)
+      se_value <- sd(individual_effects, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects)))
+    }
   } else {
     # Simple mean if no weights
     ame_value <- mean(individual_effects, na.rm = TRUE)
-    se_value <- sd(individual_effects, na.rm = TRUE) / sqrt(n_subset)
+    se_value <- sd(individual_effects, na.rm = TRUE) / sqrt(sum(!is.na(individual_effects)))
   }
   
   # Calculate confidence intervals
