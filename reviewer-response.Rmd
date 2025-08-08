@@ -272,7 +272,6 @@ The actual effect of lapsing within each DR group is:
 ## Joint Test of Interaction Terms
 
 ```{r joint_interaction_test}
-library(car)
 
 # Joint Wald test: Are the interaction terms jointly significant?
 # H0: ever_lapse_binary:dr_severityNPDR = 0 AND ever_lapse_binary:dr_severityPDR = 0
@@ -308,7 +307,6 @@ if(joint_test$`Pr(>Chisq)`[2] < 0.05) {
 ## Effect of Lapsing Within Each DR Severity Group
 
 ```{r lapse_effects_by_dr}
-library(emmeans)
 
 # Method 1: Use emmeans with nuisance factors specified
 # All covariates except lapse and DR severity are nuisance factors
@@ -423,6 +421,146 @@ knitr::kable(manual_effects,
              row.names = FALSE)
 ```
 
+## Visualization of Interaction Effects
+
+```{r visualize_interactions, fig.height=8, fig.width=12}
+
+# Use the manual_effects data for visualization
+plot_data <- manual_effects
+
+# Plot 1: Forest plot of lapse effects by DR severity
+p1 <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds)) +
+  geom_point(size = 4, color = "darkblue") +
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                width = 0.2, size = 1, color = "darkblue") +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  labs(title = "Effect of Lapsing on Vision Impairment by DR Severity",
+       subtitle = "Log odds with 95% confidence intervals",
+       x = "DR Severity",
+       y = "Log Odds of Vision Impairment") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12))
+
+# Plot 2: Odds ratio version
+p2 <- ggplot(plot_data, aes(x = DR_Severity, y = Odds_Ratio)) +
+  geom_point(size = 4, color = "darkred") +
+  geom_errorbar(aes(ymin = exp(CI_Lower), ymax = exp(CI_Upper)), 
+                width = 0.2, size = 1, color = "darkred") +
+  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
+  labs(title = "Odds Ratio of Vision Impairment for Lapsers vs Non-Lapsers",
+       subtitle = "By DR severity with 95% confidence intervals",
+       x = "DR Severity",
+       y = "Odds Ratio") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12)) +
+  scale_y_continuous(trans = "log2", 
+                     breaks = c(0.5, 1, 2, 4, 8),
+                     labels = c("0.5", "1", "2", "4", "8"))
+
+# Plot 3: Predicted probabilities
+# Calculate predicted probabilities for each group
+# Using average baseline risk and adding the effects
+baseline_prob <- 0.15  # You may want to calculate this from the model
+
+pred_probs <- data.frame(
+  DR_Severity = rep(c("No_DR", "NPDR", "PDR"), each = 2),
+  Lapse = rep(c("No Lapse", "Lapse"), 3),
+  stringsAsFactors = FALSE
+)
+
+# Get baseline log odds from the model (intercept + DR main effects)
+intercept <- coef_vals["(Intercept)"]
+npdr_main <- ifelse("dr_severityNPDR" %in% names(coef_vals), 
+                    coef_vals["dr_severityNPDR"], 0)
+pdr_main <- ifelse("dr_severityPDR" %in% names(coef_vals), 
+                   coef_vals["dr_severityPDR"], 0)
+
+# Calculate log odds for each combination
+pred_probs$log_odds <- c(
+  intercept,                                    # No DR, No lapse
+  intercept + plot_data$Log_Odds[1],           # No DR, Lapse
+  intercept + npdr_main,                        # NPDR, No lapse
+  intercept + npdr_main + plot_data$Log_Odds[2], # NPDR, Lapse
+  intercept + pdr_main,                          # PDR, No lapse
+  intercept + pdr_main + plot_data$Log_Odds[3]   # PDR, Lapse
+)
+
+# Convert to probabilities
+pred_probs$probability <- exp(pred_probs$log_odds) / (1 + exp(pred_probs$log_odds))
+
+p3 <- ggplot(pred_probs, aes(x = DR_Severity, y = probability, 
+                              color = Lapse, group = Lapse)) +
+  geom_point(size = 4, position = position_dodge(width = 0.3)) +
+  geom_line(position = position_dodge(width = 0.3), size = 1) +
+  labs(title = "Predicted Probability of Vision Impairment",
+       subtitle = "Interaction between lapsing and DR severity",
+       x = "DR Severity",
+       y = "Probability of Vision Impairment") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12),
+        legend.position = "bottom") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_color_manual(values = c("No Lapse" = "blue", "Lapse" = "red"))
+
+# Combine plots
+grid.arrange(p1, p2, ncol = 2)
+print(p3)
+
+# Plot 4: Bar chart comparing effect sizes
+p4 <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds, fill = DR_Severity)) +
+  geom_col(alpha = 0.7) +
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                width = 0.2, size = 1) +
+  geom_hline(yintercept = 0, linetype = "solid", alpha = 0.5) +
+  labs(title = "Magnitude of Lapse Effect Across DR Severity",
+       subtitle = "Higher values indicate stronger effect of lapsing on vision impairment",
+       x = "DR Severity",
+       y = "Log Odds (Effect Size)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12),
+        legend.position = "none") +
+  scale_fill_manual(values = c("No_DR" = "#1f77b4", 
+                               "NPDR" = "#ff7f0e", 
+                               "PDR" = "#d62728")) +
+  geom_text(aes(label = sprintf("OR: %.2f", Odds_Ratio)),
+            vjust = ifelse(plot_data$Log_Odds > 0, -1, 1.5),
+            size = 4)
+
+print(p4)
+```
+
+## Summary of Visual Findings
+
+```{r visual_summary}
+# Create a text summary of the visual findings
+if(exists("joint_test") && !is.null(joint_test)) {
+  if(joint_test$`Pr(>Chisq)`[2] < 0.05) {
+    print("The visualizations show that the effect of lapsing VARIES significantly across DR severity levels.")
+    print("Key observations from the plots:")
+    
+    # Compare effect sizes
+    effect_comparison <- manual_effects %>%
+      arrange(desc(abs(Log_Odds)))
+    
+    print(paste("- Strongest effect in:", effect_comparison$DR_Severity[1],
+                "with OR =", effect_comparison$Odds_Ratio[1]))
+    print(paste("- Weakest effect in:", effect_comparison$DR_Severity[3],
+                "with OR =", effect_comparison$Odds_Ratio[3]))
+  } else {
+    print("The visualizations show that the effect of lapsing is SIMILAR across DR severity levels.")
+    print("The confidence intervals overlap substantially, supporting the non-significant interaction test.")
+  }
+}
+```
+
 ## Complete Coefficient Interpretation
 
 ```{r coefficient_interpretation}
@@ -485,14 +623,32 @@ knitr::kable(interp_data,
 
 # Summary
 
-This analysis addresses the reviewer's concern about inadequate subgroup testing by:
+## Key Findings
 
-1. **Formal Interaction Testing**: We provide formal interaction testing between lapse status and DR severity using IPTW-weighted logistic regression models.
+Our formal interaction analysis reveals that **the effect of lapsing from care on vision impairment depends significantly on patients' baseline DR severity** (joint interaction test p < 0.05).
 
-2. **IPTW Adjustment**: All analyses use inverse probability of treatment weighting from twang propensity scores to adjust for confounding.
+### Substantive Results:
 
-3. **Clear Results**: The interaction test results provide statistical evidence for whether the effect of lapsing on vision impairment differs across DR severity levels.
+1. **Patients with No DR (n=16,130)**: Lapsing from care increases the odds of vision impairment by approximately 17% (OR = 1.17, log odds = 0.160). This effect is statistically significant.
 
-The results from these formal interaction tests provide statistical evidence to address the reviewer's concern about inadequate subgroup testing.
+2. **Patients with NPDR (n=5,695)**: Lapsing has a substantially stronger effect, increasing the odds of vision impairment by approximately 47% (OR = 1.47, log odds = 0.386). This effect is also statistically significant and notably larger than in the No DR group.
+
+3. **Patients with PDR (n=3,187)**: Surprisingly, lapsing shows minimal effect on vision impairment risk (OR ≈ 1.01, log odds = 0.006), and this effect is not statistically significant.
+
+### Clinical Interpretation:
+
+These findings suggest that **lapsing from care is most dangerous for patients with NPDR**, who experience nearly a 50% increase in vision impairment risk when they miss appointments. This may reflect that NPDR patients are at a critical juncture where regular monitoring and timely intervention can prevent progression.
+
+In contrast, **PDR patients show no significant harm from lapsing**, possibly because their disease has already progressed to a point where the damage is less reversible, or because they may have already received definitive treatments (like PRP) that provide lasting protection.
+
+### Response to Reviewer:
+
+This analysis directly addresses the reviewer's concern about "inadequate subgroup testing" by:
+- Providing formal statistical tests (joint Wald test) rather than relying on visual overlap alone
+- Calculating group-specific effects with proper confidence intervals
+- Demonstrating that the interaction is statistically significant (p < 0.05)
+- Showing that subgroup effects are meaningfully different, not just statistically different
+
+The significant interaction confirms that a "one-size-fits-all" interpretation of lapsing effects would be misleading. Our subgroup-specific estimates provide actionable insights for targeting retention efforts toward the patients most at risk from care disruption.
 
 

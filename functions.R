@@ -124,6 +124,9 @@ load_required_libraries <- function() {
   library(survey)
   library(twang)
   library(WeightIt)
+  library(car)        # For linearHypothesis (joint tests)
+  library(emmeans)    # For marginal means and contrasts
+  library(gridExtra)  # For arranging multiple plots
 }
 
 # Create survey design for clustered data
