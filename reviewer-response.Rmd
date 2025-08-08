@@ -85,27 +85,16 @@ m_data$twang_att_w <- get.weights(twang_model, stop.method = "es.mean")
 summary(m_data$twang_att_w)
 ```
 
-## Twang Model Diagnostics
+## Twang Model Summary
 
-```{r twang_diagnostics}
-# Display twang model summary
+```{r twang_summary}
+# Display twang model summary for verification
 print(twang_model)
 
-# Get balance statistics
-bal_stats <- bal.table(twang_model, digits = 3)
-print(bal_stats)
-
-# Plot diagnostics
-plot(twang_model, plots = 1) # GBM iteration plot
-plot(twang_model, plots = 2) # Propensity score boxplot
-plot(twang_model, plots = 3) # Standardized bias plot
-plot(twang_model, plots = 4) # T and KS statistics plot
-
-# Get detailed balance table for the optimal iteration
-optimal_bal <- bal.table(twang_model, digits = 3, es.cutoff = 0.1)
-knitr::kable(optimal_bal$es.mean.ATT, 
-             caption = "Balance Table at Optimal Iteration (ES Mean)",
-             digits = 3)
+# Show the number of iterations and balance achieved
+cat("\nOptimal iteration (es.mean):", twang_model$desc$es.mean.ATT$n.trees, "\n")
+cat("Maximum effect size at optimal iteration:", 
+    round(max(abs(twang_model$desc$es.mean.ATT$results$std.eff.sz)), 4), "\n")
 ```
 
 # Reviewer Question 1: Subgroup Testing with Formal Interaction Terms
