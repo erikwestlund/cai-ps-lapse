@@ -1,0 +1,246 @@
+---
+title: "Reanalysis Step 1: Data Preparation"
+subtitle: "Loading and preparing the combined dataset for multiple imputation analysis"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+# Setup analysis environment
+source("dependencies.R")
+setup_analysis()
+```
+
+## Data Loading
+
+Loading the new combined dataset for reanalysis with multiple imputation support.
+
+```{r load-data}
+# Load the combined dataset
+cat("Loading combined dataset from:", reanalysis_data_file_path, "\n")
+df_combined <- readr::read_csv(reanalysis_data_file_path)
+
+# Display basic information about the dataset
+cat("Dataset dimensions:", nrow(df_combined), "rows x", ncol(df_combined), "columns\n")
+glimpse(df_combined)
+```
+
+## Data Structure Exploration
+
+```{r data-structure}
+# Summary of the dataset
+cat("=== DATASET SUMMARY ===\n")
+summary(df_combined)
+
+# Check for key variables that we expect
+expected_vars <- c(
+  "e_mrn_deidentified",
+  "person_ever_lapse", 
+  "outcome_VA_logMAR",
+  "age", "gender", "race_ethnicity_gp", "insurance_gp",
+  "CCI", "DCSI",
+  "No_DR", "NPDR", "PDR",
+  "anti_VEGF", "PRP_flag", "other_inject", "focal_laser_flag"
+)
+
+cat("\n=== KEY VARIABLE CHECK ===\n")
+for(var in expected_vars) {
+  if(var %in% names(df_combined)) {
+    cat("✓", var, "- present\n")
+  } else {
+    cat("✗", var, "- MISSING\n")
+  }
+}
+
+# Display first few rows
+cat("\n=== FIRST 10 ROWS ===\n")
+head(df_combined, 10)
+```
+
+## Missing Data Assessment
+
+```{r missing-data}
+# Overall missing data pattern
+cat("=== MISSING DATA SUMMARY ===\n")
+missing_summary <- df_combined |>
+  summarise(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count") |>
+  mutate(
+    missing_percent = round(missing_count / nrow(df_combined) * 100, 2)
+  ) |>
+  arrange(desc(missing_count))
+
+print(missing_summary, n = 20)
+
+# Visualize missing data pattern using VIM package
+if(require(VIM, quietly = TRUE)) {
+  cat("\n=== MISSING DATA PATTERN VISUALIZATION ===\n")
+  aggr(df_combined, col = c('navyblue','red'), 
+       numbers = TRUE, sortVars = TRUE, labels = names(df_combined), 
+       cex.axis = 0.7, gap = 3, 
+       ylab = c("Histogram of missing data","Pattern"))
+} else {
+  cat("VIM package not available for missing data visualization\n")
+}
+```
+
+## Variable Creation
+
+```{r variable-creation}
+# Apply the existing data preparation functions
+cat("=== APPLYING DATA TRANSFORMATIONS ===\n")
+
+# Check if we can use the existing load_and_prepare_data function
+# or if we need to adapt it for the new dataset
+tryCatch({
+  # Test if the existing function works with the new data structure
+  # We'll create a temporary file path for testing
+  temp_path <- tempfile(fileext = ".csv")
+  write_csv(df_combined, temp_path)
+  
+  # Try using existing function
+  df_prepared <- load_and_prepare_data(temp_path)
+  
+  cat("✓ Successfully applied existing data preparation functions\n")
+  cat("Prepared dataset dimensions:", nrow(df_prepared), "rows x", ncol(df_prepared), "columns\n")
+  
+  # Clean up temp file
+  unlink(temp_path)
+  
+}, error = function(e) {
+  cat("✗ Error applying existing functions:", e$message, "\n")
+  cat("Will need to adapt functions for new dataset structure\n")
+  
+  # For now, create a basic preparation
+  df_prepared <- df_combined |>
+    mutate(
+      # Create basic outcome variables
+      outcome_va_vi = if("outcome_VA_logMAR" %in% names(df_combined)) {
+        outcome_VA_logMAR >= 0.3
+      } else {
+        NA
+      },
+      outcome_va_vi_binary = if("outcome_VA_logMAR" %in% names(df_combined)) {
+        as.numeric(outcome_VA_logMAR >= 0.3)
+      } else {
+        NA
+      },
+      
+      # Create lapse variable
+      ever_lapse_binary = if("person_ever_lapse" %in% names(df_combined)) {
+        as.numeric(person_ever_lapse == TRUE)
+      } else {
+        NA
+      }
+    )
+  
+  cat("Applied basic variable creation as fallback\n")
+})
+
+# Display the prepared dataset structure
+cat("\n=== PREPARED DATASET STRUCTURE ===\n")
+glimpse(df_prepared)
+```
+
+## Data Quality Checks
+
+```{r data-quality}
+# Check key variables for analysis
+cat("=== DATA QUALITY ASSESSMENT ===\n")
+
+# Check outcome variable distribution
+if("outcome_va_vi_binary" %in% names(df_prepared)) {
+  cat("Outcome variable (vision impairment) distribution:\n")
+  table(df_prepared$outcome_va_vi_binary, useNA = "ifany")
+  cat("\n")
+}
+
+# Check exposure variable distribution  
+if("ever_lapse_binary" %in% names(df_prepared)) {
+  cat("Exposure variable (ever lapse) distribution:\n")
+  table(df_prepared$ever_lapse_binary, useNA = "ifany")
+  cat("\n")
+}
+
+# Check for potential exclusions
+cat("=== POTENTIAL EXCLUSIONS ===\n")
+
+exclusion_checks <- list(
+  "Missing outcome" = sum(is.na(df_prepared$outcome_va_vi_binary)),
+  "Missing exposure" = sum(is.na(df_prepared$ever_lapse_binary)),
+  "Missing CCI" = if("CCI" %in% names(df_prepared)) sum(is.na(df_prepared$CCI)) else "Variable not found",
+  "Missing DCSI" = if("DCSI" %in% names(df_prepared)) sum(is.na(df_prepared$DCSI)) else "Variable not found"
+)
+
+for(check_name in names(exclusion_checks)) {
+  cat(check_name, ":", exclusion_checks[[check_name]], "\n")
+}
+```
+
+## Comparison with Original Dataset
+
+```{r compare-original}
+# Load original dataset for comparison if available
+if(file.exists(original_analysis_file_path)) {
+  cat("=== COMPARISON WITH ORIGINAL DATASET ===\n")
+  
+  df_original <- readr::read_csv(original_analysis_file_path)
+  
+  cat("Original dataset dimensions:", nrow(df_original), "rows x", ncol(df_original), "columns\n")
+  cat("Combined dataset dimensions:", nrow(df_combined), "rows x", ncol(df_combined), "columns\n")
+  
+  # Compare key variables
+  common_vars <- intersect(names(df_original), names(df_combined))
+  cat("Common variables:", length(common_vars), "\n")
+  cat("Variables only in original:", length(setdiff(names(df_original), names(df_combined))), "\n")
+  cat("Variables only in combined:", length(setdiff(names(df_combined), names(df_original))), "\n")
+  
+  # Show some of the different variables
+  cat("\nVariables only in original (first 10):\n")
+  cat(paste(head(setdiff(names(df_original), names(df_combined)), 10), collapse = ", "), "\n")
+  
+  cat("\nVariables only in combined (first 10):\n") 
+  cat(paste(head(setdiff(names(df_combined), names(df_original)), 10), collapse = ", "), "\n")
+  
+} else {
+  cat("Original analysis file not found at:", original_analysis_file_path, "\n")
+  cat("Cannot perform comparison\n")
+}
+```
+
+## Summary and Next Steps
+
+```{r summary}
+cat("=== DATA PREPARATION SUMMARY ===\n")
+cat("✓ Successfully loaded combined dataset\n")
+cat("✓ Assessed missing data patterns\n")
+cat("✓ Applied data transformations\n")
+cat("✓ Performed quality checks\n")
+
+if(exists("df_prepared")) {
+  cat("✓ Final prepared dataset ready with", nrow(df_prepared), "observations\n")
+  
+  # Save prepared dataset for next steps
+  prepared_data_path <- "prepared_data.rds"
+  saveRDS(df_prepared, prepared_data_path)
+  cat("✓ Saved prepared dataset to:", prepared_data_path, "\n")
+} else {
+  cat("✗ Issue with data preparation - needs attention\n")
+}
+
+cat("\n=== NEXT STEPS ===\n")
+cat("1. Review column structure compatibility with functions.R\n")
+cat("2. Implement multiple imputation strategy\n")
+cat("3. Apply propensity score methods to imputed datasets\n")
+cat("4. Pool results across imputations\n")
+```
+
+## Session Info
+
+```{r session-info}
+sessionInfo()
+```
