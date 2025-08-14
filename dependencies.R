@@ -76,29 +76,39 @@ install_dependencies <- function() {
 
 # Function to load required libraries for analysis
 load_required_libraries <- function() {
-  library(tidyverse)
-  library(survey)
-  library(margins)
-  library(emmeans)
-  library(car)
-  library(MatchIt)
-  library(WeightIt)
-  library(twang)
-  library(CBPS)
-  library(ebal)
-  library(BART)
-  library(gbm)
-  library(randomForest)
-  library(glmnet)
-  library(rpart)
-  library(gam)
-  library(mice)
-  library(VIM)
-  library(Hmisc)
-  library(naniar)
-  library(knitr)
-  library(scales)
-  library(broom)
+  required_packages <- c(
+    "tidyverse",
+    "survey",
+    "margins",
+    "emmeans",
+    "car",
+    "MatchIt",
+    "WeightIt",
+    "twang",
+    "CBPS",
+    "ebal",
+    "BART",
+    "gbm",
+    "randomForest",
+    "glmnet",
+    "rpart",
+    "gam",
+    "mice",
+    "VIM",
+    "Hmisc",
+    "naniar",
+    "knitr",
+    "scales",
+    "broom"
+  )
+  
+  for (pkg in required_packages) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      cat("Installing missing package:", pkg, "\n")
+      install.packages(pkg, dependencies = TRUE)
+    }
+    library(pkg, character.only = TRUE)
+  }
 }
 
 # Setup function for quarto documents
