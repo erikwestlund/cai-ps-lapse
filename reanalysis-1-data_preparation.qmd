@@ -73,11 +73,12 @@ all_analysis_vars <- c(
    - Clinical assumption: These conditions would be documented if present
    - This recoding happens BEFORE propensity score modeling
    - Maintains consistency with original analysis
+   - **Is this assumption valid?** Do we want to impute these?
    
 2. **CCI/DCSI**: **NEW - Will be imputed** (change from original analysis)
    - Original analysis excluded rows with missing CCI/DCSI
    - Reanalysis will impute these to preserve sample size and reduce bias
-   - These comorbidity indices can be reliably imputed from patient demographics and clinical characteristics
+   - These comorbidity indices can be imputed from patient demographics and clinical characteristics
 
 3. **Other variables**: Missing values will be handled via multiple imputation in the next step
 
