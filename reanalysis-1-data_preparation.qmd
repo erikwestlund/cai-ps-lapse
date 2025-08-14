@@ -65,6 +65,19 @@ all_analysis_vars <- c(
 )
 ```
 
+## Missing Data Handling Strategy
+
+**Following the original analysis approach:**
+
+1. **Glaucoma/Other Retina Conditions**: Missing values are recoded as 0 (absence of condition)
+   - Clinical assumption: These conditions would be documented if present
+   - This recoding happens BEFORE propensity score modeling
+   
+2. **CCI/DCSI**: Rows with missing values will be excluded (complete case)
+   - These are key confounders that cannot be reliably imputed
+
+3. **Other variables**: Missing values will be handled via multiple imputation in the next step
+
 ## Variable Creation
 
 ```{r create-variables}
@@ -122,9 +135,15 @@ df_analysis <- df_combined |>
     any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
                               other_inject == 1 | focal_laser_flag == 1),
     
-    # Comorbidity indicators as factors
-    glaucoma_bef_hitplus_cat = factor(if_else(Glaucoma_bef_hitplus == "Present", 1, 0)),
-    otherretina_bef_hitplus_cat = factor(if_else(Otherretina_bef_hitplus == "Present", 1, 0)),
+    # Comorbidity indicators as factors (missing = no condition)
+    glaucoma_bef_hitplus_cat = factor(case_when(
+      Glaucoma_bef_hitplus == "Present" ~ 1,
+      TRUE ~ 0  # Includes NA values coded as 0 (no glaucoma)
+    )),
+    otherretina_bef_hitplus_cat = factor(case_when(
+      Otherretina_bef_hitplus == "Present" ~ 1,
+      TRUE ~ 0  # Includes NA values coded as 0 (no other retina condition)
+    )),
     catsurg_before_hitplus_cat = factor(cataract_surgery_bef_hitplus),
     
     # Treatment indicators as factors
@@ -152,8 +171,8 @@ ps_model_vars <- c(
   "anti_VEGF",
   "focal_laser_flag",
   "PRP_flag",
-  "glaucoma_bef_hitplus_cat",
-  "otherretina_bef_hitplus_cat",
+  "glaucoma_bef_hitplus_cat",  # Missing already coded as 0 (no condition)
+  "otherretina_bef_hitplus_cat",  # Missing already coded as 0 (no condition)
   "catsurg_before_hitplus_cat"
 )
 
@@ -163,7 +182,17 @@ outcome_model_vars <- c(
   ps_model_vars  # All PS vars are also in outcome model
 )
 
-# Assess missing data for analysis variables
+# Assess missing data BEFORE recoding (for documentation)
+missing_before_recoding <- df_combined |>
+  dplyr::select(dplyr::all_of(c(
+    "baseline_VA_logMAR", "CCI", "DCSI", 
+    "Glaucoma_bef_hitplus", "Otherretina_bef_hitplus",
+    "cataract_surgery_bef_hitplus"
+  ))) |>
+  dplyr::summarise(dplyr::across(everything(), ~ sum(is.na(.)))) |>
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "n_missing_original")
+
+# Assess missing data AFTER recoding
 missing_summary <- df_analysis |>
   dplyr::select(dplyr::all_of(c(ps_model_vars, "outcome_va_vi_binary"))) |>
   dplyr::summarise(dplyr::across(everything(), ~ sum(is.na(.)))) |>
@@ -173,7 +202,13 @@ missing_summary <- df_analysis |>
     var_type = dplyr::case_when(
       variable %in% c("outcome_va_vi_binary") ~ "Outcome",
       variable == "ever_lapse_binary" ~ "Exposure",
+      variable %in% c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat") ~ "Covariate (recoded)",
       TRUE ~ "Covariate"
+    ),
+    handling = dplyr::case_when(
+      variable %in% c("CCI", "DCSI") ~ "Exclude if missing",
+      variable %in% c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat") ~ "Missing → 0 (no condition)",
+      TRUE ~ "To be imputed"
     )
   ) |>
   dplyr::arrange(desc(n_missing))
@@ -181,7 +216,7 @@ missing_summary <- df_analysis |>
 # Display missing data summary
 missing_summary |> 
   filter(n_missing > 0) |>
-  kable(caption = "Variables with missing data (for imputation)")
+  kable(caption = "Variables with missing data after recoding (glaucoma/retina conditions coded as 0)")
 ```
 
 ## Data Summary for Analysis Variables
