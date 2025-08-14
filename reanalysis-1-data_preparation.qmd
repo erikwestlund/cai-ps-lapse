@@ -165,18 +165,18 @@ outcome_model_vars <- c(
 
 # Assess missing data for analysis variables
 missing_summary <- df_analysis |>
-  select(all_of(c(ps_model_vars, "outcome_va_vi_binary"))) |>
-  summarise(across(everything(), ~ sum(is.na(.)))) |>
-  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
-  mutate(
+  dplyr::select(dplyr::all_of(c(ps_model_vars, "outcome_va_vi_binary"))) |>
+  dplyr::summarise(dplyr::across(everything(), ~ sum(is.na(.)))) |>
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  dplyr::mutate(
     pct_missing = round(n_missing / nrow(df_analysis) * 100, 2),
-    var_type = case_when(
+    var_type = dplyr::case_when(
       variable %in% c("outcome_va_vi_binary") ~ "Outcome",
       variable == "ever_lapse_binary" ~ "Exposure",
       TRUE ~ "Covariate"
     )
   ) |>
-  arrange(desc(n_missing))
+  dplyr::arrange(desc(n_missing))
 
 # Display missing data summary
 missing_summary |> 
@@ -200,7 +200,7 @@ summary_vars <- c(
 
 # Create summary table
 df_analysis |>
-  select(all_of(summary_vars)) |>
+  dplyr::select(dplyr::all_of(summary_vars)) |>
   summary()
 
 # Distribution of outcome by exposure
