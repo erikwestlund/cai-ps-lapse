@@ -16,3 +16,8 @@ reanalysis_data_file_path <- paste0(s_root, "/Gina's Project/df_combined_130825.
 original_analysis_file_path <- paste0(s_root, "/Gina's Project/df_Final_240909.csv")
 
 ps_dir <- file.path(s_root, "ps_results")
+
+# Reanalysis directories on network drive
+reanalysis_dir <- file.path(s_root, "reanalysis_results")
+reanalysis_data_dir <- file.path(reanalysis_dir, "data")
+reanalysis_diagnostics_dir <- file.path(reanalysis_dir, "diagnostics")

@@ -4,7 +4,6 @@ images/*
 ps_diagnostics/*
 Thumbs.db
 *.png
-*.Rds
 
 # History files
 .Rhistory
@@ -55,6 +54,13 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Data directory - NEVER commit patient data
+data/
+
+# Results directories (these should be on network drive)
+ps_results/
+reanalysis_results/
 
 # Claude Code files
 CLAUDE.md
