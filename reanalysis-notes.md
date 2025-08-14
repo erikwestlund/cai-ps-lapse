@@ -8,9 +8,9 @@
 The original analysis handles missing data with a mixed strategy:
 
 1. **CCI and DCSI (Comorbidity Scores)**
-   - **Approach**: Complete case exclusion
-   - **Implementation**: Rows with missing CCI or DCSI are removed via `apply_exclusions()`
-   - **Justification**: These are key confounders that cannot be reasonably imputed without clinical context
+   - **Original Approach**: Complete case exclusion
+   - **Original Implementation**: Rows with missing CCI or DCSI are removed via `apply_exclusions()`
+   - **Original Justification**: These are key confounders that cannot be reasonably imputed without clinical context
 
 2. **Glaucoma and Other Retina Conditions** 
    - **Approach**: Missing coded as absence of condition
@@ -31,13 +31,20 @@ For the reanalysis with multiple imputation, we will:
    - Recode missing as 0 (absence of condition) before imputation
    - This preserves the clinical assumption and comparability with original analysis
 
-2. **Apply multiple imputation for other missing covariates**
+2. **Impute CCI and DCSI scores**
+   - **NEW**: Unlike the original analysis, we will impute missing CCI and DCSI values
+   - **Rationale**: Preserve sample size and reduce selection bias from complete case analysis
+   - **Method**: Multiple imputation using predictive mean matching or similar appropriate method
+   - CCI and DCSI are comorbidity indices that can be reliably imputed from other patient characteristics, demographics, and clinical variables
+
+3. **Apply multiple imputation for other missing covariates**
    - Impute missing values in baseline VA, demographics, etc.
    - Pool results across imputed datasets
 
-3. **Sensitivity analysis**
+4. **Sensitivity analysis**
    - Compare complete case analysis with imputed results
    - Document any meaningful differences in findings
+   - Special attention to the impact of imputing CCI/DCSI vs excluding
 
 ### Variable Definitions
 

@@ -67,14 +67,17 @@ all_analysis_vars <- c(
 
 ## Missing Data Handling Strategy
 
-**Following the original analysis approach:**
+**Modified approach for the reanalysis:**
 
 1. **Glaucoma/Other Retina Conditions**: Missing values are recoded as 0 (absence of condition)
    - Clinical assumption: These conditions would be documented if present
    - This recoding happens BEFORE propensity score modeling
+   - Maintains consistency with original analysis
    
-2. **CCI/DCSI**: Rows with missing values will be excluded (complete case)
-   - These are key confounders that cannot be reliably imputed
+2. **CCI/DCSI**: **NEW - Will be imputed** (change from original analysis)
+   - Original analysis excluded rows with missing CCI/DCSI
+   - Reanalysis will impute these to preserve sample size and reduce bias
+   - These comorbidity indices can be reliably imputed from patient demographics and clinical characteristics
 
 3. **Other variables**: Missing values will be handled via multiple imputation in the next step
 
@@ -206,8 +209,8 @@ missing_summary <- df_analysis |>
       TRUE ~ "Covariate"
     ),
     handling = dplyr::case_when(
-      variable %in% c("CCI", "DCSI") ~ "Exclude if missing",
       variable %in% c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat") ~ "Missing → 0 (no condition)",
+      variable %in% c("CCI", "DCSI") ~ "To be imputed",
       TRUE ~ "To be imputed"
     )
   ) |>
@@ -249,24 +252,35 @@ table(df_analysis$dr_severity, useNA = "ifany")
 table(df_analysis$treatment_type, useNA = "ifany")
 ```
 
-## Complete Case Analysis Dataset
+## Dataset for Imputation
 
-```{r complete-cases}
-# For comparison, create complete case dataset (no missing values)
-df_complete <- df_analysis |>
-  filter(!is.na(CCI) & !is.na(DCSI) & !is.na(baseline_VA_logMAR))
+```{r imputation-dataset}
+# Full dataset for imputation (no exclusions for missing CCI/DCSI)
+df_for_imputation <- df_analysis
 
-# Summary of exclusions
+# For comparison, create complete case dataset (as in original analysis)
+df_complete_original <- df_analysis |>
+  filter(!is.na(CCI) & !is.na(DCSI))
+
+# Summary of datasets
 n_total <- nrow(df_analysis)
-n_complete <- nrow(df_complete)
-n_excluded <- n_total - n_complete
+n_complete_original <- nrow(df_complete_original)
+n_gained_by_imputation <- n_total - n_complete_original
 
 tibble(
-  Dataset = c("Full dataset", "Complete cases", "Excluded"),
-  N = c(n_total, n_complete, n_excluded),
-  Percent = c(100, round(n_complete/n_total*100, 1), round(n_excluded/n_total*100, 1))
+  Dataset = c(
+    "Full dataset (for imputation)",
+    "Complete cases (original approach)", 
+    "Additional observations from imputation"
+  ),
+  N = c(n_total, n_complete_original, n_gained_by_imputation),
+  Percent = c(
+    100, 
+    round(n_complete_original/n_total*100, 1), 
+    round(n_gained_by_imputation/n_total*100, 1)
+  )
 ) |>
-  kable(caption = "Complete case analysis summary")
+  kable(caption = "Sample size comparison: Imputation vs complete case approach")
 ```
 
 ## Save Prepared Data
@@ -277,9 +291,9 @@ if (!dir.exists(reanalysis_data_dir)) {
   dir.create(reanalysis_data_dir, recursive = TRUE)
 }
 
-# Save the prepared dataset to network drive
-saveRDS(df_analysis, file.path(reanalysis_data_dir, "df_analysis_prepared.rds"))
-saveRDS(df_complete, file.path(reanalysis_data_dir, "df_complete_cases.rds"))
+# Save the prepared datasets to network drive
+saveRDS(df_for_imputation, file.path(reanalysis_data_dir, "df_for_imputation.rds"))
+saveRDS(df_complete_original, file.path(reanalysis_data_dir, "df_complete_original.rds"))
 
 # Save variable lists for use in other scripts
 variable_lists <- list(
@@ -301,22 +315,22 @@ message("Data saved to: ", reanalysis_data_dir)
 tibble(
   Metric = c(
     "Total observations",
-    "Complete cases for main analysis", 
-    "Missing CCI/DCSI",
-    "Missing baseline VA",
+    "Complete cases (original approach)", 
+    "Missing CCI or DCSI (to be imputed)",
+    "Missing baseline VA (to be imputed)",
     "Patients who lapsed",
     "Patients with vision impairment"
   ),
   N = c(
-    nrow(df_analysis),
-    nrow(df_complete),
-    sum(is.na(df_analysis$CCI) | is.na(df_analysis$DCSI)),
-    sum(is.na(df_analysis$baseline_VA_logMAR)),
-    sum(df_analysis$ever_lapse_binary == 1, na.rm = TRUE),
-    sum(df_analysis$outcome_va_vi_binary == 1, na.rm = TRUE)
+    nrow(df_for_imputation),
+    nrow(df_complete_original),
+    sum(is.na(df_for_imputation$CCI) | is.na(df_for_imputation$DCSI)),
+    sum(is.na(df_for_imputation$baseline_VA_logMAR)),
+    sum(df_for_imputation$ever_lapse_binary == 1, na.rm = TRUE),
+    sum(df_for_imputation$outcome_va_vi_binary == 1, na.rm = TRUE)
   )
 ) |>
-  kable(caption = "Dataset summary for reanalysis")
+  kable(caption = "Dataset summary for reanalysis with imputation")
 ```
 
 ## Next Steps
