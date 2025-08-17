@@ -808,54 +808,6 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
 # Calculate pooled AMEs
 ame_results <- calculate_pooled_ames(imputed_datasets, models, n_imputations)
 
-for (dr_level in c("No_DR", "NPDR", "PDR")) {
-  for (tx_status in c("No_Treatment", "Any_Treatment")) {
-    
-    # Get subset for this subgroup
-    subset_data <- data_for_ame[data_for_ame$dr_severity == dr_level & 
-                                data_for_ame$any_treatment == tx_status, ]
-    n_subset <- nrow(subset_data)
-    
-    if (n_subset > 0) {
-      # Create counterfactual datasets
-      subset_data_0 <- subset_data
-      subset_data_0$ever_lapse_binary <- factor("No_Lapse", 
-                                                levels = c("No_Lapse", "Lapsed"))
-      
-      subset_data_1 <- subset_data
-      subset_data_1$ever_lapse_binary <- factor("Lapsed", 
-                                                levels = c("No_Lapse", "Lapsed"))
-      
-      # Get predictions
-      pred_0 <- predict(model_for_ame, newdata = subset_data_0, type = "response")
-      pred_1 <- predict(model_for_ame, newdata = subset_data_1, type = "response")
-      
-      # Calculate individual effects
-      individual_effects <- as.numeric(pred_1) - as.numeric(pred_0)
-      
-      # Calculate weighted AME
-      weights <- subset_data$iptw_weight
-      ame_value <- weighted.mean(individual_effects, w = weights, na.rm = TRUE)
-      
-      # Bootstrap SE would be ideal here; using simple weighted SE for now
-      weighted_var <- sum(weights * (individual_effects - ame_value)^2) / sum(weights)
-      se_value <- sqrt(weighted_var / n_subset)
-      
-      # Store results
-      ame_results <- rbind(ame_results, data.frame(
-        DR_Severity = dr_level,
-        Treatment = tx_status,
-        N = n_subset,
-        AME = ame_value,
-        SE = se_value,
-        CI_Lower = ame_value - 1.96 * se_value,
-        CI_Upper = ame_value + 1.96 * se_value,
-        stringsAsFactors = FALSE
-      ))
-    }
-  }
-}
-
 # Format for display
 ame_display <- ame_results |>
   mutate(
