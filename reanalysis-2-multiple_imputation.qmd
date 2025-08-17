@@ -216,16 +216,17 @@ message("\n=== FINAL IMPUTATION MODEL ===\n")
 final_methods <- data.frame(
   Variable = names(custom_methods),
   Method = custom_methods,
-  Type = case_when(
+  Type = dplyr::case_when(
     custom_methods == "" ~ "Predictor only (not imputed)",
     custom_methods == "pmm" ~ "Predictive mean matching",
     custom_methods == "polr" ~ "Proportional odds regression",
     custom_methods == "logreg" ~ "Logistic regression",
     custom_methods == "polyreg" ~ "Polytomous regression",
     TRUE ~ custom_methods
-  )
+  ),
+  stringsAsFactors = FALSE
 ) |>
-  arrange(Method != "", Variable)
+  dplyr::arrange(Method != "", Variable)
 
 message("Imputation methods by variable:")
 print(final_methods, n = 50)
