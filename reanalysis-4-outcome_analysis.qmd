@@ -878,14 +878,40 @@ emm_probs <- emmeans(models[[1]],
 # Convert to data frame
 prob_df <- as.data.frame(emm_probs)
 
-# Create simple probability table
-prob_table <- prob_df |>
-  select(ever_lapse_binary, dr_severity, any_treatment, prob) |>
-  mutate(
-    Probability = round(prob, 3)
-  ) |>
-  select(dr_severity, any_treatment, ever_lapse_binary, Probability) |>
-  pivot_wider(names_from = ever_lapse_binary, values_from = Probability)
+# Check what columns we actually have
+if (n_imputations > 0) {
+  message("Available columns in prob_df: ", paste(names(prob_df), collapse = ", "))
+}
+
+# Create simple probability table - check if prob column exists first
+if ("prob" %in% names(prob_df)) {
+  prob_table <- prob_df |>
+    mutate(
+      Probability = round(prob, 3)
+    ) |>
+    select(dr_severity, any_treatment, ever_lapse_binary, Probability) |>
+    pivot_wider(names_from = ever_lapse_binary, values_from = Probability)
+} else {
+  # If prob doesn't exist, look for alternative column names
+  prob_col_name <- names(prob_df)[grep("prob|response|emmean", names(prob_df), ignore.case = TRUE)[1]]
+  if (!is.na(prob_col_name)) {
+    prob_table <- prob_df |>
+      mutate(
+        Probability = round(.data[[prob_col_name]], 3)
+      ) |>
+      select(dr_severity, any_treatment, ever_lapse_binary, Probability) |>
+      pivot_wider(names_from = ever_lapse_binary, values_from = Probability)
+  } else {
+    # Create empty table if we can't find probability column
+    prob_table <- data.frame(
+      dr_severity = character(),
+      any_treatment = character(),
+      No_Lapse = numeric(),
+      Lapsed = numeric()
+    )
+    message("Warning: Could not find probability column in emmeans output")
+  }
+}
 
 kable(prob_table,
       caption = "Predicted Probability of Vision Impairment by Subgroup",
