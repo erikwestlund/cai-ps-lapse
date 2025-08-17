@@ -799,10 +799,8 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
     mutate(
       CI_Lower = AME - 1.96 * SE,
       CI_Upper = AME + 1.96 * SE,
-      Z_stat = AME / SE,
-      P_Value = 2 * pnorm(-abs(Z_stat))
-    ) |>
-    select(-Z_stat)
+      P_Value = 2 * pnorm(-abs(AME / SE))
+    )
   
   return(pooled_ame)
 }
