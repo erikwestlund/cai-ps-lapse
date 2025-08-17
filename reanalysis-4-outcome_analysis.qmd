@@ -505,16 +505,16 @@ lapse_effects <- pooled_lapse_effects |>
     CI_Upper = estimate + qt(0.975, df = df) * SE
   )
 
-# Create clean results table
+# Create clean results table using the pooled contrasts
 subgroup_effects <- data.frame(
-  DR_Severity = lapse_effects$dr_severity,
-  Treatment = lapse_effects$any_treatment,
-  Log_Odds = round(lapse_effects$estimate, 4),
-  SE = round(lapse_effects$SE, 4),
-  CI_Lower = round(lapse_effects$estimate - 1.96 * lapse_effects$SE, 4),
-  CI_Upper = round(lapse_effects$estimate + 1.96 * lapse_effects$SE, 4),
-  OR = round(exp(lapse_effects$estimate), 4),
-  P_Value = format.pval(lapse_effects$p.value, digits = 4, eps = 0.0001)
+  DR_Severity = pooled_lapse_effects$dr_severity,
+  Treatment = pooled_lapse_effects$any_treatment,
+  Log_Odds = round(pooled_lapse_effects$estimate, 4),
+  SE = round(pooled_lapse_effects$SE, 4),
+  CI_Lower = round(pooled_lapse_effects$CI_Lower, 4),
+  CI_Upper = round(pooled_lapse_effects$CI_Upper, 4),
+  OR = round(exp(pooled_lapse_effects$estimate), 4),
+  P_Value = format.pval(pooled_lapse_effects$p.value, digits = 4, eps = 0.0001)
 )
 
 kable(subgroup_effects,
