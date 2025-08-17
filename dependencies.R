@@ -2,6 +2,11 @@
 # Install all required dependencies for the reanalysis project
 
 install_dependencies <- function() {
+  # Set CRAN mirror to avoid the error
+  if (is.null(getOption("repos")) || getOption("repos") == "@CRAN@") {
+    options(repos = c(CRAN = "https://cloud.r-project.org/"))
+  }
+  
   # Core data manipulation and visualization
   required_packages <- c(
     # Data manipulation and analysis
@@ -76,6 +81,11 @@ install_dependencies <- function() {
 
 # Function to load required libraries for analysis
 load_required_libraries <- function() {
+  # Set CRAN mirror if not already set
+  if (is.null(getOption("repos")) || getOption("repos") == "@CRAN@") {
+    options(repos = c(CRAN = "https://cloud.r-project.org/"))
+  }
+  
   required_packages <- c(
     "tidyverse",
     "survey",

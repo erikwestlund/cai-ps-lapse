@@ -10,6 +10,9 @@ format: html
 
 ```{r setup}
 #| include: false
+# Set seed for reproducibility
+set.seed(2024)
+
 # Setup analysis environment
 source("dependencies.R")
 setup_analysis()
