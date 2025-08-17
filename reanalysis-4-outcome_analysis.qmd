@@ -314,19 +314,9 @@ for (term in key_terms) {
   }
 }
 
-# Display three-way interaction terms
-threeway_rows <- grep("ever_lapse.*:dr_severity.*:any_treatment", 
-                      pooled_results$Term, value = FALSE)
-
-if (length(threeway_rows) > 0) {
-  threeway_results <- pooled_results[threeway_rows, c("Term", "Estimate", "SE", "P_Value", "OR")]
-  threeway_results$P_Value <- format.pval(threeway_results$P_Value, digits = 4, eps = 0.0001)
-  
-  kable(threeway_results,
-        caption = "Three-Way Interaction Terms (Pooled Across Imputations)",
-        row.names = FALSE,
-        digits = 4)
-}
+# Three-way interaction terms are included in the model
+# but not displayed individually as they are not meaningful on their own
+# See subgroup effects and marginal effects sections for interpretation
 ```
 
 ## Joint Tests of Interaction Terms
@@ -824,75 +814,6 @@ kable(ame_display,
       row.names = FALSE)
 ```
 
-## Predicted Probabilities Table
-
-```{r predicted-probs}
-# Simplified approach - just show probabilities from first imputation
-# (In a full analysis, would pool across all imputations)
-
-message("\nCalculating predicted probabilities...")
-
-# Use first imputation for demonstration
-emm_probs <- emmeans(models[[1]], 
-                     ~ ever_lapse_binary | dr_severity * any_treatment,
-                     type = "response",
-                     weights = "proportional")
-
-# Convert to data frame
-prob_df <- as.data.frame(emm_probs)
-
-# Check what columns we actually have
-if (n_imputations > 0) {
-  message("Available columns in prob_df: ", paste(names(prob_df), collapse = ", "))
-}
-
-# Create simple probability table - find the right column names
-prob_col_candidates <- c("prob", "response", "emmean", "estimate", "predicted", "fitted")
-prob_col_name <- NULL
-for (candidate in prob_col_candidates) {
-  if (candidate %in% names(prob_df)) {
-    prob_col_name <- candidate
-    break
-  }
-}
-
-# If we still don't have it, try grep
-if (is.null(prob_col_name)) {
-  prob_col_idx <- grep("prob|response|emmean|estimate", names(prob_df), ignore.case = TRUE)[1]
-  if (!is.na(prob_col_idx)) {
-    prob_col_name <- names(prob_df)[prob_col_idx]
-  }
-}
-
-# Check what factor columns we have
-factor_cols <- c("dr_severity", "any_treatment", "ever_lapse_binary")
-available_factor_cols <- factor_cols[factor_cols %in% names(prob_df)]
-
-if (!is.null(prob_col_name) && length(available_factor_cols) >= 3) {
-  prob_table <- prob_df |>
-    mutate(
-      Probability = round(.data[[prob_col_name]], 3)
-    ) |>
-    dplyr::select(all_of(available_factor_cols), Probability)
-  
-  # Try to pivot if we have the lapse column
-  if ("ever_lapse_binary" %in% names(prob_table)) {
-    prob_table <- prob_table |>
-      pivot_wider(names_from = ever_lapse_binary, values_from = Probability)
-  }
-} else {
-  # Create empty table if we can't process
-  prob_table <- data.frame(
-    Message = "Could not create probability table - missing required columns"
-  )
-  message("Warning: Missing columns for probability table. Available columns: ", 
-          paste(names(prob_df), collapse = ", "))
-}
-
-kable(prob_table,
-      caption = "Predicted Probability of Vision Impairment by Subgroup",
-      row.names = FALSE)
-```
 
 ## Summary and Interpretation
 
