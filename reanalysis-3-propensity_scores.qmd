@@ -132,19 +132,18 @@ for (i in 1:n_imputations) {
     twang_model$ps  # Already a vector when single stop method
   }
   
-  # Get balance table - use summary or bal.table depending on what works
+  # Get balance table from summary
   balance_table <- tryCatch({
-    # Try to get balance table
-    if (!is.null(twang_model$balance.es.mean)) {
-      twang_model$balance.es.mean
-    } else if (!is.null(twang_model$balance)) {
-      twang_model$balance
+    sum_obj <- summary(twang_model)
+    # Extract the balance table for es.mean
+    if (!is.null(sum_obj$es.mean.ATT)) {
+      sum_obj$es.mean.ATT
+    } else if (!is.null(sum_obj$es.mean)) {
+      sum_obj$es.mean
     } else {
-      # Extract from summary
-      summary(twang_model)$es.mean.ATT
+      NULL
     }
   }, error = function(e) {
-    # If all else fails, create a simple balance assessment
     NULL
   })
   
@@ -172,17 +171,24 @@ for (i in 1:n_imputations) {
   # Get the twang model
   twang_model <- twang_results[[i]]$model
   
-  # Use bal.table to get balance statistics
-  # This function should work with the ps object
+  # Get balance table from the summary
+  # When using es.mean only, the balance table is in summary()$es.mean.ATT
   bal_table <- tryCatch({
-    bal.table(twang_model, digits = 3)
-  }, error = function(e) {
-    # If bal.table doesn't work, try summary
-    tryCatch({
-      summary(twang_model)$es.mean.ATT
-    }, error = function(e2) {
+    # Get the summary and extract balance table
+    sum_obj <- summary(twang_model)
+    # For single stop method, look for es.mean.ATT
+    if (!is.null(sum_obj$es.mean.ATT)) {
+      sum_obj$es.mean.ATT
+    } else if (!is.null(sum_obj$es.mean)) {
+      sum_obj$es.mean
+    } else if (!is.null(sum_obj[[1]])) {
+      # Sometimes it's the first element
+      sum_obj[[1]]
+    } else {
       NULL
-    })
+    }
+  }, error = function(e) {
+    NULL
   })
   
   if (!is.null(bal_table)) {
