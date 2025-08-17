@@ -103,12 +103,12 @@ message("  - n.trees: ", n_trees)
 message("  - interaction.depth: 3")
 message("  - shrinkage: 0.01")
 message("  - estimand: ATT")
-message("  - stop.method: es.mean, ks.max")
+message("  - stop.method: es.mean (effect size only)")
 
 for (i in 1:n_imputations) {
   message("\nProcessing imputation ", i, " of ", n_imputations, "...")
   
-  # Run twang ps model
+  # Run twang ps model with es.mean only
   twang_model <- ps(
     formula = ps_formula,
     data = imputed_datasets[[i]],
@@ -116,12 +116,12 @@ for (i in 1:n_imputations) {
     interaction.depth = 3,
     shrinkage = 0.01,
     estimand = "ATT",
-    stop.method = c("es.mean", "ks.max"),
+    stop.method = "es.mean",  # Only use es.mean for faster computation
     n.minobsinnode = 10,
     verbose = FALSE
   )
   
-  # Extract weights for ATT (using es.mean as primary stop method)
+  # Extract weights for ATT
   weights <- get.weights(twang_model, stop.method = "es.mean")
   
   # Store results
@@ -130,12 +130,10 @@ for (i in 1:n_imputations) {
     weights = weights,
     ps_scores = twang_model$ps[, "es.mean"],
     n_trees_used = twang_model$desc$es.mean$n.trees,
-    balance_es_mean = twang_model$balance$es.mean,
-    balance_ks_max = twang_model$balance$ks.max
+    balance_es_mean = twang_model$balance$es.mean
   )
   
   message("  - Trees used (es.mean): ", twang_model$desc$es.mean$n.trees)
-  message("  - Trees used (ks.max): ", twang_model$desc$ks.max$n.trees)
 }
 
 message("\nTwang propensity score calculation complete")
@@ -148,9 +146,8 @@ message("\nTwang propensity score calculation complete")
 balance_summaries <- list()
 
 for (i in 1:n_imputations) {
-  # Get balance table from twang
+  # Get balance table from twang (es.mean only)
   bal_es <- twang_results[[i]]$balance_es_mean
-  bal_ks <- twang_results[[i]]$balance_ks_max
   
   # Summary statistics for es.mean method
   balance_summaries[[i]] <- data.frame(
@@ -158,8 +155,9 @@ for (i in 1:n_imputations) {
     Mean_ES = mean(abs(bal_es$std.eff.sz), na.rm = TRUE),
     Max_ES = max(abs(bal_es$std.eff.sz), na.rm = TRUE),
     N_Imbalanced = sum(abs(bal_es$std.eff.sz) > 0.1, na.rm = TRUE),
-    Mean_KS = mean(bal_ks$ks, na.rm = TRUE),
-    Max_KS = max(bal_ks$ks, na.rm = TRUE)
+    # KS statistics are still available in the es.mean balance table
+    Mean_KS = mean(bal_es$ks, na.rm = TRUE),
+    Max_KS = max(bal_es$ks, na.rm = TRUE)
   )
 }
 
@@ -375,7 +373,7 @@ message("Imputations processed: ", n_imputations)
 message("Analysis mode: ", analysis_mode)
 message("Trees used: ", n_trees)
 message("Estimand: ATT (Average Treatment Effect on the Treated)")
-message("Stop methods: es.mean (effect size), ks.max (Kolmogorov-Smirnov)")
+message("Stop method: es.mean (effect size minimization)")
 
 # Enhanced formula summary
 message("\nEnhanced formula included:")
