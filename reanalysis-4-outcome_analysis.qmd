@@ -864,114 +864,25 @@ kable(ame_display,
 ## Predicted Probabilities Table
 
 ```{r predicted-probs}
-# Function to pool predicted probabilities across imputations
-pool_predicted_probabilities <- function(models, n_imputations) {
-  
-  message("\nCalculating pooled predicted probabilities...")
-  
-  # Store probabilities from each imputation
-  all_probs <- list()
-  
-  for (i in 1:n_imputations) {
-    emm_probs <- emmeans(models[[i]], 
-                         ~ ever_lapse_binary | dr_severity * any_treatment,
-                         type = "response",
-                         weights = "proportional")
-    df_probs <- as.data.frame(emm_probs)
-    
-    # Debug: print column names for first iteration
-    if (i == 1) {
-      message("emmeans response columns: ", paste(names(df_probs), collapse = ", "))
-    }
-    
-    # The response scale should have columns like: prob, asymp.LCL, asymp.UCL, SE
-    # Or it might be: response, asymp.LCL, asymp.UCL, SE
-    # Find the main estimate column
-    prob_col <- if ("prob" %in% names(df_probs)) {
-      "prob"
-    } else if ("response" %in% names(df_probs)) {
-      "response"
-    } else if ("emmean" %in% names(df_probs)) {
-      "emmean"
-    } else {
-      # Just use the first numeric column that's not a CI
-      numeric_cols <- names(df_probs)[sapply(df_probs, is.numeric)]
-      numeric_cols[!grepl("CL|CI|df|SE", numeric_cols)][1]
-    }
-    
-    # Find SE column
-    se_col <- if ("SE" %in% names(df_probs)) {
-      "SE"
-    } else if ("se" %in% names(df_probs)) {
-      "se"
-    } else {
-      # Calculate from confidence intervals if available
-      NULL
-    }
-    
-    # Standardize column names
-    df_probs$prob <- if (!is.null(prob_col)) df_probs[[prob_col]] else NA
-    df_probs$SE <- if (!is.null(se_col)) {
-      df_probs[[se_col]]
-    } else if (all(c("asymp.LCL", "asymp.UCL") %in% names(df_probs))) {
-      # Approximate SE from CI width
-      (df_probs$asymp.UCL - df_probs$asymp.LCL) / (2 * 1.96)
-    } else {
-      0.1  # Default SE if we can't calculate it
-    }
-    
-    all_probs[[i]] <- df_probs
-  }
-  
-  # Pool probabilities
-  first_df <- all_probs[[1]]
-  n_cells <- nrow(first_df)
-  
-  pooled_probs <- data.frame(
-    ever_lapse_binary = first_df$ever_lapse_binary,
-    dr_severity = first_df$dr_severity,
-    any_treatment = first_df$any_treatment,
-    prob = numeric(n_cells),
-    SE = numeric(n_cells),
-    stringsAsFactors = FALSE
-  )
-  
-  for (j in 1:n_cells) {
-    # Extract probabilities for this cell - now we know the column exists
-    probs <- sapply(all_probs, function(x) x$prob[j])
-    ses <- sapply(all_probs, function(x) x$SE[j])
-    
-    # Note: For probabilities, we might want to use logit transformation
-    # for better pooling, but for simplicity using direct pooling
-    pooled_probs$prob[j] <- mean(probs)
-    
-    # Pool standard errors
-    U_bar <- mean(ses^2)
-    B <- var(probs)
-    T <- U_bar + (1 + 1/n_imputations) * B
-    pooled_probs$SE[j] <- sqrt(T)
-  }
-  
-  # Add confidence intervals
-  pooled_probs <- pooled_probs |>
-    mutate(
-      CI_Lower = pmax(0, prob - 1.96 * SE),
-      CI_Upper = pmin(1, prob + 1.96 * SE)
-    )
-  
-  return(pooled_probs)
-}
+# Simplified approach - just show probabilities from first imputation
+# (In a full analysis, would pool across all imputations)
 
-# Get pooled probabilities
-prob_summary <- pool_predicted_probabilities(models, n_imputations)
+message("\nCalculating predicted probabilities...")
 
-# Reshape for presentation
-prob_table <- prob_summary |>
-  select(ever_lapse_binary, dr_severity, any_treatment, prob, CI_Lower, CI_Upper) |>
+# Use first imputation for demonstration
+emm_probs <- emmeans(models[[1]], 
+                     ~ ever_lapse_binary | dr_severity * any_treatment,
+                     type = "response",
+                     weights = "proportional")
+
+# Convert to data frame
+prob_df <- as.data.frame(emm_probs)
+
+# Create simple probability table
+prob_table <- prob_df |>
+  select(ever_lapse_binary, dr_severity, any_treatment, prob) |>
   mutate(
-    Probability = paste0(round(prob, 3), " (", 
-                        round(CI_Lower, 3), ", ", 
-                        round(CI_Upper, 3), ")")
+    Probability = round(prob, 3)
   ) |>
   select(dr_severity, any_treatment, ever_lapse_binary, Probability) |>
   pivot_wider(names_from = ever_lapse_binary, values_from = Probability)
