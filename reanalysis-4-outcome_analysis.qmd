@@ -366,25 +366,25 @@ pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
 
 message("\nPerforming pooled joint hypothesis tests...")
 
+# Use the first model to get term names (should be same across all imputations)
+first_model <- models[[1]]
+
 # Test 1: Joint test of three-way interaction
 threeway_terms_test <- grep("ever_lapse.*:dr_severity.*:any_treatment", 
-                            names(coef(model_for_tests)), value = TRUE)
+                            names(coef(first_model)), value = TRUE)
 
 if (length(threeway_terms_test) > 0) {
   hypothesis_3way <- paste0(threeway_terms_test, " = 0")
   
-  joint_test_3way <- linearHypothesis(
-    model_for_tests,
-    hypothesis_3way,
-    vcov = vcov(model_for_tests)
-  )
+  # Pool test across imputations
+  pooled_test_3way <- pool_chi_square_tests(models, hypothesis_3way, "Three-way interaction")
   
   message("\n1. Three-way interaction test (H0: all three-way terms = 0):")
-  message("   Chi-sq = ", round(joint_test_3way$Chisq[2], 3))
-  message("   df = ", joint_test_3way$Df[2])
-  message("   p-value = ", format.pval(joint_test_3way$`Pr(>Chisq)`[2], digits = 4, eps = 0.0001))
+  message("   Chi-sq = ", round(pooled_test_3way$D_bar, 3))
+  message("   df = ", pooled_test_3way$df)
+  message("   p-value = ", format.pval(pooled_test_3way$p_value, digits = 4, eps = 0.0001))
   
-  if(joint_test_3way$`Pr(>Chisq)`[2] < 0.05) {
+  if(pooled_test_3way$p_value < 0.05) {
     message("   Interpretation: The effect of lapsing varies by BOTH DR severity AND treatment status")
   } else {
     message("   Interpretation: No significant three-way interaction detected")
@@ -393,40 +393,34 @@ if (length(threeway_terms_test) > 0) {
 
 # Test 2: Joint test of lapse × DR interaction (averaging over treatment)
 lapse_dr_terms <- grep("ever_lapse.*:dr_severity(?!.*:any_treatment)", 
-                      names(coef(model_for_tests)), value = TRUE, perl = TRUE)
+                      names(coef(first_model)), value = TRUE, perl = TRUE)
 
 if (length(lapse_dr_terms) > 0) {
   hypothesis_lapse_dr <- paste0(lapse_dr_terms, " = 0")
   
-  joint_test_lapse_dr <- linearHypothesis(
-    model_for_tests,
-    hypothesis_lapse_dr,
-    vcov = vcov(model_for_tests)
-  )
+  # Pool test across imputations
+  pooled_test_lapse_dr <- pool_chi_square_tests(models, hypothesis_lapse_dr, "Lapse × DR interaction")
   
   message("\n2. Lapse × DR severity interaction test:")
-  message("   Chi-sq = ", round(joint_test_lapse_dr$Chisq[2], 3))
-  message("   df = ", joint_test_lapse_dr$Df[2])
-  message("   p-value = ", format.pval(joint_test_lapse_dr$`Pr(>Chisq)`[2], digits = 4, eps = 0.0001))
+  message("   Chi-sq = ", round(pooled_test_lapse_dr$D_bar, 3))
+  message("   df = ", pooled_test_lapse_dr$df)
+  message("   p-value = ", format.pval(pooled_test_lapse_dr$p_value, digits = 4, eps = 0.0001))
 }
 
 # Test 3: Joint test of lapse × treatment interaction (averaging over DR)
 lapse_tx_terms <- grep("ever_lapse.*:any_treatment(?!.*:dr_severity)", 
-                      names(coef(model_for_tests)), value = TRUE, perl = TRUE)
+                      names(coef(first_model)), value = TRUE, perl = TRUE)
 
 if (length(lapse_tx_terms) > 0) {
   hypothesis_lapse_tx <- paste0(lapse_tx_terms, " = 0")
   
-  joint_test_lapse_tx <- linearHypothesis(
-    model_for_tests,
-    hypothesis_lapse_tx,
-    vcov = vcov(model_for_tests)
-  )
+  # Pool test across imputations
+  pooled_test_lapse_tx <- pool_chi_square_tests(models, hypothesis_lapse_tx, "Lapse × treatment interaction")
   
   message("\n3. Lapse × treatment interaction test:")
-  message("   Chi-sq = ", round(joint_test_lapse_tx$Chisq[2], 3))
-  message("   df = ", joint_test_lapse_tx$Df[2])
-  message("   p-value = ", format.pval(joint_test_lapse_tx$`Pr(>Chisq)`[2], digits = 4, eps = 0.0001))
+  message("   Chi-sq = ", round(pooled_test_lapse_tx$D_bar, 3))
+  message("   df = ", pooled_test_lapse_tx$df)
+  message("   p-value = ", format.pval(pooled_test_lapse_tx$p_value, digits = 4, eps = 0.0001))
 }
 ```
 
