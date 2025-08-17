@@ -1,0 +1,447 @@
+---
+title: "Reanalysis Step 3: Propensity Score Analysis"
+subtitle: "Calculating propensity scores and assessing balance across imputed datasets"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+# Setup analysis environment
+source("dependencies.R")
+setup_analysis(seed = 2025)
+
+# Additional packages
+library(twang)
+library(MatchIt)
+library(WeightIt)
+library(cobalt)
+library(ggplot2)
+library(gridExtra)
+
+# ANALYSIS MODE: Use same as imputation
+analysis_mode <- "test"  # Should match imputation mode
+
+# Set parameters based on mode
+if (analysis_mode == "test") {
+  max_imputations_for_diagnostics <- 2  # Show diagnostics for 2 imputations in test
+} else {
+  max_imputations_for_diagnostics <- 5  # Show diagnostics for up to 5 imputations in final
+}
+
+message("Analysis mode: ", analysis_mode)
+message("Will show diagnostics for up to ", max_imputations_for_diagnostics, " imputations")
+```
+
+## Load Imputed Datasets
+
+```{r load-data}
+# Load the imputed datasets
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_imputations <- length(imputed_datasets)
+
+message("Loaded ", n_imputations, " imputed datasets")
+
+# Load variable lists
+variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
+```
+
+## Define Enhanced Propensity Score Formula
+
+```{r ps-formula}
+# Original formula from get_matching_formula()
+# Now enhanced to include DR severity and treatment type
+
+# Create enhanced formula including person_dr and treatment interactions
+ps_formula_enhanced <- as.formula("ever_lapse_binary ~ 
+  baseline_VA_logMAR +
+  gender_cat +
+  race_ethnic_cat +
+  insurance_cat +
+  age_cat +
+  CCI +
+  DCSI +
+  other_inject +
+  anti_VEGF +
+  focal_laser_flag +
+  PRP_flag +
+  glaucoma_bef_hitplus_cat +
+  otherretina_bef_hitplus_cat +
+  catsurg_before_hitplus_cat +
+  person_dr +  # Added DR severity
+  treatment_type  # Added treatment type
+")
+
+message("Propensity score formula:")
+print(ps_formula_enhanced)
+
+# Alternative: Use the standard formula from functions.R
+ps_formula_standard <- get_matching_formula()
+
+# For this analysis, we'll use the enhanced formula
+ps_formula <- ps_formula_enhanced
+```
+
+## Run Propensity Score Models
+
+We'll use multiple methods for comparison:
+1. **Logistic regression** (standard)
+2. **GBM via twang** (flexible, handles interactions)
+3. **CBPS** (Covariate Balancing Propensity Score)
+
+```{r ps-models}
+# Initialize storage for PS results
+ps_results <- list()
+
+# Function to calculate PS for one dataset
+calculate_ps <- function(data, method = "glm", formula = ps_formula) {
+  
+  if (method == "glm") {
+    # Standard logistic regression
+    ps_model <- glm(formula, data = data, family = binomial())
+    ps_scores <- predict(ps_model, type = "response")
+    weights <- ifelse(data$ever_lapse_binary == 1, 
+                     1, 
+                     ps_scores / (1 - ps_scores))
+    
+    return(list(
+      model = ps_model,
+      ps_scores = ps_scores,
+      weights = weights,
+      method = "glm"
+    ))
+    
+  } else if (method == "twang") {
+    # GBM via twang
+    ps_model <- ps(
+      formula,
+      data = data,
+      n.trees = 3000,
+      interaction.depth = 3,
+      shrinkage = 0.01,
+      estimand = "ATT",
+      stop.method = c("es.mean", "ks.max"),
+      n.minobsinnode = 10,
+      verbose = FALSE
+    )
+    
+    # Get weights for ATT
+    weights <- get.weights(ps_model, stop.method = "es.mean")
+    
+    return(list(
+      model = ps_model,
+      ps_scores = ps_model$ps[, "es.mean"],
+      weights = weights,
+      method = "twang"
+    ))
+    
+  } else if (method == "cbps") {
+    # CBPS via WeightIt
+    ps_model <- weightit(
+      formula,
+      data = data,
+      method = "cbps",
+      estimand = "ATT"
+    )
+    
+    return(list(
+      model = ps_model,
+      ps_scores = ps_model$ps,
+      weights = ps_model$weights,
+      method = "cbps"
+    ))
+  }
+}
+
+# Calculate PS for each imputed dataset using each method
+message("\nCalculating propensity scores...")
+
+for (i in 1:n_imputations) {
+  message("Processing imputation ", i, " of ", n_imputations)
+  
+  ps_results[[i]] <- list()
+  
+  # GLM
+  ps_results[[i]][["glm"]] <- calculate_ps(imputed_datasets[[i]], method = "glm")
+  
+  # Twang GBM
+  ps_results[[i]][["twang"]] <- calculate_ps(imputed_datasets[[i]], method = "twang")
+  
+  # CBPS
+  ps_results[[i]][["cbps"]] <- calculate_ps(imputed_datasets[[i]], method = "cbps")
+}
+
+message("Propensity score calculation complete")
+```
+
+## Balance Assessment
+
+```{r balance-assessment}
+# Function to assess balance
+assess_balance <- function(data, weights, formula = ps_formula) {
+  # Create weighted data
+  data$weights <- weights
+  
+  # Use cobalt for balance assessment
+  bal_tab <- bal.tab(
+    formula,
+    data = data,
+    weights = "weights",
+    estimand = "ATT",
+    stats = c("mean.diffs", "variance.ratios"),
+    thresholds = c(m = 0.1, v = 2)
+  )
+  
+  # Extract key metrics
+  balance_summary <- data.frame(
+    Mean_SMD = mean(abs(bal_tab$Balance$Diff.Adj), na.rm = TRUE),
+    Max_SMD = max(abs(bal_tab$Balance$Diff.Adj), na.rm = TRUE),
+    N_Imbalanced = sum(abs(bal_tab$Balance$Diff.Adj) > 0.1, na.rm = TRUE),
+    Min_VR = min(bal_tab$Balance$V.Ratio.Adj, na.rm = TRUE),
+    Max_VR = max(bal_tab$Balance$V.Ratio.Adj, na.rm = TRUE)
+  )
+  
+  return(list(
+    bal_tab = bal_tab,
+    summary = balance_summary
+  ))
+}
+
+# Assess balance for each method and imputation
+balance_results <- list()
+
+for (i in 1:n_imputations) {
+  balance_results[[i]] <- list()
+  
+  for (method in c("glm", "twang", "cbps")) {
+    balance_results[[i]][[method]] <- assess_balance(
+      imputed_datasets[[i]],
+      ps_results[[i]][[method]]$weights
+    )
+  }
+}
+
+# Summarize balance across imputations
+balance_summary_all <- data.frame()
+
+for (method in c("glm", "twang", "cbps")) {
+  method_summaries <- lapply(1:n_imputations, function(i) {
+    balance_results[[i]][[method]]$summary
+  })
+  
+  avg_summary <- data.frame(
+    Method = method,
+    Mean_SMD = mean(sapply(method_summaries, function(x) x$Mean_SMD)),
+    Max_SMD = mean(sapply(method_summaries, function(x) x$Max_SMD)),
+    N_Imbalanced = mean(sapply(method_summaries, function(x) x$N_Imbalanced)),
+    Min_VR = mean(sapply(method_summaries, function(x) x$Min_VR)),
+    Max_VR = mean(sapply(method_summaries, function(x) x$Max_VR))
+  )
+  
+  balance_summary_all <- rbind(balance_summary_all, avg_summary)
+}
+
+message("\nBalance Summary Across All Imputations:")
+print(balance_summary_all)
+kable(balance_summary_all, 
+      caption = "Average balance metrics across imputed datasets",
+      digits = 3)
+```
+
+## Diagnostics for Sample of Imputations
+
+```{r diagnostics-plots}
+#| fig-height: 8
+#| fig-width: 12
+
+# Select imputations to show diagnostics for
+n_to_show <- min(max_imputations_for_diagnostics, n_imputations)
+imps_to_show <- 1:n_to_show
+
+message("\nGenerating diagnostic plots for ", n_to_show, " imputations...")
+
+# Function to create love plot
+create_love_plot <- function(bal_tab_obj, title) {
+  love.plot(
+    bal_tab_obj,
+    stat = "mean.diffs",
+    threshold = 0.1,
+    title = title,
+    colors = c("red", "blue")
+  )
+}
+
+# Generate plots for each method and selected imputations
+for (method in c("glm", "twang", "cbps")) {
+  message("\nDiagnostics for ", toupper(method), ":")
+  
+  plot_list <- list()
+  
+  for (i in imps_to_show) {
+    # Love plot
+    plot_list[[i]] <- create_love_plot(
+      balance_results[[i]][[method]]$bal_tab,
+      paste0(toupper(method), " - Imputation ", i)
+    )
+  }
+  
+  # Arrange plots in grid
+  if (length(plot_list) > 0) {
+    do.call(gridExtra::grid.arrange, c(plot_list, ncol = 2))
+  }
+}
+```
+
+## Propensity Score Distribution
+
+```{r ps-distribution}
+#| fig-height: 6
+#| fig-width: 10
+
+# Plot PS distribution for first few imputations
+for (i in imps_to_show) {
+  message("\nPropensity score distributions for imputation ", i)
+  
+  # Create data for plotting
+  plot_data <- data.frame(
+    ps_glm = ps_results[[i]][["glm"]]$ps_scores,
+    ps_twang = ps_results[[i]][["twang"]]$ps_scores,
+    ps_cbps = ps_results[[i]][["cbps"]]$ps_scores,
+    treatment = factor(imputed_datasets[[i]]$ever_lapse_binary,
+                      levels = c(0, 1),
+                      labels = c("Control", "Treated"))
+  )
+  
+  # GLM distribution
+  p1 <- ggplot(plot_data, aes(x = ps_glm, fill = treatment)) +
+    geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+    labs(title = paste("GLM - Imputation", i),
+         x = "Propensity Score",
+         y = "Count") +
+    theme_minimal() +
+    scale_fill_manual(values = c("blue", "red"))
+  
+  # Twang distribution
+  p2 <- ggplot(plot_data, aes(x = ps_twang, fill = treatment)) +
+    geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+    labs(title = paste("Twang GBM - Imputation", i),
+         x = "Propensity Score",
+         y = "Count") +
+    theme_minimal() +
+    scale_fill_manual(values = c("blue", "red"))
+  
+  # CBPS distribution
+  p3 <- ggplot(plot_data, aes(x = ps_cbps, fill = treatment)) +
+    geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+    labs(title = paste("CBPS - Imputation", i),
+         x = "Propensity Score",
+         y = "Count") +
+    theme_minimal() +
+    scale_fill_manual(values = c("blue", "red"))
+  
+  # Arrange plots
+  grid.arrange(p1, p2, p3, ncol = 3)
+}
+```
+
+## Weight Distribution
+
+```{r weight-distribution}
+# Summarize weight distributions
+weight_summary <- data.frame()
+
+for (method in c("glm", "twang", "cbps")) {
+  for (i in 1:n_imputations) {
+    weights <- ps_results[[i]][[method]]$weights
+    treated <- imputed_datasets[[i]]$ever_lapse_binary == 1
+    
+    summary_row <- data.frame(
+      Method = method,
+      Imputation = i,
+      Mean_Weight_Control = mean(weights[!treated]),
+      SD_Weight_Control = sd(weights[!treated]),
+      Max_Weight_Control = max(weights[!treated]),
+      Mean_Weight_Treated = mean(weights[treated]),
+      SD_Weight_Treated = sd(weights[treated])
+    )
+    
+    weight_summary <- rbind(weight_summary, summary_row)
+  }
+}
+
+# Average across imputations
+weight_summary_avg <- weight_summary |>
+  group_by(Method) |>
+  summarise(
+    Mean_Weight_Control = mean(Mean_Weight_Control),
+    SD_Weight_Control = mean(SD_Weight_Control),
+    Max_Weight_Control = mean(Max_Weight_Control),
+    Mean_Weight_Treated = mean(Mean_Weight_Treated),
+    SD_Weight_Treated = mean(SD_Weight_Treated)
+  )
+
+message("\nWeight Distribution Summary:")
+print(weight_summary_avg)
+kable(weight_summary_avg,
+      caption = "Average weight distributions across imputed datasets",
+      digits = 3)
+```
+
+## Save Propensity Score Results
+
+```{r save-results}
+# Save PS results for use in outcome analysis
+ps_output <- list(
+  ps_results = ps_results,
+  balance_results = balance_results,
+  balance_summary = balance_summary_all,
+  weight_summary = weight_summary_avg,
+  formula_used = ps_formula,
+  n_imputations = n_imputations,
+  methods_used = c("glm", "twang", "cbps")
+)
+
+saveRDS(ps_output, file.path(reanalysis_data_dir, "ps_results.rds"))
+
+message("\nPropensity score results saved to: ", 
+        file.path(reanalysis_data_dir, "ps_results.rds"))
+```
+
+## Summary
+
+```{r summary}
+# Final summary
+message("\n=== PROPENSITY SCORE ANALYSIS SUMMARY ===")
+message("Imputations processed: ", n_imputations)
+message("Methods used: GLM, Twang GBM, CBPS")
+message("Formula included: DR severity (person_dr) and treatment type")
+
+# Best balance
+best_method <- balance_summary_all$Method[which.min(balance_summary_all$Mean_SMD)]
+message("\nBest balance achieved with: ", best_method)
+message("Mean SMD: ", round(balance_summary_all$Mean_SMD[balance_summary_all$Method == best_method], 3))
+message("Max SMD: ", round(balance_summary_all$Max_SMD[balance_summary_all$Method == best_method], 3))
+
+# Flag any concerning imbalance
+if (any(balance_summary_all$Max_SMD > 0.25)) {
+  message("\n⚠ Warning: Some methods have max SMD > 0.25, indicating residual imbalance")
+}
+
+if (any(balance_summary_all$Max_VR > 4 | balance_summary_all$Min_VR < 0.25)) {
+  message("⚠ Warning: Some methods have extreme variance ratios")
+}
+```
+
+## Next Steps
+
+1. **Outcome Analysis** (`reanalysis-4-outcome_analysis.qmd`):
+   - Apply weights to outcome models
+   - Estimate treatment effects for each imputation
+   - Pool results using Rubin's rules
+   
+2. **Sensitivity Analysis** (`reanalysis-5-sensitivity.qmd`):
+   - Compare different PS methods
+   - Assess robustness to model specification

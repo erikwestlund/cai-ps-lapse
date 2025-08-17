@@ -58,22 +58,48 @@ create_treatment_type <- function(data) {
 
 # Create DR severity variables (all versions)
 create_dr_severity_variables <- function(data) {
-  data |>
-    mutate(
-      # Detailed severity (0-4 scale)
-      person_dr_severity = case_when(
-        No_DR == TRUE ~ 0,
-        NPDR == "Mild" ~ 1,
-        NPDR == "Moderate" ~ 2,
-        NPDR == "Severe" ~ 3,
-        PDR == "Present" ~ 4,
-        TRUE ~ NA_real_
-      ),
-      # Factor version for interaction models
-      dr_severity = factor(person_dr,
-                          levels = c(0, 1, 2),
-                          labels = c("No_DR", "NPDR", "PDR"))
-    )
+  # Check if we have the source columns or just person_dr
+  if (all(c("No_DR", "NPDR", "PDR") %in% names(data))) {
+    # We have source columns, create person_dr_severity from them
+    data |>
+      mutate(
+        # Detailed severity (0-4 scale)
+        person_dr_severity = case_when(
+          No_DR == TRUE ~ 0,
+          NPDR == "Mild" ~ 1,
+          NPDR == "Moderate" ~ 2,
+          NPDR == "Severe" ~ 3,
+          PDR == "Present" ~ 4,
+          TRUE ~ NA_real_
+        ),
+        # Factor version for interaction models
+        dr_severity = factor(person_dr,
+                            levels = c(0, 1, 2),
+                            labels = c("No_DR", "NPDR", "PDR"))
+      )
+  } else {
+    # We only have person_dr (from imputation), create simplified versions
+    # Convert back from factor if needed
+    if (is.factor(data$person_dr)) {
+      # If person_dr is a factor from imputation, convert to numeric
+      person_dr_num <- as.numeric(as.character(factor(data$person_dr, 
+                                                      labels = c(0, 1, 2))))
+    } else {
+      person_dr_num <- data$person_dr
+    }
+    
+    data |>
+      mutate(
+        person_dr = person_dr_num,
+        # For imputed data, we can't distinguish NPDR subtypes
+        # So person_dr_severity will be same as person_dr
+        person_dr_severity = person_dr_num,
+        # Factor version for interaction models
+        dr_severity = factor(person_dr_num,
+                            levels = c(0, 1, 2),
+                            labels = c("No_DR", "NPDR", "PDR"))
+      )
+  }
 }
 
 # Load and preprocess data
