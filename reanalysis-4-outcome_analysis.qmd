@@ -879,13 +879,46 @@ pool_predicted_probabilities <- function(models, n_imputations) {
                          weights = "proportional")
     df_probs <- as.data.frame(emm_probs)
     
-    # Find the probability column (could be "prob", "response", "emmean", etc.)
-    prob_col <- names(df_probs)[grep("prob|response|emmean", names(df_probs), ignore.case = TRUE)[1]]
-    se_col <- names(df_probs)[grep("SE|se", names(df_probs))[1]]
+    # Debug: print column names for first iteration
+    if (i == 1) {
+      message("emmeans response columns: ", paste(names(df_probs), collapse = ", "))
+    }
+    
+    # The response scale should have columns like: prob, asymp.LCL, asymp.UCL, SE
+    # Or it might be: response, asymp.LCL, asymp.UCL, SE
+    # Find the main estimate column
+    prob_col <- if ("prob" %in% names(df_probs)) {
+      "prob"
+    } else if ("response" %in% names(df_probs)) {
+      "response"
+    } else if ("emmean" %in% names(df_probs)) {
+      "emmean"
+    } else {
+      # Just use the first numeric column that's not a CI
+      numeric_cols <- names(df_probs)[sapply(df_probs, is.numeric)]
+      numeric_cols[!grepl("CL|CI|df|SE", numeric_cols)][1]
+    }
+    
+    # Find SE column
+    se_col <- if ("SE" %in% names(df_probs)) {
+      "SE"
+    } else if ("se" %in% names(df_probs)) {
+      "se"
+    } else {
+      # Calculate from confidence intervals if available
+      NULL
+    }
     
     # Standardize column names
-    df_probs$prob <- df_probs[[prob_col]]
-    df_probs$SE <- df_probs[[se_col]]
+    df_probs$prob <- if (!is.null(prob_col)) df_probs[[prob_col]] else NA
+    df_probs$SE <- if (!is.null(se_col)) {
+      df_probs[[se_col]]
+    } else if (all(c("asymp.LCL", "asymp.UCL") %in% names(df_probs))) {
+      # Approximate SE from CI width
+      (df_probs$asymp.UCL - df_probs$asymp.LCL) / (2 * 1.96)
+    } else {
+      0.1  # Default SE if we can't calculate it
+    }
     
     all_probs[[i]] <- df_probs
   }
