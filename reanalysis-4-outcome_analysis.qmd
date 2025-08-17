@@ -816,7 +816,7 @@ ame_display <- ame_results |>
     CI = paste0("(", round(CI_Lower, 4), ", ", round(CI_Upper, 4), ")"),
     P_Value = format.pval(2 * pnorm(-abs(AME/SE)), digits = 4, eps = 0.0001)
   ) |>
-  select(DR_Severity, Treatment, N, AME, SE, CI, P_Value)
+  dplyr::select(DR_Severity, Treatment, N, AME, SE, CI, P_Value)
 
 kable(ame_display,
       caption = "Average Marginal Effects of Lapsing by Subgroup",
@@ -873,7 +873,7 @@ if (!is.null(prob_col_name) && length(available_factor_cols) >= 3) {
     mutate(
       Probability = round(.data[[prob_col_name]], 3)
     ) |>
-    select(all_of(available_factor_cols), Probability)
+    dplyr::select(all_of(available_factor_cols), Probability)
   
   # Try to pivot if we have the lapse column
   if ("ever_lapse_binary" %in% names(prob_table)) {
