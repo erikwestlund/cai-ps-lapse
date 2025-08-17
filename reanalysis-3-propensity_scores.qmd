@@ -16,10 +16,8 @@ setup_analysis(seed = 2025)
 
 # Additional packages
 library(twang)
-library(survey)
-library(cobalt)
 library(ggplot2)
-library(gridExtra)
+library(gridExtra)  # For arranging multiple plots
 library(knitr)
 
 # ANALYSIS MODE: Use same as imputation
