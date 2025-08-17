@@ -877,7 +877,17 @@ pool_predicted_probabilities <- function(models, n_imputations) {
                          ~ ever_lapse_binary | dr_severity * any_treatment,
                          type = "response",
                          weights = "proportional")
-    all_probs[[i]] <- as.data.frame(emm_probs)
+    df_probs <- as.data.frame(emm_probs)
+    
+    # Find the probability column (could be "prob", "response", "emmean", etc.)
+    prob_col <- names(df_probs)[grep("prob|response|emmean", names(df_probs), ignore.case = TRUE)[1]]
+    se_col <- names(df_probs)[grep("SE|se", names(df_probs))[1]]
+    
+    # Standardize column names
+    df_probs$prob <- df_probs[[prob_col]]
+    df_probs$SE <- df_probs[[se_col]]
+    
+    all_probs[[i]] <- df_probs
   }
   
   # Pool probabilities
@@ -894,7 +904,7 @@ pool_predicted_probabilities <- function(models, n_imputations) {
   )
   
   for (j in 1:n_cells) {
-    # Extract probabilities for this cell
+    # Extract probabilities for this cell - now we know the column exists
     probs <- sapply(all_probs, function(x) x$prob[j])
     ses <- sapply(all_probs, function(x) x$SE[j])
     
