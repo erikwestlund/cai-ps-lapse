@@ -2,6 +2,80 @@
 # Shared functions for the PS Lapse analysis project
 # Created: 2025-08-05
 
+# Transformation functions for reuse across data preparation and imputation
+# These ensure consistency when creating derived variables
+
+# Create person_dr from No_DR/NPDR/PDR columns
+create_person_dr <- function(data) {
+  data |>
+    mutate(
+      person_dr = case_when(
+        No_DR == TRUE ~ 0,
+        NPDR == "Mild" | NPDR == "Moderate" | NPDR == "Severe" ~ 1,
+        PDR == "Present" ~ 2,
+        TRUE ~ NA_real_  # Handle missing/undefined cases
+      )
+    )
+}
+
+# Create outcome variables from logMAR
+create_outcome_variables <- function(data) {
+  data |>
+    mutate(
+      outcome_va_vi = outcome_VA_logMAR >= 0.3,
+      outcome_va_vi_binary = if_else(outcome_va_vi, 1, 0),
+      outcome_va_blind = outcome_VA_logMAR >= 1,
+      outcome_va_blind_binary = if_else(outcome_va_blind, 1, 0)
+    )
+}
+
+# Create age categories from continuous age
+create_age_cat <- function(data) {
+  data |>
+    mutate(
+      age_cat = cut(age, 
+                   breaks = c(0, 20, 45, 65, Inf), 
+                   labels = c("0-20", "21-45", "46-65", "65+"))
+    )
+}
+
+# Create treatment type from individual treatment flags
+create_treatment_type <- function(data) {
+  data |>
+    mutate(
+      treatment_type = case_when(
+        anti_VEGF == 1 ~ "anti_VEGF",
+        PRP_flag == 1 ~ "PRP",
+        other_inject == 1 | focal_laser_flag == 1 ~ "other_treatment",
+        TRUE ~ "no_treatment"
+      ),
+      treatment_type = factor(treatment_type, 
+                             levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment")),
+      any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
+                                other_inject == 1 | focal_laser_flag == 1)
+    )
+}
+
+# Create DR severity variables (all versions)
+create_dr_severity_variables <- function(data) {
+  data |>
+    mutate(
+      # Detailed severity (0-4 scale)
+      person_dr_severity = case_when(
+        No_DR == TRUE ~ 0,
+        NPDR == "Mild" ~ 1,
+        NPDR == "Moderate" ~ 2,
+        NPDR == "Severe" ~ 3,
+        PDR == "Present" ~ 4,
+        TRUE ~ NA_real_
+      ),
+      # Factor version for interaction models
+      dr_severity = factor(person_dr,
+                          levels = c(0, 1, 2),
+                          labels = c("No_DR", "NPDR", "PDR"))
+    )
+}
+
 # Load and preprocess data
 load_and_prepare_data <- function(data_path) {
   data <- readr::read_csv(data_path) |> 

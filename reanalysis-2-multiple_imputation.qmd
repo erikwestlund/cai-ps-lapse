@@ -1,0 +1,352 @@
+---
+title: "Reanalysis Step 2: Multiple Imputation"
+subtitle: "Imputing missing values using mice package"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+# Setup analysis environment
+source("dependencies.R")
+setup_analysis()
+
+# Additional packages for imputation
+library(mice)
+library(VIM)
+library(naniar)
+```
+
+## Load Prepared Data
+
+```{r load-data}
+# Load the prepared dataset from Step 1
+df_for_imputation <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
+variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
+
+# Extract variable lists
+ps_model_vars <- variable_lists$ps_model_vars
+outcome_model_vars <- variable_lists$outcome_model_vars
+```
+
+## Define Variables for Imputation
+
+```{r define-imputation-vars}
+# Variables to include in imputation model (following Rubin's guidance)
+# Include: outcome, exposure, all covariates SOURCE variables only
+# Derived variables will be recreated post-imputation
+
+# Core analysis variables - SOURCE ONLY
+imputation_vars <- c(
+  # Patient ID (not imputed, just kept)
+  "e_mrn_deidentified",
+  
+  # Outcome variable - SOURCE ONLY
+  "outcome_VA_logMAR",  # Continuous version (source)
+  # NOT outcome_va_vi_binary - derived from logMAR >= 0.3
+  
+  # Exposure
+  "ever_lapse_binary",
+  
+  # Demographics/Clinical - SOURCE ONLY
+  "baseline_VA_logMAR",
+  "gender_cat",
+  "race_ethnic_cat",
+  "insurance_cat",
+  "age",  # Continuous age (source)
+  # NOT age_cat - derived from cut(age)
+  "CCI",
+  "DCSI",
+  
+  # Treatment indicators - ALL SOURCES
+  "other_inject",
+  "anti_VEGF",
+  "focal_laser_flag",
+  "PRP_flag",
+  # NOT treatment_type or any_treatment - derived from these 4
+  
+  # Comorbidities (already recoded to 0/1)
+  "glaucoma_bef_hitplus_cat",
+  "otherretina_bef_hitplus_cat",
+  "catsurg_before_hitplus_cat",
+  
+  # DR severity - use person_dr (created from No_DR/NPDR/PDR)
+  "person_dr"  # Numeric 0/1/2
+  # NOT dr_severity or person_dr_severity - derived from person_dr
+)
+
+# Select only imputation variables
+df_mice <- df_for_imputation |>
+  dplyr::select(dplyr::all_of(imputation_vars))
+```
+
+## Assess Missing Data Pattern
+
+```{r missing-pattern}
+# Visualize missing data pattern
+missing_pattern <- md.pattern(df_mice, rotate.names = TRUE)
+
+# Summary of missingness
+miss_summary <- df_mice |>
+  miss_var_summary() |>
+  filter(n_miss > 0)
+
+miss_summary |>
+  kable(caption = "Variables with missing data")
+
+# Visualize missingness relationships
+gg_miss_upset(df_mice, nsets = 10)
+```
+
+## Setup Imputation Model
+
+```{r setup-mice}
+# Initialize mice
+# First, do a dry run to check the imputation setup
+mice_dry <- mice(df_mice, maxit = 0, printFlag = FALSE)
+
+# Check default imputation methods
+method_table <- data.frame(
+  Variable = names(mice_dry$method),
+  Method = mice_dry$method,
+  stringsAsFactors = FALSE
+) |>
+  filter(Method != "")
+
+method_table |>
+  kable(caption = "Default imputation methods by variable")
+
+# Customize imputation methods as needed
+custom_methods <- mice_dry$method
+
+# Use predictive mean matching for continuous/count variables
+custom_methods["CCI"] <- "pmm"  # Predictive mean matching for count data
+custom_methods["DCSI"] <- "pmm"  # Predictive mean matching for count data
+custom_methods["baseline_VA_logMAR"] <- "pmm"
+custom_methods["age"] <- "pmm"
+custom_methods["outcome_VA_logMAR"] <- "pmm"  # If any missing
+
+# Use proportional odds model for ordinal person_dr (0/1/2)
+custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
+
+# Use logistic regression for binary variables
+custom_methods["catsurg_before_hitplus_cat"] <- "logreg"
+
+# Use polytomous regression for categorical variables with >2 levels
+custom_methods["race_ethnic_cat"] <- "polyreg"
+custom_methods["insurance_cat"] <- "polyreg"
+
+# Don't impute these (already complete)
+custom_methods["e_mrn_deidentified"] <- ""
+custom_methods["ever_lapse_binary"] <- ""
+custom_methods["glaucoma_bef_hitplus_cat"] <- ""  # Already recoded
+custom_methods["otherretina_bef_hitplus_cat"] <- ""  # Already recoded
+
+# Check predictor matrix (which variables predict which)
+pred_matrix <- mice_dry$predictorMatrix
+
+# Don't use ID as predictor
+pred_matrix[, "e_mrn_deidentified"] <- 0
+pred_matrix["e_mrn_deidentified", ] <- 0
+
+# Ensure outcome is used to predict missingness (important for MAR assumption)
+pred_matrix[, "outcome_VA_logMAR"] <- 1
+pred_matrix["outcome_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Don't predict itself
+
+# Ensure exposure is used as predictor
+pred_matrix[, "ever_lapse_binary"] <- 1
+pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
+```
+
+## Run Multiple Imputation
+
+```{r run-imputation}
+# Set seed for reproducibility
+set.seed(2024)
+
+# Number of imputations (typically 20-40 for small amounts of missingness)
+n_imputations <- 30
+
+# Run mice imputation
+# Note: This may take several minutes depending on dataset size
+message("Starting multiple imputation with ", n_imputations, " imputations...")
+message("This may take several minutes...")
+
+mice_results <- mice(
+  df_mice,
+  m = n_imputations,
+  method = custom_methods,
+  predictorMatrix = pred_matrix,
+  maxit = 20,  # Number of iterations per imputation
+  seed = 2024,
+  printFlag = TRUE
+)
+
+# Check convergence
+plot(mice_results)
+```
+
+## Imputation Diagnostics
+
+```{r imputation-diagnostics}
+# Check imputed values for key variables
+
+# CCI - compare observed vs imputed
+if(sum(is.na(df_mice$CCI)) > 0) {
+  densityplot(mice_results, ~ CCI) |> print()
+  stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.2) |> print()
+}
+
+# DCSI - compare observed vs imputed  
+if(sum(is.na(df_mice$DCSI)) > 0) {
+  densityplot(mice_results, ~ DCSI) |> print()
+  stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.2) |> print()
+}
+
+# Baseline VA - compare observed vs imputed
+if(sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ baseline_VA_logMAR) |> print()
+  stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.2) |> print()
+}
+
+# Person DR - compare observed vs imputed
+if(sum(is.na(df_mice$person_dr)) > 0) {
+  # Check distribution of imputed values
+  prop_table_dr <- with(mice_results, table(person_dr)) |> 
+    lapply(prop.table) |> 
+    do.call(rbind, args = _)
+  
+  message("Proportion of DR severity (0=No DR, 1=NPDR, 2=PDR) across imputations:")
+  print(summary(prop_table_dr))
+}
+
+# Check imputation quality for categorical variables
+# Cataract surgery
+if(sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
+  prop_table <- with(mice_results, table(catsurg_before_hitplus_cat)) |> 
+    lapply(prop.table) |> 
+    do.call(rbind, args = _)
+  
+  message("Proportion of cataract surgery across imputations:")
+  print(summary(prop_table))
+}
+```
+
+## Create Complete Datasets and Derive Variables
+
+```{r complete-datasets}
+# Extract all imputed datasets
+imputed_datasets <- complete(mice_results, action = "all")
+
+# Apply transformation functions to recreate derived variables
+message("Recreating derived variables for each imputed dataset...")
+
+imputed_datasets <- lapply(1:n_imputations, function(i) {
+  imp_data <- imputed_datasets[[i]]
+  
+  # Apply transformation functions to recreate all derived variables
+  imp_data <- imp_data |>
+    create_outcome_variables() |>  # Creates outcome_va_vi_binary from logMAR
+    create_age_cat() |>  # Creates age_cat from continuous age  
+    create_treatment_type() |>  # Creates treatment_type and any_treatment
+    create_dr_severity_variables()  # Creates dr_severity factor from person_dr
+  
+  return(imp_data)
+})
+
+# Add back any variables not included in imputation or transformation
+# Get the full original dataset
+df_original_full <- df_for_imputation
+
+# Variables to add back (those not in imputation model or created by transformations)
+vars_in_imputed <- names(imputed_datasets[[1]])
+vars_to_add <- setdiff(names(df_original_full), vars_in_imputed)
+
+if(length(vars_to_add) > 0) {
+  message("Adding back ", length(vars_to_add), " variables not in imputation model...")
+  
+  # Add these variables back to each imputed dataset
+  imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
+    imp_data <- imp_data |>
+      left_join(
+        df_original_full |> 
+          dplyr::select(e_mrn_deidentified, dplyr::all_of(vars_to_add)),
+        by = "e_mrn_deidentified"
+      )
+    
+    return(imp_data)
+  })
+}
+
+# Verify completeness
+completeness_check <- lapply(imputed_datasets, function(d) {
+  sum(!complete.cases(d[, ps_model_vars]))
+})
+
+message("Number of incomplete cases in PS model variables per imputed dataset:")
+print(unlist(completeness_check))
+```
+
+## Save Imputed Datasets
+
+```{r save-imputed}
+# Save mice object for later use
+saveRDS(mice_results, file.path(reanalysis_data_dir, "mice_results.rds"))
+
+# Save list of complete imputed datasets
+saveRDS(imputed_datasets, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+
+# Save first imputed dataset separately for testing
+saveRDS(imputed_datasets[[1]], file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
+
+message("Saved ", n_imputations, " imputed datasets to: ", reanalysis_data_dir)
+```
+
+## Summary
+
+```{r summary}
+# Summary of imputation
+summary_table <- tibble(
+  Metric = c(
+    "Original observations",
+    "Variables in imputation model",
+    "Variables with missing data",
+    "Number of imputations",
+    "Maximum missing percentage",
+    "Imputation iterations"
+  ),
+  Value = c(
+    nrow(df_mice),
+    ncol(df_mice),
+    sum(mice_results$nmis > 0),
+    n_imputations,
+    paste0(round(max(mice_results$nmis/nrow(df_mice)) * 100, 1), "%"),
+    mice_results$iteration
+  )
+)
+
+summary_table |>
+  kable(caption = "Multiple imputation summary")
+
+# Variables that were imputed
+imputed_vars <- names(mice_results$nmis)[mice_results$nmis > 0]
+message("\nVariables that were imputed:")
+print(imputed_vars)
+```
+
+## Next Steps
+
+1. **Propensity Score Analysis** (`reanalysis-3-propensity_scores.qmd`): 
+   - Calculate propensity scores on each imputed dataset
+   - Apply matching/weighting methods
+   
+2. **Outcome Analysis** (`reanalysis-4-outcome_analysis.qmd`):
+   - Fit outcome models on each dataset
+   - Pool results using Rubin's rules
+   
+3. **Sensitivity Analysis** (`reanalysis-5-sensitivity.qmd`):
+   - Compare with complete case analysis
+   - Assess impact of imputation on results

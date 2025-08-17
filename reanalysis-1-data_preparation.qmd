@@ -85,59 +85,20 @@ all_analysis_vars <- c(
 ## Variable Creation
 
 ```{r create-variables}
-# Create analysis dataset with necessary transformations
+# Step 1: Create person_dr first (needed for imputation)
 df_analysis <- df_combined |>
+  create_person_dr()  # Creates person_dr from No_DR/NPDR/PDR
+
+# Step 2: Create other core variables
+df_analysis <- df_analysis |>
   mutate(
-    # Outcome variables
-    outcome_va_vi = outcome_VA_logMAR >= 0.3,
-    outcome_va_vi_binary = if_else(outcome_va_vi, 1, 0),
-    outcome_va_blind = outcome_VA_logMAR >= 1,
-    outcome_va_blind_binary = if_else(outcome_va_blind, 1, 0),
-    
     # Exposure variable
     ever_lapse_binary = if_else(person_ever_lapse == TRUE, 1, 0),
     
-    # Demographic factors
+    # Demographic factors (keep as factors for models)
     gender_cat = factor(gender),
     race_ethnic_cat = factor(race_ethnicity_gp),
     insurance_cat = factor(insurance_gp),
-    age_cat = cut(age, breaks = c(0, 20, 45, 65, Inf), 
-                  labels = c("0-20", "21-45", "46-65", "65+")),
-    
-    # DR severity (0 = No DR, 1 = NPDR, 2 = PDR)
-    person_dr = case_when(
-      No_DR == TRUE ~ 0,
-      NPDR == "Mild" | NPDR == "Moderate" | NPDR == "Severe" ~ 1,
-      PDR == "Present" ~ 2
-    ),
-    
-    # DR severity detailed (for stratified analyses)
-    person_dr_severity = case_when(
-      No_DR == TRUE ~ 0,
-      NPDR == "Mild" ~ 1,
-      NPDR == "Moderate" ~ 2,
-      NPDR == "Severe" ~ 3,
-      PDR == "Present" ~ 4
-    ),
-    
-    # DR severity factor for interaction models
-    dr_severity = factor(person_dr,
-                        levels = c(0, 1, 2),
-                        labels = c("No_DR", "NPDR", "PDR")),
-    
-    # Treatment type categorization
-    treatment_type = case_when(
-      anti_VEGF == 1 ~ "anti_VEGF",
-      PRP_flag == 1 ~ "PRP",
-      other_inject == 1 | focal_laser_flag == 1 ~ "other_treatment",
-      TRUE ~ "no_treatment"
-    ),
-    treatment_type = factor(treatment_type, 
-                           levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment")),
-    
-    # Binary treatment indicator
-    any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
-                              other_inject == 1 | focal_laser_flag == 1),
     
     # Comorbidity indicators as factors (missing = no condition)
     glaucoma_bef_hitplus_cat = factor(case_when(
@@ -156,6 +117,13 @@ df_analysis <- df_combined |>
     focal_laser_flag = factor(focal_laser_flag),
     PRP_flag = factor(PRP_flag)
   )
+
+# Step 3: Create derived variables using transformation functions
+df_analysis <- df_analysis |>
+  create_outcome_variables() |>  # Creates outcome_va_vi_binary from logMAR
+  create_age_cat() |>  # Creates age_cat from continuous age
+  create_treatment_type() |>  # Creates treatment_type and any_treatment
+  create_dr_severity_variables()  # Creates person_dr_severity and dr_severity factor
 ```
 
 ## Missing Data Assessment
