@@ -273,41 +273,35 @@ for (i in imps_to_show) {
   weights <- twang_results[[i]]$weights
   treated <- imputed_datasets[[i]]$ever_lapse_binary == 1
   
-  # Extract propensity scores - twang stores them in the ps slot
-  ps_scores <- tryCatch({
-    if (!is.null(twang_model$ps)) {
-      # ps can be a matrix (multiple stop methods) or vector (single stop method)
-      if (is.matrix(twang_model$ps) || is.data.frame(twang_model$ps)) {
-        twang_model$ps[, 1]  # Get first column
-      } else {
-        twang_model$ps  # Already a vector
-      }
-    } else {
-      # Shouldn't happen but fallback to weights
-      weights
-    }
-  }, error = function(e) {
-    weights  # Use weights as fallback
-  })
+  # For twang models, propensity scores may not be directly accessible
+  # We can use the weights to show distribution instead
+  # Since weights = 1/PS for treated and 1/(1-PS) for control in ATT weighting
   
-  # Create simple histograms
+  # Create histograms of weights instead of propensity scores
   par(mfrow = c(1, 2))
   
-  # Control group
-  hist(ps_scores[!treated], 
-       main = paste("Control - Imputation", i),
-       xlab = "Propensity Score",
+  # Control group weights
+  hist(weights[!treated], 
+       main = paste("Weights: Control - Imputation", i),
+       xlab = "Weight",
        col = "lightblue",
        breaks = 20)
   
-  # Treated group  
-  hist(ps_scores[treated],
-       main = paste("Treated - Imputation", i),
-       xlab = "Propensity Score", 
+  # Treated group weights (should all be 1 for ATT)
+  hist(weights[treated],
+       main = paste("Weights: Treated - Imputation", i),
+       xlab = "Weight", 
        col = "lightcoral",
        breaks = 20)
   
   par(mfrow = c(1, 1))
+  
+  # Also show weight summary
+  message("  Weight summary:")
+  message("    Control: mean = ", round(mean(weights[!treated]), 3), 
+          ", max = ", round(max(weights[!treated]), 3))
+  message("    Treated: mean = ", round(mean(weights[treated]), 3),
+          " (should be 1.0 for ATT)")
 }
 ```
 
