@@ -122,7 +122,11 @@ load_required_libraries <- function() {
 }
 
 # Setup function for quarto documents
-setup_analysis <- function() {
+setup_analysis <- function(seed = 2025) {
+  # Set seed for reproducibility
+  set.seed(seed)
+  cat("Random seed set to:", seed, "\n")
+  
   # Source configuration files
   source("settings.R")
   source("functions.R")

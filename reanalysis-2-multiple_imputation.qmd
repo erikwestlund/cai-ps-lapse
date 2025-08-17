@@ -10,17 +10,32 @@ format: html
 
 ```{r setup}
 #| include: false
-# Set seed for reproducibility
-set.seed(2024)
-
-# Setup analysis environment
+# Setup analysis environment (includes seed setting)
 source("dependencies.R")
-setup_analysis()
+setup_analysis(seed = 2025)
 
 # Additional packages for imputation
 library(mice)
 library(VIM)
 library(naniar)
+
+# ANALYSIS MODE: "test" or "final"
+# test = 2 imputations, 5 iterations (fast)
+# final = 30 imputations, 20 iterations (slow but thorough)
+analysis_mode <- "test"  # Change to "final" for production run
+
+# Set parameters based on mode
+if (analysis_mode == "test") {
+  n_imputations <- 2
+  n_iterations <- 5
+  message("Running in TEST mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
+} else if (analysis_mode == "final") {
+  n_imputations <- 30
+  n_iterations <- 20
+  message("Running in FINAL mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
+} else {
+  stop("Invalid analysis_mode. Must be 'test' or 'final'")
+}
 ```
 
 ## Load Prepared Data
@@ -83,7 +98,13 @@ imputation_vars <- c(
 
 # Select only imputation variables
 df_mice <- df_for_imputation |>
-  dplyr::select(dplyr::all_of(imputation_vars))
+  dplyr::select(dplyr::all_of(imputation_vars)) |>
+  mutate(
+    # Convert person_dr to ordered factor for polr imputation method
+    person_dr = factor(person_dr, levels = c(0, 1, 2), 
+                      labels = c("No_DR", "NPDR", "PDR"),
+                      ordered = TRUE)
+  )
 ```
 
 ## Assess Missing Data Pattern
@@ -111,6 +132,22 @@ gg_miss_upset(df_mice, nsets = 10)
 # First, do a dry run to check the imputation setup
 mice_dry <- mice(df_mice, maxit = 0, printFlag = FALSE)
 
+# Print initial imputation model summary
+message("=== IMPUTATION MODEL SETUP ===\n")
+message("Total variables in dataset: ", ncol(df_mice))
+message("Variables to be imputed: ", sum(mice_dry$nmis > 0))
+message("Total missing values: ", sum(mice_dry$nmis))
+message("\nMissing data by variable:")
+miss_vars <- data.frame(
+  Variable = names(mice_dry$nmis),
+  N_Missing = mice_dry$nmis,
+  Pct_Missing = round(mice_dry$nmis/nrow(df_mice) * 100, 1)
+) |>
+  filter(N_Missing > 0) |>
+  arrange(desc(N_Missing))
+
+print(miss_vars)
+
 # Check default imputation methods
 method_table <- data.frame(
   Variable = names(mice_dry$method),
@@ -119,8 +156,8 @@ method_table <- data.frame(
 ) |>
   filter(Method != "")
 
-method_table |>
-  kable(caption = "Default imputation methods by variable")
+message("\nDefault imputation methods:")
+print(method_table)
 
 # Customize imputation methods as needed
 custom_methods <- mice_dry$method
@@ -142,11 +179,20 @@ custom_methods["catsurg_before_hitplus_cat"] <- "logreg"
 custom_methods["race_ethnic_cat"] <- "polyreg"
 custom_methods["insurance_cat"] <- "polyreg"
 
-# Don't impute these (already complete)
-custom_methods["e_mrn_deidentified"] <- ""
-custom_methods["ever_lapse_binary"] <- ""
-custom_methods["glaucoma_bef_hitplus_cat"] <- ""  # Already recoded
-custom_methods["otherretina_bef_hitplus_cat"] <- ""  # Already recoded
+# Don't impute these variables (but they ARE still used as predictors!)
+# Method = "" means: use as predictor but don't impute
+custom_methods["e_mrn_deidentified"] <- ""  # ID - never impute
+custom_methods["ever_lapse_binary"] <- ""  # Complete - use as predictor only
+custom_methods["glaucoma_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
+custom_methods["otherretina_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
+custom_methods["gender_cat"] <- ""  # Likely complete
+custom_methods["other_inject"] <- ""  # Likely complete
+custom_methods["anti_VEGF"] <- ""  # Likely complete  
+custom_methods["focal_laser_flag"] <- ""  # Likely complete
+custom_methods["PRP_flag"] <- ""  # Likely complete
+
+# Note: Variables with method = "" are STILL USED as predictors for other variables
+# They just aren't imputed themselves
 
 # Check predictor matrix (which variables predict which)
 pred_matrix <- mice_dry$predictorMatrix
@@ -162,29 +208,74 @@ pred_matrix["outcome_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Don't predict itse
 # Ensure exposure is used as predictor
 pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
+
+# Print final imputation model configuration
+message("\n=== FINAL IMPUTATION MODEL ===\n")
+
+# Summary of methods
+final_methods <- data.frame(
+  Variable = names(custom_methods),
+  Method = custom_methods,
+  Type = case_when(
+    custom_methods == "" ~ "Predictor only (not imputed)",
+    custom_methods == "pmm" ~ "Predictive mean matching",
+    custom_methods == "polr" ~ "Proportional odds regression",
+    custom_methods == "logreg" ~ "Logistic regression",
+    custom_methods == "polyreg" ~ "Polytomous regression",
+    TRUE ~ custom_methods
+  )
+) |>
+  arrange(Method != "", Variable)
+
+message("Imputation methods by variable:")
+print(final_methods, n = 50)
+
+# Show which variables will be imputed
+vars_to_impute <- names(custom_methods)[custom_methods != ""]
+message("\nVariables that WILL be imputed (", length(vars_to_impute), " total):")
+print(vars_to_impute)
+
+# Show predictor matrix summary
+message("\nPredictor matrix summary:")
+message("- Each variable uses ", sum(pred_matrix[1,]), " predictors on average")
+message("- Variables used as predictors:")
+predictors <- names(which(colSums(pred_matrix) > 0))
+print(predictors)
+
+# Print model parameters
+message("\n=== IMPUTATION PARAMETERS ===")
+message("Mode: ", analysis_mode)
+message("Number of imputations (m): ", n_imputations)
+message("Max iterations per imputation (maxit): ", n_iterations)
+message("Random seed: 2025")
 ```
 
 ## Run Multiple Imputation
 
 ```{r run-imputation}
 # Set seed for reproducibility
-set.seed(2024)
-
-# Number of imputations (typically 20-40 for small amounts of missingness)
-n_imputations <- 30
+set.seed(2025)
 
 # Run mice imputation
-# Note: This may take several minutes depending on dataset size
-message("Starting multiple imputation with ", n_imputations, " imputations...")
-message("This may take several minutes...")
+# Note: Parameters are set based on analysis_mode in setup
+message("Starting multiple imputation...")
+message("Mode: ", analysis_mode)
+message("Imputations: ", n_imputations)
+message("Iterations: ", n_iterations)
+
+if (analysis_mode == "test") {
+  message("This should take a few minutes...")
+} else {
+  message("This may take 15-30 minutes or more...")
+}
 
 mice_results <- mice(
   df_mice,
   m = n_imputations,
   method = custom_methods,
   predictorMatrix = pred_matrix,
-  maxit = 20,  # Number of iterations per imputation
-  seed = 2024,
+  maxit = n_iterations,  # Uses n_iterations from setup
+  seed = 2025,
   printFlag = TRUE
 )
 
@@ -215,26 +306,46 @@ if(sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
   stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.2) |> print()
 }
 
-# Person DR - compare observed vs imputed
+# Person DR - compare observed vs imputed (categorical)
 if(sum(is.na(df_mice$person_dr)) > 0) {
-  # Check distribution of imputed values
-  prop_table_dr <- with(mice_results, table(person_dr)) |> 
-    lapply(prop.table) |> 
-    do.call(rbind, args = _)
+  # For categorical variables, check proportions across imputations
+  # Extract each imputation and tabulate
+  dr_props <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    prop.table(table(imp_data$person_dr))
+  })
   
-  message("Proportion of DR severity (0=No DR, 1=NPDR, 2=PDR) across imputations:")
-  print(summary(prop_table_dr))
+  message("Proportion of DR severity across imputations:")
+  message("No_DR: ", round(mean(dr_props[1,]), 3), " (SD: ", round(sd(dr_props[1,]), 3), ")")
+  message("NPDR: ", round(mean(dr_props[2,]), 3), " (SD: ", round(sd(dr_props[2,]), 3), ")")
+  message("PDR: ", round(mean(dr_props[3,]), 3), " (SD: ", round(sd(dr_props[3,]), 3), ")")
+  
+  # Visual check if stripplot works with factors
+  tryCatch({
+    stripplot(mice_results, person_dr ~ .imp, pch = 20, cex = 1.2) |> print()
+  }, error = function(e) {
+    message("Note: Stripplot not available for categorical person_dr")
+  })
 }
 
 # Check imputation quality for categorical variables
 # Cataract surgery
 if(sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
-  prop_table <- with(mice_results, table(catsurg_before_hitplus_cat)) |> 
-    lapply(prop.table) |> 
-    do.call(rbind, args = _)
+  # Extract proportions for each imputation
+  cat_props <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    prop.table(table(imp_data$catsurg_before_hitplus_cat))
+  })
   
   message("Proportion of cataract surgery across imputations:")
-  print(summary(prop_table))
+  if(is.matrix(cat_props)) {
+    for(i in 1:nrow(cat_props)) {
+      message("Level ", rownames(cat_props)[i], ": ", 
+              round(mean(cat_props[i,]), 3), " (SD: ", round(sd(cat_props[i,]), 3), ")")
+    }
+  } else {
+    message("Prop = ", round(mean(cat_props), 3), " (SD: ", round(sd(cat_props), 3), ")")
+  }
 }
 ```
 

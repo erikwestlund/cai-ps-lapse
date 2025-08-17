@@ -10,12 +10,9 @@ format: html
 
 ```{r setup}
 #| include: false
-# Set seed for reproducibility
-set.seed(2024)
-
-# Setup analysis environment
+# Setup analysis environment (includes seed setting)
 source("dependencies.R")
-setup_analysis()
+setup_analysis(seed = 2025)
 ```
 
 ## Data Loading
