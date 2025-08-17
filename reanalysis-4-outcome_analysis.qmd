@@ -962,7 +962,7 @@ results_to_save <- list(
   pooled_coefficients = pooled_results,
   subgroup_effects = subgroup_effects_stored,
   ame_results = ame_results,
-  probability_table = prob_table,
+  probability_table = if(exists("prob_table")) prob_table else NULL,
   model_summaries = model_summaries,
   n_imputations = n_imputations,
   analysis_mode = analysis_mode,
