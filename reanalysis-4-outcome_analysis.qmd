@@ -610,18 +610,30 @@ if (all(c(term_pdr, term_tx, term_pdr_tx) %in% names(coef_vals))) {
   )))
 }
 
-# Calculate derived statistics
-manual_effects <- manual_effects |>
-  mutate(
-    CI_Lower = Log_Odds - 1.96 * SE,
-    CI_Upper = Log_Odds + 1.96 * SE,
-    OR = exp(Log_Odds),
-    Z_stat = Log_Odds / SE,
-    P_Value = 2 * pnorm(-abs(Z_stat))
-  ) |>
-  mutate(across(c(Log_Odds, SE, CI_Lower, CI_Upper, OR), ~round(., 4))) |>
-  mutate(P_Value = format.pval(P_Value, digits = 4, eps = 0.0001)) |>
-  select(-Z_stat)
+# Calculate derived statistics - check for NAs first
+if (all(!is.na(manual_effects$Log_Odds)) && all(!is.na(manual_effects$SE))) {
+  manual_effects <- manual_effects |>
+    mutate(
+      CI_Lower = Log_Odds - 1.96 * SE,
+      CI_Upper = Log_Odds + 1.96 * SE,
+      OR = exp(Log_Odds),
+      Z_stat = Log_Odds / SE,
+      P_Value = 2 * pnorm(-abs(Z_stat))
+    ) |>
+    mutate(across(c(Log_Odds, SE, CI_Lower, CI_Upper, OR), ~round(., 4))) |>
+    mutate(P_Value = format.pval(P_Value, digits = 4, eps = 0.0001)) |>
+    select(-Z_stat)
+} else {
+  message("Warning: Some manual effect calculations contain NA values")
+  # Add placeholder columns
+  manual_effects <- manual_effects |>
+    mutate(
+      CI_Lower = NA,
+      CI_Upper = NA,
+      OR = NA,
+      P_Value = NA
+    )
+}
 
 kable(manual_effects,
       caption = "Manual Calculation of Subgroup Effects (Validation)",
