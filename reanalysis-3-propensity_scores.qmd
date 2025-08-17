@@ -366,13 +366,3 @@ message("  See summary output above for detailed balance statistics.")
 message("  The twang package optimizes es.mean to achieve covariate balance.")
 ```
 
-## Next Steps
-
-1. **Outcome Analysis** (`reanalysis-4-outcome_analysis.qmd`):
-   - Apply weights to outcome models
-   - Estimate treatment effects for each imputation
-   - Pool results using Rubin's rules
-   
-2. **Sensitivity Analysis** (`reanalysis-5-sensitivity.qmd`):
-   - Compare different PS methods
-   - Assess robustness to model specification

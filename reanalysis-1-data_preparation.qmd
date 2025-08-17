@@ -302,9 +302,3 @@ tibble(
   kable(caption = "Dataset summary for reanalysis with imputation")
 ```
 
-## Next Steps
-
-1. **Multiple Imputation** (`reanalysis-2-multiple_imputation.qmd`): Impute missing values in covariates
-2. **Propensity Score Analysis** (`reanalysis-3-propensity_scores.qmd`): Calculate PS using various methods on imputed datasets
-3. **Outcome Analysis** (`reanalysis-4-outcome_analysis.qmd`): Fit outcome models and pool results
-4. **Sensitivity Analysis** (`reanalysis-5-sensitivity.qmd`): Compare complete case vs imputed results

@@ -455,16 +455,3 @@ message("\nVariables that were imputed:")
 print(imputed_vars)
 ```
 
-## Next Steps
-
-1. **Propensity Score Analysis** (`reanalysis-3-propensity_scores.qmd`): 
-   - Calculate propensity scores on each imputed dataset
-   - Apply matching/weighting methods
-   
-2. **Outcome Analysis** (`reanalysis-4-outcome_analysis.qmd`):
-   - Fit outcome models on each dataset
-   - Pool results using Rubin's rules
-   
-3. **Sensitivity Analysis** (`reanalysis-5-sensitivity.qmd`):
-   - Compare with complete case analysis
-   - Assess impact of imputation on results

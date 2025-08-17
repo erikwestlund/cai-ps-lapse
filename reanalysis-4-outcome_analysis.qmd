@@ -898,14 +898,3 @@ message("\nResults saved to: ",
         file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
 ```
 
-## Next Steps
-
-1. **Sensitivity Analysis** (`reanalysis-5-sensitivity.qmd`):
-   - Compare with complete case analysis
-   - Assess impact of different imputation strategies
-   - Test robustness to model specification
-   
-2. **Final Report**:
-   - Synthesize findings across all analyses
-   - Create publication-ready tables and figures
-   - Address reviewer concerns with formal statistical evidence
