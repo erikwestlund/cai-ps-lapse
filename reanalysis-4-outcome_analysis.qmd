@@ -21,6 +21,8 @@ library(survey)
 library(ggplot2)
 library(gridExtra)
 library(knitr)
+library(tidyr)    # For pivot_wider
+library(dplyr)    # For data manipulation
 library(mitools)  # For proper MI pooling with survey weights
 library(mice)     # For pooling utilities
 
@@ -922,11 +924,11 @@ prob_summary <- pool_predicted_probabilities(models, n_imputations)
 
 # Reshape for presentation
 prob_table <- prob_summary |>
-  select(ever_lapse_binary, dr_severity, any_treatment, prob, asymp.LCL, asymp.UCL) |>
+  select(ever_lapse_binary, dr_severity, any_treatment, prob, CI_Lower, CI_Upper) |>
   mutate(
     Probability = paste0(round(prob, 3), " (", 
-                        round(asymp.LCL, 3), ", ", 
-                        round(asymp.UCL, 3), ")")
+                        round(CI_Lower, 3), ", ", 
+                        round(CI_Upper, 3), ")")
   ) |>
   select(dr_severity, any_treatment, ever_lapse_binary, Probability) |>
   pivot_wider(names_from = ever_lapse_binary, values_from = Probability)
