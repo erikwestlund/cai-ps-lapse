@@ -213,20 +213,22 @@ pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 message("\n=== FINAL IMPUTATION MODEL ===\n")
 
 # Summary of methods
+method_types <- ifelse(custom_methods == "", "Predictor only (not imputed)",
+                ifelse(custom_methods == "pmm", "Predictive mean matching",
+                ifelse(custom_methods == "polr", "Proportional odds regression",
+                ifelse(custom_methods == "logreg", "Logistic regression",
+                ifelse(custom_methods == "polyreg", "Polytomous regression",
+                       custom_methods)))))
+
 final_methods <- data.frame(
   Variable = names(custom_methods),
   Method = custom_methods,
-  Type = dplyr::case_when(
-    custom_methods == "" ~ "Predictor only (not imputed)",
-    custom_methods == "pmm" ~ "Predictive mean matching",
-    custom_methods == "polr" ~ "Proportional odds regression",
-    custom_methods == "logreg" ~ "Logistic regression",
-    custom_methods == "polyreg" ~ "Polytomous regression",
-    TRUE ~ custom_methods
-  ),
+  Type = method_types,
   stringsAsFactors = FALSE
-) |>
-  dplyr::arrange(Method != "", Variable)
+)
+
+# Sort to show imputed variables first
+final_methods <- final_methods[order(final_methods$Method == "", final_methods$Variable), ]
 
 message("Imputation methods by variable:")
 print(final_methods, n = 50)
