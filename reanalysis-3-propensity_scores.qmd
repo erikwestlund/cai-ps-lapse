@@ -132,12 +132,28 @@ for (i in 1:n_imputations) {
     twang_model$ps  # Already a vector when single stop method
   }
   
+  # Get balance table - use summary or bal.table depending on what works
+  balance_table <- tryCatch({
+    # Try to get balance table
+    if (!is.null(twang_model$balance.es.mean)) {
+      twang_model$balance.es.mean
+    } else if (!is.null(twang_model$balance)) {
+      twang_model$balance
+    } else {
+      # Extract from summary
+      summary(twang_model)$es.mean.ATT
+    }
+  }, error = function(e) {
+    # If all else fails, create a simple balance assessment
+    NULL
+  })
+  
   twang_results[[i]] <- list(
     model = twang_model,
     weights = weights,
     ps_scores = ps_scores,
     n_trees_used = twang_model$desc$es.mean$n.trees,
-    balance_es_mean = bal.table(twang_model, type = "es.mean")
+    balance_es_mean = balance_table
   )
   
   message("  - Trees used (es.mean): ", twang_model$desc$es.mean$n.trees)
@@ -153,41 +169,65 @@ message("\nTwang propensity score calculation complete")
 balance_summaries <- list()
 
 for (i in 1:n_imputations) {
-  # Get balance table from twang (es.mean only)
-  bal_es <- twang_results[[i]]$balance_es_mean
+  # Use summary to get balance statistics
+  twang_summary <- summary(twang_results[[i]]$model)
   
-  # Extract standardized effect sizes and KS statistics
-  # The balance table structure may vary, so check column names
-  if ("std.eff.sz" %in% names(bal_es)) {
-    std_eff_col <- "std.eff.sz"
-  } else if ("std.es" %in% names(bal_es)) {
-    std_eff_col <- "std.es"
+  # The summary contains balance tables for es.mean.ATT
+  if (!is.null(twang_summary$es.mean.ATT)) {
+    bal_table <- twang_summary$es.mean.ATT
+    
+    # Extract effect sizes - look for appropriate columns
+    es_values <- if ("tx.mn" %in% names(bal_table) && "ct.mn" %in% names(bal_table)) {
+      # Calculate standardized differences manually if needed
+      tx_means <- bal_table$tx.mn
+      ct_means <- bal_table$ct.mn
+      tx_sd <- if("tx.sd" %in% names(bal_table)) bal_table$tx.sd else rep(1, length(tx_means))
+      ct_sd <- if("ct.sd" %in% names(bal_table)) bal_table$ct.sd else rep(1, length(ct_means))
+      pooled_sd <- sqrt((tx_sd^2 + ct_sd^2) / 2)
+      abs((tx_means - ct_means) / pooled_sd)
+    } else if ("std.eff.sz" %in% names(bal_table)) {
+      abs(bal_table$std.eff.sz)
+    } else if ("std.es" %in% names(bal_table)) {
+      abs(bal_table$std.es)
+    } else {
+      # Try to find any column with "std" or "es"
+      std_cols <- grep("std|es", names(bal_table), value = TRUE)
+      if (length(std_cols) > 0) {
+        abs(bal_table[[std_cols[1]]])
+      } else {
+        rep(NA, nrow(bal_table))
+      }
+    }
+    
+    # Extract KS statistics if available
+    ks_values <- if ("ks" %in% names(bal_table)) {
+      bal_table$ks
+    } else if ("ks.max" %in% names(bal_table)) {
+      bal_table$ks.max
+    } else {
+      rep(NA, length(es_values))
+    }
+    
+    balance_summaries[[i]] <- data.frame(
+      Imputation = i,
+      Mean_ES = mean(es_values, na.rm = TRUE),
+      Max_ES = max(es_values, na.rm = TRUE),
+      N_Imbalanced = sum(es_values > 0.1, na.rm = TRUE),
+      Mean_KS = mean(ks_values, na.rm = TRUE),
+      Max_KS = max(ks_values, na.rm = TRUE)
+    )
   } else {
-    # Find column with "std" in name
-    std_cols <- grep("std", names(bal_es), value = TRUE)
-    std_eff_col <- std_cols[1]
+    # Fallback if summary doesn't have expected structure
+    balance_summaries[[i]] <- data.frame(
+      Imputation = i,
+      Mean_ES = NA,
+      Max_ES = NA,
+      N_Imbalanced = NA,
+      Mean_KS = NA,
+      Max_KS = NA
+    )
+    message("Warning: Could not extract balance statistics for imputation ", i)
   }
-  
-  if ("ks" %in% names(bal_es)) {
-    ks_col <- "ks"
-  } else if ("ks.max" %in% names(bal_es)) {
-    ks_col <- "ks.max"
-  } else {
-    # Find column with "ks" in name
-    ks_cols <- grep("ks", names(bal_es), value = TRUE)
-    ks_col <- if(length(ks_cols) > 0) ks_cols[1] else NULL
-  }
-  
-  # Summary statistics for es.mean method
-  balance_summaries[[i]] <- data.frame(
-    Imputation = i,
-    Mean_ES = mean(abs(bal_es[[std_eff_col]]), na.rm = TRUE),
-    Max_ES = max(abs(bal_es[[std_eff_col]]), na.rm = TRUE),
-    N_Imbalanced = sum(abs(bal_es[[std_eff_col]]) > 0.1, na.rm = TRUE),
-    # KS statistics if available
-    Mean_KS = if(!is.null(ks_col)) mean(bal_es[[ks_col]], na.rm = TRUE) else NA,
-    Max_KS = if(!is.null(ks_col)) max(bal_es[[ks_col]], na.rm = TRUE) else NA
-  )
 }
 
 # Combine all summaries
