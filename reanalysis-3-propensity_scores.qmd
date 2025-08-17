@@ -125,12 +125,19 @@ for (i in 1:n_imputations) {
   weights <- get.weights(twang_model, stop.method = "es.mean")
   
   # Store results
+  # When using single stop method, ps is a vector not a matrix
+  ps_scores <- if(is.matrix(twang_model$ps)) {
+    twang_model$ps[, "es.mean"]
+  } else {
+    twang_model$ps  # Already a vector when single stop method
+  }
+  
   twang_results[[i]] <- list(
     model = twang_model,
     weights = weights,
-    ps_scores = twang_model$ps[, "es.mean"],
+    ps_scores = ps_scores,
     n_trees_used = twang_model$desc$es.mean$n.trees,
-    balance_es_mean = twang_model$balance$es.mean
+    balance_es_mean = bal.table(twang_model, type = "es.mean")
   )
   
   message("  - Trees used (es.mean): ", twang_model$desc$es.mean$n.trees)
@@ -149,15 +156,37 @@ for (i in 1:n_imputations) {
   # Get balance table from twang (es.mean only)
   bal_es <- twang_results[[i]]$balance_es_mean
   
+  # Extract standardized effect sizes and KS statistics
+  # The balance table structure may vary, so check column names
+  if ("std.eff.sz" %in% names(bal_es)) {
+    std_eff_col <- "std.eff.sz"
+  } else if ("std.es" %in% names(bal_es)) {
+    std_eff_col <- "std.es"
+  } else {
+    # Find column with "std" in name
+    std_cols <- grep("std", names(bal_es), value = TRUE)
+    std_eff_col <- std_cols[1]
+  }
+  
+  if ("ks" %in% names(bal_es)) {
+    ks_col <- "ks"
+  } else if ("ks.max" %in% names(bal_es)) {
+    ks_col <- "ks.max"
+  } else {
+    # Find column with "ks" in name
+    ks_cols <- grep("ks", names(bal_es), value = TRUE)
+    ks_col <- if(length(ks_cols) > 0) ks_cols[1] else NULL
+  }
+  
   # Summary statistics for es.mean method
   balance_summaries[[i]] <- data.frame(
     Imputation = i,
-    Mean_ES = mean(abs(bal_es$std.eff.sz), na.rm = TRUE),
-    Max_ES = max(abs(bal_es$std.eff.sz), na.rm = TRUE),
-    N_Imbalanced = sum(abs(bal_es$std.eff.sz) > 0.1, na.rm = TRUE),
-    # KS statistics are still available in the es.mean balance table
-    Mean_KS = mean(bal_es$ks, na.rm = TRUE),
-    Max_KS = max(bal_es$ks, na.rm = TRUE)
+    Mean_ES = mean(abs(bal_es[[std_eff_col]]), na.rm = TRUE),
+    Max_ES = max(abs(bal_es[[std_eff_col]]), na.rm = TRUE),
+    N_Imbalanced = sum(abs(bal_es[[std_eff_col]]) > 0.1, na.rm = TRUE),
+    # KS statistics if available
+    Mean_KS = if(!is.null(ks_col)) mean(bal_es[[ks_col]], na.rm = TRUE) else NA,
+    Max_KS = if(!is.null(ks_col)) max(bal_es[[ks_col]], na.rm = TRUE) else NA
   )
 }
 
