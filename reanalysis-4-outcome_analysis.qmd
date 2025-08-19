@@ -22,14 +22,22 @@ library(gridExtra)
 library(knitr)
 library(tidyr)
 library(dplyr)
-library(mitools)
+library(mitools)  # For pooling multiple imputation results
 library(mice)
 
 # ANALYSIS MODE: Use same as imputation/PS
 analysis_mode <- "test"  # Should match imputation and PS modes
+
+# Set parameters based on mode
+if (analysis_mode == "test") {
+  max_imputations_to_process <- 2  # Process only 2 imputations in test mode
+} else {
+  max_imputations_to_process <- NULL  # Process all available imputations
+}
 ```
 
-**Analysis mode:** `r analysis_mode`
+**Analysis mode:** `r analysis_mode`  
+**Imputations to process:** `r if(!is.null(max_imputations_to_process)) max_imputations_to_process else "all available"`
 
 ## Pooling Methodology for Survey-Weighted Multiple Imputation
 
@@ -40,7 +48,7 @@ This analysis combines:
 
 ### Rubin's Rules for Combining Results
 
-For each parameter θ, we combine estimates across m imputations:
+Following Rubin (1987) and Barnard & Rubin (1999), for each parameter θ, we combine estimates across m imputations:
 
 1. **Point estimate**: $\bar{Q} = \frac{1}{m}\sum_{i=1}^{m} \hat{\theta}_i$
 
@@ -51,32 +59,68 @@ For each parameter θ, we combine estimates across m imputations:
 4. **Total variance**: $T = \bar{U} + (1 + \frac{1}{m})B$
 
 5. **Degrees of freedom** (Barnard-Rubin adjustment for finite samples):
-   - $df = \frac{1}{\frac{1}{df_{old}} + \frac{1}{df_{obs}}}$
-   - Where $df_{old} = (m-1)/r^2$ and $df_{obs} = df_{complete}(1-\lambda)$
-   - $r$ = relative increase in variance due to missing data
-   - $\lambda$ = fraction of missing information
+   - $r = (1 + \frac{1}{m}) \frac{B}{\bar{U}}$ (relative increase in variance)
+   - $df_{old} = (m-1) \times (1 + \frac{1}{r})^2$ (large sample df)
+   - $\lambda = \frac{r + 2/(df_{com} + 3)}{r + 1}$ (fraction of missing information)
+   - $df_{obs} = \frac{df_{com} + 1}{df_{com} + 3} \times df_{com} \times (1 - \lambda)$ (observed df)
+   - $df_{adj} = \frac{df_{old} \times df_{obs}}{df_{old} + df_{obs}}$ (adjusted df)
+   
+Where $df_{com}$ is the complete-data degrees of freedom.
+
+**References:**
+- Rubin, D.B. (1987). *Multiple Imputation for Nonresponse in Surveys*. Wiley.
+- Barnard, J. & Rubin, D.B. (1999). Small-sample degrees of freedom with multiple imputation. *Biometrika*, 86(4), 948-955.
+
+### Implementation Using mitools
+
+The `mitools` package (Lumley, 2020) provides robust implementations of Rubin's rules and extensions for survey data:
+
+- **`MIcombine()`**: Implements standard Rubin's rules with Barnard-Rubin adjustment
+- **`with.imputationList()`**: Applies analyses across imputations
+- **`pool.scalar()`**: Combines scalar quantities (e.g., R²)
+- **`MIextract()`**: Extracts results from fitted models
+
+This analysis uses `mitools` rather than manual implementation to ensure accuracy and handle edge cases properly.
 
 ### Special Considerations for Survey Weights
 
 - Standard errors from `svyglm` already account for IPTW weights
 - Pooling preserves the design-based variance estimation
-- Joint tests use Li-Raghunathan-Rubin method for χ² statistics
+- Joint tests use Li-Raghunathan-Rubin method for χ² statistics (Li et al., 1991)
 
 ## Load Data and Weights
 
 ```{r load-data}
 # Load the imputed datasets
 imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
-n_imputations <- length(imputed_datasets)
+n_available <- length(imputed_datasets)
 
 # Load the twang PS results
 ps_results <- readRDS(file.path(reanalysis_data_dir, "ps_results_twang.rds"))
+n_ps_available <- length(ps_results$twang_results)
+
+# Determine how many imputations to actually process
+if (!is.null(max_imputations_to_process)) {
+  n_imputations <- min(max_imputations_to_process, n_available, n_ps_available)
+  # Subset the datasets if needed
+  if (n_imputations < n_available) {
+    imputed_datasets <- imputed_datasets[1:n_imputations]
+  }
+} else {
+  n_imputations <- min(n_available, n_ps_available)
+}
 
 # Extract weights for each imputation
 for (i in 1:n_imputations) {
   imputed_datasets[[i]]$iptw_weight <- ps_results$twang_results[[i]]$weights
 }
+```
 
+**Available imputed datasets:** `r n_available`  
+**Available PS results:** `r n_ps_available`  
+**Processing:** `r n_imputations` **datasets** `r if(analysis_mode == "test") "(test mode limit)" else "(all available)"`
+
+```{r continue-load}
 # Summary of first dataset for verification
 first_data <- imputed_datasets[[1]]
 
@@ -123,23 +167,23 @@ for (i in 1:n_imputations) {
 
 **DR Severity:**
 ```{r dr-severity-dist}
-table(imputed_datasets[[1]]$dr_severity)
+table(imputed_datasets[[1]]$dr_severity) |> kable()
 ```
 
 **Treatment Status:**
 ```{r treatment-dist}
-table(imputed_datasets[[1]]$any_treatment)
+table(imputed_datasets[[1]]$any_treatment) 
 ```
 
 **Lapse Status:**
 ```{r lapse-dist}
-table(imputed_datasets[[1]]$ever_lapse_binary)
+table(imputed_datasets[[1]]$ever_lapse_binary) |> kable()
 ```
 
 **Three-way Cross-tabulation:**
 ```{r crosstab}
 with(imputed_datasets[[1]], 
-     ftable(dr_severity, any_treatment, ever_lapse_binary))
+     ftable(dr_severity, any_treatment, ever_lapse_binary)) |> kable()
 ```
 
 ## Define Model Formula
@@ -184,11 +228,9 @@ print(interaction_formula)
 ## Fit Models to Each Imputed Dataset
 
 ```{r fit-models}
-# Store models for each imputation
 models <- list()
 model_summaries <- list()
 
-# Track model fitting progress
 model_progress <- data.frame(
   Imputation = integer(),
   Converged = logical(),
@@ -197,14 +239,12 @@ model_progress <- data.frame(
 
 for (i in 1:n_imputations) {
   
-  # Create weighted survey design
   design_weighted <- svydesign(
     ids = ~e_mrn_deidentified,
     data = imputed_datasets[[i]],
     weights = ~iptw_weight
   )
   
-  # Fit the three-way interaction model
   model <- svyglm(
     formula = interaction_formula,
     design = design_weighted,
@@ -213,7 +253,6 @@ for (i in 1:n_imputations) {
   
   models[[i]] <- model
   
-  # Extract key coefficients for summary
   coef_summary <- summary(model)$coefficients
   
   # Check if three-way interaction terms exist
@@ -236,105 +275,61 @@ for (i in 1:n_imputations) {
 message("All models fitted successfully")
 ```
 
-## Pool Results Using Rubin's Rules for Survey-Weighted Analysis
+## Pool Results Using Rubin's Rules
 
 ```{r pool-results}
-# Function to properly pool survey-weighted results using Rubin's rules
-pool_survey_results <- function(models, n_imputations) {
-  
-  # Extract coefficients and variance-covariance matrices
-  all_coefs <- lapply(models, coef)
-  all_vcovs <- lapply(models, vcov)
-  
-  # Get all coefficient names from first model
-  coef_names <- names(all_coefs[[1]])
-  
-  # Initialize storage
-  pooled_results <- data.frame(
-    Term = coef_names,
-    Estimate = numeric(length(coef_names)),
-    SE = numeric(length(coef_names)),
-    df = numeric(length(coef_names)),
-    stringsAsFactors = FALSE
-  )
-  
-  # Apply Rubin's rules for each coefficient
-  for (j in 1:length(coef_names)) {
-    coef_name <- coef_names[j]
-    
-    # Extract coefficient values across imputations
-    coef_values <- sapply(all_coefs, function(x) x[coef_name])
-    
-    # Step 1: Calculate pooled estimate (Q-bar)
-    Q_bar <- mean(coef_values)
-    
-    # Step 2: Within-imputation variance (U-bar)
-    U_bar <- mean(sapply(all_vcovs, function(x) x[coef_name, coef_name]))
-    
-    # Step 3: Between-imputation variance (B)
-    B <- var(coef_values)
-    
-    # Step 4: Total variance (T) using Rubin's formula
-    # T = U_bar + (1 + 1/m) * B
-    T <- U_bar + (1 + 1/n_imputations) * B
-    
-    # Step 5: Degrees of freedom using Barnard-Rubin adjustment
-    # For survey data, we need the complete-data degrees of freedom
-    n_obs <- nrow(models[[1]]$data)
-    n_params <- length(coef_names)
-    df_complete <- n_obs - n_params  # Complete data df
-    
-    # Relative increase in variance due to missing data
-    r <- (1 + 1/n_imputations) * B / U_bar
-    
-    # Fraction of missing information
-    lambda <- (r + 2/(df_complete + 3))/(r + 1)
-    
-    # Barnard-Rubin adjusted degrees of freedom
-    df_old <- (n_imputations - 1) / (r^2)  # Old formula
-    df_observed <- df_complete * (1 - lambda)  # Observed data df
-    df_adjusted <- 1 / (1/df_old + 1/df_observed)  # Barnard-Rubin adjustment
-    
-    # Store results
-    pooled_results$Estimate[j] <- Q_bar
-    pooled_results$SE[j] <- sqrt(T)
-    pooled_results$df[j] <- df_adjusted
-  }
-  
-  return(pooled_results)
-}
+# Use mitools for robust pooling implementation
+# MIcombine properly implements Rubin's rules with Barnard-Rubin adjustment
+pooled_model <- MIcombine(three_way_models)
 
-# Apply the pooling function
-pooled_results <- pool_survey_results(models, n_imputations)
+# Extract pooled results
+pooled_summary <- summary(pooled_model)
 
-# Calculate additional statistics with proper df
-pooled_results <- pooled_results |>
-  mutate(
-    t_stat = Estimate / SE,
-    # Use t-distribution with adjusted df for more accurate p-values
-    P_Value = 2 * pt(-abs(t_stat), df = df),
-    # Use t-distribution for confidence intervals
-    CI_Lower = Estimate - qt(0.975, df = df) * SE,
-    CI_Upper = Estimate + qt(0.975, df = df) * SE,
-    OR = exp(Estimate),
-    OR_CI_Lower = exp(CI_Lower),
-    OR_CI_Upper = exp(CI_Upper)
-  )
+# Get pooled variance-covariance matrix for later use
+pooled_vcov <- vcov(pooled_model)
 
-# Display diagnostic information
-message("Pooling diagnostics:")
-message("  - Number of imputations: ", n_imputations)
-message("  - Number of parameters: ", nrow(pooled_results))
-message("  - Average degrees of freedom: ", round(mean(pooled_results$df), 1))
+pooled_results <- data.frame(
+  Term = rownames(pooled_summary),
+  Estimate = pooled_summary[, "results"],
+  SE = pooled_summary[, "se"],
+  statistic = pooled_summary[, "(lower"],  
+  df = pooled_summary[, "df"],
+  p.value = pooled_summary[, "upper)"],
+  CI_Lower = pooled_summary[, "2.5 %"],
+  CI_Upper = pooled_summary[, "97.5 %"],
+  OR = exp(pooled_summary[, "results"]),
+  OR_CI_Lower = exp(pooled_summary[, "2.5 %"]),
+  OR_CI_Upper = exp(pooled_summary[, "97.5 %"])
+)
 
-# Calculate fraction of missing information for key terms
-key_terms <- grep("ever_lapse", pooled_results$Term, value = TRUE)[1:3]
-for (term in key_terms) {
-  if (term %in% pooled_results$Term) {
-    row <- pooled_results[pooled_results$Term == term, ]
-    message("  - ", substr(term, 1, 30), "... df = ", round(row$df, 1))
-  }
-}
+# Clean column names if needed
+names(pooled_results) <- c("Term", "Estimate", "SE", "t_stat", "df", "P_Value", 
+                           "CI_Lower", "CI_Upper", "OR", "OR_CI_Lower", "OR_CI_Upper")
+# Ensure proper formatting
+rownames(pooled_results) <- NULL
+
+```
+
+### Pooling Diagnostics
+
+```{r pooling-diagnostics}
+pool_diag <- data.frame(
+  Metric = c("Number of imputations", 
+             "Number of parameters",
+             "Average degrees of freedom"),
+  Value = c(n_imputations,
+            nrow(pooled_results),
+            round(mean(pooled_results$df), 1))
+)
+
+kable(pool_diag, caption = "Pooling diagnostics")
+
+key_terms <- grep("ever_lapse", pooled_results$Term, value = TRUE)[1:min(3, length(grep("ever_lapse", pooled_results$Term, value = TRUE)))]
+key_df <- pooled_results[pooled_results$Term %in% key_terms, c("Term", "df")]
+key_df$Term <- substr(key_df$Term, 1, 40)
+key_df$df <- round(key_df$df, 1)
+
+kable(key_df, caption = "Degrees of freedom for key terms")
 
 # Three-way interaction terms are included in the model
 # but not displayed individually as they are not meaningful on their own
@@ -344,7 +339,6 @@ for (term in key_terms) {
 ## Joint Tests of Interaction Terms
 
 ```{r joint-tests}
-# Function to pool chi-square test statistics across imputations
 pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
   
   # Perform test on each imputation
@@ -380,7 +374,6 @@ pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
 
 message("Performing pooled joint hypothesis tests...")
 
-# Use the first model to get term names (should be same across all imputations)
 first_model <- models[[1]]
 
 # Test 1: Joint test of three-way interaction
@@ -447,29 +440,23 @@ pool_emmeans_contrasts <- function(models, n_imputations) {
   message("Calculating marginal means and contrasts across all imputations...")
   message("This may take a few moments...")
   
-  # Increase reference grid limit for large models
   emm_options(rg.limit = 500000)
   
-  # Store contrasts from each imputation
   all_contrasts <- list()
   
   for (i in 1:n_imputations) {
     message("  Processing imputation ", i, "/", n_imputations)
     
-    # Calculate marginal means for all combinations
     emm <- emmeans(models[[i]], 
                    ~ ever_lapse_binary | dr_severity * any_treatment,
                    weights = "proportional")
     
-    # Get contrasts: effect of lapse within each DR × treatment combination
     lapse_contrasts <- contrast(emm, method = "revpairwise", 
                                by = c("dr_severity", "any_treatment"))
     
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
   }
   
-  # Pool the contrasts
-  # Get unique combinations
   first_df <- all_contrasts[[1]]
   n_contrasts <- nrow(first_df)
   

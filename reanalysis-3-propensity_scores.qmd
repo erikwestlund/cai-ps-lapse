@@ -23,8 +23,8 @@ analysis_mode <- "test"  # Should match imputation mode
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
-  max_imputations_to_process <- 1  # Process only 2 imputations in test mode
-  max_imputations_for_diagnostics <- 1  # Show diagnostics for 2 imputations in test
+  max_imputations_to_process <- 2  # Process only 2 imputations in test mode
+  max_imputations_for_diagnostics <- 2  # Show diagnostics for 2 imputations in test
   n_trees <- 1000  # Fewer trees for testing
 } else {
   max_imputations_to_process <- NULL  # Process all available imputations
@@ -276,7 +276,7 @@ for (i in imps_to_show) {
   print(plot(twang_model, plots = 3))
   cat("\n\n")
   
-  cat("#### Alternative Balance Plot (Love Plot)\n\n")
+  cat("#### Love Plot\n\n")
   # Use cobalt for better visualization
   love_plot <- love.plot(
     bal.tab(ps_formula, 
@@ -290,13 +290,13 @@ for (i in imps_to_show) {
   print(love_plot)
   cat("\n\n")
   
-  cat("#### Weight Proportions\n\n")
+  cat("#### Weight Histogram\n\n")
   # Plot 6: Histogram of weight proportions
   print(plot(twang_model, plots = 6))
   cat("\n\n")
   
   cat("#### Balance Summary Table\n\n")
-  print(summary(twang_model))
+  summary(twang_model) |> print() |> kable()
   cat("\n\n")
 }
 ```
