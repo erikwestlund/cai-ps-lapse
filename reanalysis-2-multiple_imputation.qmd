@@ -10,7 +10,6 @@ format: html
 
 ```{r setup}
 #| include: false
-# Setup analysis environment (includes seed setting)
 source("dependencies.R")
 setup_analysis(seed = 2025)
 
@@ -30,7 +29,7 @@ if (analysis_mode == "test") {
   n_iterations <- 5
   message("Running in TEST mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
 } else if (analysis_mode == "final") {
-  n_imputations <- 30
+  n_imputations <- 10
   n_iterations <- 20
   message("Running in FINAL mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
 } else {
@@ -45,7 +44,6 @@ if (analysis_mode == "test") {
 df_for_imputation <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
 variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 
-# Extract variable lists
 ps_model_vars <- variable_lists$ps_model_vars
 outcome_model_vars <- variable_lists$outcome_model_vars
 ```
@@ -53,13 +51,12 @@ outcome_model_vars <- variable_lists$outcome_model_vars
 ## Define Variables for Imputation
 
 ```{r define-imputation-vars}
-# Variables to include in imputation model (following Rubin's guidance)
-# Include: outcome, exposure, all covariates SOURCE variables only
+# Variables to include in imputation model
+# Include: outcome, exposure, all covariates source variables only
 # Derived variables will be recreated post-imputation
 
 # Core analysis variables - SOURCE ONLY
 imputation_vars <- c(
-  # Patient ID (not imputed, just kept)
   "e_mrn_deidentified",
   
   # Outcome variable - SOURCE ONLY
@@ -69,7 +66,7 @@ imputation_vars <- c(
   # Exposure
   "ever_lapse_binary",
   
-  # Demographics/Clinical - SOURCE ONLY
+  # Demographics/Clinical
   "baseline_VA_logMAR",
   "gender_cat",
   "race_ethnic_cat",
@@ -96,7 +93,6 @@ imputation_vars <- c(
   # NOT dr_severity or person_dr_severity - derived from person_dr
 )
 
-# Select only imputation variables
 df_mice <- df_for_imputation |>
   dplyr::select(dplyr::all_of(imputation_vars)) |>
   mutate(
@@ -107,24 +103,6 @@ df_mice <- df_for_imputation |>
   )
 ```
 
-## Assess Missing Data Pattern
-
-```{r missing-pattern}
-# Visualize missing data pattern
-missing_pattern <- md.pattern(df_mice, rotate.names = TRUE)
-
-# Summary of missingness
-miss_summary <- df_mice |>
-  miss_var_summary() |>
-  filter(n_miss > 0)
-
-miss_summary |>
-  kable(caption = "Variables with missing data")
-
-# Visualize missingness relationships
-gg_miss_upset(df_mice, nsets = 10)
-```
-
 ## Setup Imputation Model
 
 ```{r setup-mice}
@@ -133,7 +111,6 @@ gg_miss_upset(df_mice, nsets = 10)
 mice_dry <- mice(df_mice, maxit = 0, printFlag = FALSE)
 
 # Print initial imputation model summary
-message("=== IMPUTATION MODEL SETUP ===\n")
 message("Total variables in dataset: ", ncol(df_mice))
 message("Variables to be imputed: ", sum(mice_dry$nmis > 0))
 message("Total missing values: ", sum(mice_dry$nmis))
@@ -148,7 +125,6 @@ miss_vars <- data.frame(
 
 print(miss_vars)
 
-# Check default imputation methods
 method_table <- data.frame(
   Variable = names(mice_dry$method),
   Method = mice_dry$method,
@@ -162,12 +138,11 @@ print(method_table)
 # Customize imputation methods as needed
 custom_methods <- mice_dry$method
 
-# Use predictive mean matching for continuous/count variables
 custom_methods["CCI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["DCSI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["baseline_VA_logMAR"] <- "pmm"
 custom_methods["age"] <- "pmm"
-custom_methods["outcome_VA_logMAR"] <- "pmm"  # If any missing
+custom_methods["outcome_VA_logMAR"] <- "pmm"
 
 # Use proportional odds model for ordinal person_dr (0/1/2)
 custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
@@ -179,9 +154,9 @@ custom_methods["catsurg_before_hitplus_cat"] <- "logreg"
 custom_methods["race_ethnic_cat"] <- "polyreg"
 custom_methods["insurance_cat"] <- "polyreg"
 
-# Don't impute these variables (but they ARE still used as predictors!)
-# Method = "" means: use as predictor but don't impute
-custom_methods["e_mrn_deidentified"] <- ""  # ID - never impute
+# Don't impute these variables
+# Method = "" means: don't impute (but still use as predictor EXCEPT for ID)
+custom_methods["e_mrn_deidentified"] <- ""  # ID - never impute, never use as predictor
 custom_methods["ever_lapse_binary"] <- ""  # Complete - use as predictor only
 custom_methods["glaucoma_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
 custom_methods["otherretina_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
@@ -191,13 +166,13 @@ custom_methods["anti_VEGF"] <- ""  # Likely complete
 custom_methods["focal_laser_flag"] <- ""  # Likely complete
 custom_methods["PRP_flag"] <- ""  # Likely complete
 
-# Note: Variables with method = "" are STILL USED as predictors for other variables
-# They just aren't imputed themselves
+# Note: Variables with method = "" (except ID) are STILL USED as predictors for other variables
+# They just aren't imputed themselves. The ID is excluded from both imputation and prediction.
 
 # Check predictor matrix (which variables predict which)
 pred_matrix <- mice_dry$predictorMatrix
 
-# Don't use ID as predictor
+# Don't use ID as predictor AND don't impute it
 pred_matrix[, "e_mrn_deidentified"] <- 0
 pred_matrix["e_mrn_deidentified", ] <- 0
 
