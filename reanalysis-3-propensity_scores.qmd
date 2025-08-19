@@ -248,26 +248,57 @@ imps_to_show <- 1:n_to_show
 ```
 
 ```{r diagnostics-loop}
+#| results: "asis"
+
 # Generate diagnostic plots for selected imputations
 for (i in imps_to_show) {
   cat("\n### Imputation", i, "\n\n")
   
   twang_model <- twang_results[[i]]$model
+  weights <- twang_results[[i]]$weights
   
-  cat("#### Convergence\n")
+  # Create dataset with weights for cobalt
+  data_with_weights <- imputed_datasets[[i]]
+  data_with_weights$weights <- weights
+  
+  cat("#### Convergence (Iteration Plot)\n\n")
+  # Plot 1: Shows how balance metrics change across iterations
   plot(twang_model, plots = 1)
+  cat("\n\n")
   
-  cat("\n#### Weight Distribution\n")
+  cat("#### Weight Distribution (Boxplot)\n\n")
+  # Plot 2: Shows distribution of weights
   plot(twang_model, plots = 2)
+  cat("\n\n")
   
-  cat("\n#### Covariate Balance\n")
+  cat("#### Covariate Balance (Standardized Mean Differences)\n\n")
+  # Plot 3: Shows balance for each covariate
   plot(twang_model, plots = 3)
+  cat("\n\n")
   
-  cat("\n#### Weight Proportions\n")
+  cat("#### Alternative Balance Plot (Love Plot)\n\n")
+  # Use cobalt for better visualization
+  library(cobalt)
+  love_plot <- love.plot(
+    bal.tab(ps_formula, 
+            data = data_with_weights,
+            weights = "weights",
+            estimand = "ATT",
+            s.d.denom = "treated"),
+    thresholds = c(m = 0.1),
+    title = paste("Covariate Balance - Imputation", i)
+  )
+  print(love_plot)
+  cat("\n\n")
+  
+  cat("#### Weight Proportions\n\n")
+  # Plot 6: Histogram of weight proportions
   plot(twang_model, plots = 6)
+  cat("\n\n")
   
-  cat("\n#### Balance Summary Table\n")
+  cat("#### Balance Summary Table\n\n")
   print(summary(twang_model))
+  cat("\n\n")
 }
 ```
 
