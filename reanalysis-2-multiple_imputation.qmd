@@ -21,7 +21,7 @@ library(naniar)
 # ANALYSIS MODE: "test" or "final"
 # test = 2 imputations, 5 iterations (fast)
 # final = 30 imputations, 20 iterations (slow but thorough)
-analysis_mode <- "test"  # Change to "final" for production run
+analysis_mode <- "final"  # Change to "final" for production run
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
