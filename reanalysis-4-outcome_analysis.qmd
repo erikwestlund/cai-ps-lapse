@@ -111,6 +111,13 @@ if (!is.null(max_imputations_to_process)) {
 }
 
 # Extract weights for each imputation
+# Ensure we don't exceed available PS results
+n_ps_weights <- length(ps_results$twang_results)
+if (n_ps_weights < n_imputations) {
+  warning("Only ", n_ps_weights, " PS weight sets available for ", n_imputations, " imputations")
+  stop("Mismatch between imputations and PS results. Ensure PS analysis was run with same number of imputations.")
+}
+
 for (i in 1:n_imputations) {
   imputed_datasets[[i]]$iptw_weight <- ps_results$twang_results[[i]]$weights
 }
@@ -273,6 +280,19 @@ for (i in 1:n_imputations) {
 }
 
 message("All models fitted successfully")
+
+# Verify we have the expected number of models
+if (length(models) != n_imputations) {
+  stop("Model list has ", length(models), " models but expected ", n_imputations)
+}
+
+# Remove any NULL entries if they exist
+models <- models[!sapply(models, is.null)]
+if (length(models) == 0) {
+  stop("No valid models to pool")
+}
+
+message("Ready to pool ", length(models), " models")
 ```
 
 ## Pool Results Using Rubin's Rules
@@ -280,6 +300,22 @@ message("All models fitted successfully")
 ```{r pool-results}
 # Use mitools for robust pooling implementation
 # MIcombine properly implements Rubin's rules with Barnard-Rubin adjustment
+
+# Ensure models is a proper list for MIcombine
+if (!is.list(models)) {
+  stop("Models must be a list")
+}
+
+# Check that all models have the same structure
+if (length(models) > 1) {
+  coef_names_first <- names(coef(models[[1]]))
+  for (i in 2:length(models)) {
+    if (!identical(names(coef(models[[i]])), coef_names_first)) {
+      warning("Model ", i, " has different coefficients than model 1")
+    }
+  }
+}
+
 pooled_model <- MIcombine(models)
 
 # Extract pooled results
