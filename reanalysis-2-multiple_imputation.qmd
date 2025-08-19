@@ -232,9 +232,6 @@ message("Random seed: 2025")
 ## Run Multiple Imputation
 
 ```{r run-imputation}
-# Set seed for reproducibility
-set.seed(2025)
-
 # Run mice imputation
 # Note: Parameters are set based on analysis_mode in setup
 message("Starting multiple imputation...")
@@ -386,22 +383,15 @@ print(unlist(completeness_check))
 ## Save Imputed Datasets
 
 ```{r save-imputed}
-# Save mice object for later use
 saveRDS(mice_results, file.path(reanalysis_data_dir, "mice_results.rds"))
-
-# Save list of complete imputed datasets
 saveRDS(imputed_datasets, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
-
-# Save first imputed dataset separately for testing
 saveRDS(imputed_datasets[[1]], file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
-
 message("Saved ", n_imputations, " imputed datasets to: ", reanalysis_data_dir)
 ```
 
 ## Summary
 
 ```{r summary}
-# Summary of imputation
 summary_table <- tibble(
   Metric = c(
     "Original observations",
@@ -424,7 +414,6 @@ summary_table <- tibble(
 summary_table |>
   kable(caption = "Multiple imputation summary")
 
-# Variables that were imputed
 imputed_vars <- names(mice_results$nmis)[mice_results$nmis > 0]
 message("Variables that were imputed:")
 print(imputed_vars)
