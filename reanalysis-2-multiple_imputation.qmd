@@ -11,7 +11,8 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
-setup_analysis(seed = 2025)
+seed <- 2025
+setup_analysis(seed = seed)
 
 # Additional packages for imputation
 library(mice)
