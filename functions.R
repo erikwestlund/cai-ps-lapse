@@ -1,10 +1,3 @@
-# functions.R
-# Shared functions for the PS Lapse analysis project
-# Created: 2025-08-05
-
-# Transformation functions for reuse across data preparation and imputation
-# These ensure consistency when creating derived variables
-
 # Create person_dr from No_DR/NPDR/PDR columns
 create_person_dr <- function(data) {
   data |>

@@ -1,6 +1,3 @@
-# dependencies.R
-# Install all required dependencies for the reanalysis project
-
 install_dependencies <- function() {
   # Set CRAN mirror to avoid the error
   if (is.null(getOption("repos")) || getOption("repos") == "@CRAN@") {
@@ -123,16 +120,13 @@ load_required_libraries <- function() {
 
 # Setup function for quarto documents
 setup_analysis <- function(seed = 2025) {
-  # Set seed for reproducibility
   set.seed(seed)
   cat("Random seed set to:", seed, "\n")
   
-  # Source configuration files
   source("settings.R")
   source("functions.R")
   source("dependencies.R")
   
-  # Load required libraries
   load_required_libraries()
   
   cat("Analysis environment loaded successfully\n")

@@ -10,7 +10,6 @@ format: html
 
 ```{r setup}
 #| include: false
-# Setup analysis environment (includes seed setting)
 source("dependencies.R")
 setup_analysis(seed = 2025)
 ```
@@ -18,14 +17,12 @@ setup_analysis(seed = 2025)
 ## Data Loading
 
 ```{r load-data}
-# Load the combined dataset
 df_combined <- readr::read_csv(reanalysis_data_file_path)
 ```
 
 ## Define Analysis Variables
 
 ```{r define-variables}
-# Variables for propensity score model
 ps_vars <- c(
   "baseline_VA_logMAR",
   "gender",
@@ -43,20 +40,17 @@ ps_vars <- c(
   "cataract_surgery_bef_hitplus"
 )
 
-# Variables for outcome models
 outcome_vars <- c(
   "outcome_VA_logMAR",
   "person_ever_lapse"
 )
 
-# Variables for DR severity and treatment categorization
 dr_vars <- c(
   "No_DR",
   "NPDR",
   "PDR"
 )
 
-# All analysis variables
 all_analysis_vars <- c(
   "e_mrn_deidentified",  # Patient ID
   ps_vars,
@@ -67,20 +61,23 @@ all_analysis_vars <- c(
 
 ## Missing Data Handling Strategy
 
-**Modified approach for the reanalysis:**
 
 1. **Glaucoma/Other Retina Conditions**: Missing values are recoded as 0 (absence of condition)
-   - Clinical assumption: These conditions would be documented if present
-   - This recoding happens BEFORE propensity score modeling
-   - Maintains consistency with original analysis
-   - **Is this assumption valid?** Do we want to impute these?
    
-2. **CCI/DCSI**: **NEW - Will be imputed** (change from original analysis)
-   - Original analysis excluded rows with missing CCI/DCSI
-   - Reanalysis will impute these to preserve sample size and reduce bias
-   - These comorbidity indices can be imputed from patient demographics and clinical characteristics
+- Clinical assumption: These conditions would be documented if present
+- This recoding happens BEFORE propensity score modeling
+- Maintains consistency with original analysis,
 
-3. **Other variables**: Missing values will be handled via multiple imputation in the next step
+2. **CCI/DCSI**:
+
+- Original analysis excluded rows with missing CCI/DCSI; this was only ~10 records
+- Reanalysis will impute these using patient demographics and clinical characteristics
+
+3. **New analysis variables**: 
+
+- This includes DR severity and treatment
+- Missing values will be handled via multiple imputation in the next step
+
 
 ## Variable Creation
 
@@ -143,8 +140,8 @@ ps_model_vars <- c(
   "anti_VEGF",
   "focal_laser_flag",
   "PRP_flag",
-  "glaucoma_bef_hitplus_cat",  # Missing already coded as 0 (no condition)
-  "otherretina_bef_hitplus_cat",  # Missing already coded as 0 (no condition)
+  "glaucoma_bef_hitplus_cat",  # Missing coded as 0 (no condition)
+  "otherretina_bef_hitplus_cat",  # Missing coded as 0 (no condition)
   "catsurg_before_hitplus_cat"
 )
 
@@ -154,11 +151,14 @@ outcome_model_vars <- c(
   ps_model_vars  # All PS vars are also in outcome model
 )
 
-# Assess missing data BEFORE recoding (for documentation)
+# Assess missing data BEFORE recoding
 missing_before_recoding <- df_combined |>
   dplyr::select(dplyr::all_of(c(
-    "baseline_VA_logMAR", "CCI", "DCSI", 
-    "Glaucoma_bef_hitplus", "Otherretina_bef_hitplus",
+    "baseline_VA_logMAR", 
+    "CCI", 
+    "DCSI", 
+    "Glaucoma_bef_hitplus",
+    "Otherretina_bef_hitplus",
     "cataract_surgery_bef_hitplus"
   ))) |>
   dplyr::summarise(dplyr::across(everything(), ~ sum(is.na(.)))) |>
@@ -185,7 +185,6 @@ missing_summary <- df_analysis |>
   ) |>
   dplyr::arrange(desc(n_missing))
 
-# Display missing data summary
 missing_summary |> 
   filter(n_missing > 0) |>
   kable(caption = "Variables with missing data after recoding (glaucoma/retina conditions coded as 0)")
@@ -194,7 +193,6 @@ missing_summary |>
 ## Data Summary for Analysis Variables
 
 ```{r data-summary}
-# Summary of key variables
 summary_vars <- c(
   "outcome_va_vi_binary",
   "ever_lapse_binary", 
@@ -205,33 +203,26 @@ summary_vars <- c(
   "DCSI"
 )
 
-# Create summary table
 df_analysis |>
   dplyr::select(dplyr::all_of(summary_vars)) |>
   summary()
 
-# Distribution of outcome by exposure
 table(df_analysis$outcome_va_vi_binary, df_analysis$ever_lapse_binary, 
       dnn = c("Vision Impairment", "Ever Lapsed"))
 
-# Distribution of DR severity
 table(df_analysis$dr_severity, useNA = "ifany")
 
-# Distribution of treatment types
 table(df_analysis$treatment_type, useNA = "ifany")
 ```
 
 ## Dataset for Imputation
 
 ```{r imputation-dataset}
-# Full dataset for imputation (no exclusions for missing CCI/DCSI)
 df_for_imputation <- df_analysis
 
-# For comparison, create complete case dataset (as in original analysis)
 df_complete_original <- df_analysis |>
   filter(!is.na(CCI) & !is.na(DCSI))
 
-# Summary of datasets
 n_total <- nrow(df_analysis)
 n_complete_original <- nrow(df_complete_original)
 n_gained_by_imputation <- n_total - n_complete_original
@@ -255,16 +246,13 @@ tibble(
 ## Save Prepared Data
 
 ```{r save-data}
-# Create directories if they don't exist
 if (!dir.exists(reanalysis_data_dir)) {
   dir.create(reanalysis_data_dir, recursive = TRUE)
 }
 
-# Save the prepared datasets to network drive
 saveRDS(df_for_imputation, file.path(reanalysis_data_dir, "df_for_imputation.rds"))
 saveRDS(df_complete_original, file.path(reanalysis_data_dir, "df_complete_original.rds"))
 
-# Save variable lists for use in other scripts
 variable_lists <- list(
   ps_model_vars = ps_model_vars,
   outcome_model_vars = outcome_model_vars,
@@ -273,7 +261,6 @@ variable_lists <- list(
 )
 saveRDS(variable_lists, file.path(reanalysis_data_dir, "variable_lists.rds"))
 
-# Confirm files saved
 message("Data saved to: ", reanalysis_data_dir)
 ```
 
