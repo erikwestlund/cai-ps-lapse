@@ -106,9 +106,15 @@ Following the approach in twang-analysis.Rmd, we'll use GBM via twang package to
 # Initialize storage for PS results
 twang_results <- list()
 
+# Track progress
+progress_df <- data.frame(
+  Imputation = integer(),
+  Trees_Used = integer(),
+  Weight_Min = numeric(),
+  Weight_Max = numeric()
+)
+
 for (i in 1:n_imputations) {
-  cat("Processing imputation", i, "of", n_imputations, "...")
-  
   # Run twang ps model - following analysis.Rmd approach
   twang_model <- ps(
     formula = ps_formula,
@@ -131,11 +137,17 @@ for (i in 1:n_imputations) {
     n_trees_used = twang_model$desc$es.mean$n.trees
   )
   
-  cat("  - Trees used (es.mean):", twang_model$desc$es.mean$n.trees, "")
-  cat("  - Weight range: [", round(min(weights), 3), ",", round(max(weights), 3), "]")
+  # Track progress
+  progress_df <- rbind(progress_df, data.frame(
+    Imputation = i,
+    Trees_Used = twang_model$desc$es.mean$n.trees,
+    Weight_Min = round(min(weights), 3),
+    Weight_Max = round(max(weights), 3)
+  ))
 }
 
-cat("Twang propensity score calculation complete")
+# Display progress summary
+kable(progress_df, caption = "Twang Model Fitting Progress")
 ```
 
 ## Balance Assessment
@@ -161,8 +173,7 @@ for (i in 1:n_imputations) {
   )
   
   if (i <= max_imputations_for_diagnostics) {
-    cat("Balance summary for imputation", i)
-    print(summary(twang_model))
+    # Balance summary will be shown in diagnostics section
   }
 }
 
@@ -211,6 +222,8 @@ if (avg_weights$Max_Weight_Overall > 10) {
 
 ## Diagnostics for Sample of Imputations
 
+Showing diagnostic plots for the first **`r min(max_imputations_for_diagnostics, n_imputations)`** imputations.
+
 ```{r diagnostics-plots}
 #| fig-height: 8
 #| fig-width: 10
@@ -218,38 +231,18 @@ if (avg_weights$Max_Weight_Overall > 10) {
 n_to_show <- min(max_imputations_for_diagnostics, n_imputations)
 imps_to_show <- 1:n_to_show
 
-cat("Generating twang diagnostic plots for", n_to_show, "imputations...")
-
-# For each selected imputation, show twang-specific diagnostics
+# Generate diagnostic plots for selected imputations
 for (i in imps_to_show) {
-  cat("Diagnostics for Imputation", i, ":")
   
   twang_model <- twang_results[[i]]$model
   
-  tryCatch({
-    plot(twang_model)
-  }, error = function(e) {
-    cat("  Standard plots not available, generating custom diagnostics...")
-    
-    ps_scores <- twang_results[[i]]$ps_scores
-    weights <- twang_results[[i]]$weights
-    treated <- imputed_datasets[[i]]$ever_lapse_binary == 1
-    
-    par(mfrow = c(2, 2))
-    
-    hist(ps_scores[!treated], main = "PS Distribution - Control", 
-         xlab = "Propensity Score", col = "lightblue")
-    hist(ps_scores[treated], main = "PS Distribution - Treated", 
-         xlab = "Propensity Score", col = "lightcoral")
-    
-    hist(weights[!treated], main = "Weights - Control", 
-         xlab = "Weight", col = "lightblue")
-    hist(weights[treated], main = "Weights - Treated", 
-         xlab = "Weight", col = "lightcoral")
-    
-    par(mfrow = c(1, 1))
-  })
+  # Print section header
+  cat("\n### Imputation", i, "\n\n")
   
+  # Display twang diagnostic plots
+  plot(twang_model)
+  
+  # Display balance summary
   print(summary(twang_model))
 }
 ```
@@ -260,9 +253,16 @@ for (i in imps_to_show) {
 #| fig-height: 6
 #| fig-width: 10
 
+# Create weight distribution summary
+weight_dist_summary <- data.frame(
+  Imputation = integer(),
+  Control_Mean = numeric(),
+  Control_Max = numeric(),
+  Treated_Mean = numeric()
+)
+
 # Plot PS distribution for first few imputations
 for (i in imps_to_show) {
-  cat("Propensity score distributions for imputation", i, "")
   
   twang_model <- twang_results[[i]]$model
   weights <- twang_results[[i]]$weights
@@ -286,12 +286,19 @@ for (i in imps_to_show) {
   
   par(mfrow = c(1, 1))
   
-  cat("  Weight summary:")
-  cat("    Control: mean =", round(mean(weights[!treated]), 3), 
-      ", max =", round(max(weights[!treated]), 3), "")
-  cat("    Treated: mean =", round(mean(weights[treated]), 3),
-      "(should be 1.0 for ATT)")
+  # Store weight summary
+  weight_dist_summary <- rbind(weight_dist_summary, data.frame(
+    Imputation = i,
+    Control_Mean = round(mean(weights[!treated]), 3),
+    Control_Max = round(max(weights[!treated]), 3),
+    Treated_Mean = round(mean(weights[treated]), 3)
+  ))
 }
+
+# Display weight distribution summary
+kable(weight_dist_summary, 
+      caption = "Weight Distribution by Imputation",
+      col.names = c("Imputation", "Control Mean", "Control Max", "Treated Mean (should be 1.0 for ATT)"))
 ```
 
 
