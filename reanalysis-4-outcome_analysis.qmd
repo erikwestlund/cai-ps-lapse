@@ -280,7 +280,7 @@ message("All models fitted successfully")
 ```{r pool-results}
 # Use mitools for robust pooling implementation
 # MIcombine properly implements Rubin's rules with Barnard-Rubin adjustment
-pooled_model <- MIcombine(three_way_models)
+pooled_model <- MIcombine(models)
 
 # Extract pooled results
 pooled_summary <- summary(pooled_model)

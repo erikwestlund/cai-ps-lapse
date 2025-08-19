@@ -97,7 +97,11 @@ imputation_vars <- c(
 )
 
 df_mice <- df_for_imputation |>
-  dplyr::select(dplyr::all_of(imputation_vars)) |>
+  mutate(
+    # Create a unique row identifier to preserve exact row matching
+    row_id = row_number()
+  ) |>
+  dplyr::select(row_id, dplyr::all_of(imputation_vars)) |>
   mutate(
     # Convert person_dr to ordered factor for polr imputation method
     person_dr = factor(person_dr, levels = c(0, 1, 2), 
@@ -170,7 +174,8 @@ custom_methods["insurance_cat"] <- "polyreg"
 
 # Don't impute these variables
 # Method = "" means: don't impute (but still use as predictor EXCEPT for ID)
-custom_methods["e_mrn_deidentified"] <- ""  # ID - never impute, never use as predictor
+custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor
+custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor
 custom_methods["ever_lapse_binary"] <- ""  # Complete - use as predictor only
 custom_methods["glaucoma_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
 custom_methods["otherretina_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
@@ -186,9 +191,11 @@ custom_methods["PRP_flag"] <- ""  # Likely complete
 # Check predictor matrix (which variables predict which)
 pred_matrix <- mice_dry$predictorMatrix
 
-# Don't use ID as predictor AND don't impute it
+# Don't use IDs as predictors AND don't impute them
 pred_matrix[, "e_mrn_deidentified"] <- 0
 pred_matrix["e_mrn_deidentified", ] <- 0
+pred_matrix[, "row_id"] <- 0
+pred_matrix["row_id", ] <- 0
 
 # Ensure outcome is used to predict missingness (important for MAR assumption)
 pred_matrix[, "outcome_VA_logMAR"] <- 1
@@ -391,12 +398,14 @@ imputed_datasets <- lapply(1:n_imputations, function(i) {
 })
 
 # Add back any variables not included in imputation or transformation
-# Get the full original dataset
-df_original_full <- df_for_imputation
+# Get the full original dataset with row IDs
+df_original_full <- df_for_imputation |>
+  mutate(row_id = row_number())
 
 # Variables to add back (those not in imputation model or created by transformations)
 vars_in_imputed <- names(imputed_datasets[[1]])
-vars_to_add <- setdiff(names(df_original_full), vars_in_imputed)
+# Remove row_id from comparison since it's our join key
+vars_to_add <- setdiff(names(df_original_full), c(vars_in_imputed, "row_id"))
 ```
 
 ### Adding Back Non-Imputed Variables
@@ -405,15 +414,27 @@ vars_to_add <- setdiff(names(df_original_full), vars_in_imputed)
 
 ```{r add-back-vars}
 if(length(vars_to_add) > 0) {
-  # Add these variables back to each imputed dataset
+  # Add these variables back to each imputed dataset using row_id for exact matching
   imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
+    # Store original row count
+    orig_rows <- nrow(imp_data)
+    
+    # Join using row_id for exact 1:1 matching
     imp_data <- imp_data |>
       left_join(
         df_original_full |> 
-          dplyr::select(e_mrn_deidentified, dplyr::all_of(vars_to_add)),
-        by = "e_mrn_deidentified",
-        relationship = "many-to-many"  # Expected: multiple eyes per patient
+          dplyr::select(row_id, dplyr::all_of(vars_to_add)),
+        by = "row_id"
       )
+    
+    # Verify no row duplication
+    if (nrow(imp_data) != orig_rows) {
+      stop("Join changed row count from ", orig_rows, " to ", nrow(imp_data), 
+           ". This should not happen with row_id join.")
+    }
+    
+    # Remove row_id as it's no longer needed
+    imp_data <- imp_data |> select(-row_id)
     
     return(imp_data)
   })
