@@ -33,6 +33,8 @@ create_age_cat <- function(data) {
 }
 
 # Create treatment type from individual treatment flags
+# NOTE: This uses hierarchical assignment - patients with multiple treatments
+# will be classified by the first matching condition (anti_VEGF > PRP > other)
 create_treatment_type <- function(data) {
   data |>
     mutate(
@@ -44,8 +46,12 @@ create_treatment_type <- function(data) {
       ),
       treatment_type = factor(treatment_type, 
                              levels = c("no_treatment", "anti_VEGF", "PRP", "other_treatment")),
-      any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
-                                other_inject == 1 | focal_laser_flag == 1)
+      # Binary indicator for any treatment vs none - as factor for interaction models
+      any_treatment = factor(
+        ifelse(anti_VEGF == 1 | PRP_flag == 1 | other_inject == 1 | focal_laser_flag == 1,
+               "Any_Treatment", "No_Treatment"),
+        levels = c("No_Treatment", "Any_Treatment")
+      )
     )
 }
 
@@ -75,8 +81,8 @@ create_dr_severity_variables <- function(data) {
     # Convert back from factor if needed
     if (is.factor(data$person_dr)) {
       # If person_dr is a factor from imputation, convert to numeric
-      person_dr_num <- as.numeric(as.character(factor(data$person_dr, 
-                                                      labels = c(0, 1, 2))))
+      # Fixed: Simplified conversion logic
+      person_dr_num <- as.numeric(as.character(data$person_dr))
     } else {
       person_dr_num <- data$person_dr
     }
@@ -198,29 +204,8 @@ save_og_image <- function(plot, filename, width = 800, height = 1000) {
   dev.off()
 }
 
-# Load all required libraries
-load_required_libraries <- function() {
-  library(broom)
-  library(cobalt)
-  library(dplyr)
-  library(flextable)
-  library(gee)
-  library(ggplot2)
-  library(gt)
-  library(gtsummary)
-  library(kableExtra)
-  library(jtools)
-  library(margins)
-  library(MatchIt)
-  library(purrr)
-  library(readr)
-  library(survey)
-  library(twang)
-  library(WeightIt)
-  library(car)        # For linearHypothesis (joint tests)
-  library(emmeans)    # For marginal means and contrasts
-  library(gridExtra)  # For arranging multiple plots
-}
+# Note: load_required_libraries is now defined in dependencies.R
+# This avoids duplicate function definitions
 
 # Create survey design for clustered data
 create_survey_design <- function(data, weights = NULL) {

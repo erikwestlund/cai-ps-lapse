@@ -45,6 +45,13 @@ install_dependencies <- function() {
     "kableExtra",
     "gt",
     "flextable",
+    "gtsummary",
+    
+    # Balance checking and diagnostics
+    "cobalt",
+    "jtools",
+    "gridExtra",
+    "gee",
     
     # Utility packages
     "scales",
@@ -106,7 +113,15 @@ load_required_libraries <- function() {
     "naniar",
     "knitr",
     "scales",
-    "broom"
+    "broom",
+    "cobalt",
+    "gtsummary",
+    "jtools",
+    "gridExtra",
+    "gee",
+    "flextable",
+    "gt",
+    "kableExtra"
   )
   
   for (pkg in required_packages) {
