@@ -80,9 +80,9 @@ create_dr_severity_variables <- function(data) {
     # We only have person_dr (from imputation), create simplified versions
     # Convert back from factor if needed
     if (is.factor(data$person_dr)) {
-      # If person_dr is a factor from imputation, convert to numeric
-      # Fixed: Simplified conversion logic
-      person_dr_num <- as.numeric(as.character(data$person_dr))
+      # If person_dr is an ordered factor with labels from imputation
+      # Convert labels back to numeric (0, 1, 2)
+      person_dr_num <- as.numeric(data$person_dr) - 1  # Factor levels are 1-indexed
     } else {
       person_dr_num <- data$person_dr
     }

@@ -99,7 +99,11 @@ df_mice <- df_for_imputation |>
     # Convert person_dr to ordered factor for polr imputation method
     person_dr = factor(person_dr, levels = c(0, 1, 2), 
                       labels = c("No_DR", "NPDR", "PDR"),
-                      ordered = TRUE)
+                      ordered = TRUE),
+    # Lock factor levels for categorical variables to ensure consistency
+    gender_cat = factor(gender_cat),
+    race_ethnic_cat = factor(race_ethnic_cat),
+    insurance_cat = factor(insurance_cat)
   )
 ```
 
@@ -364,7 +368,8 @@ if(length(vars_to_add) > 0) {
       left_join(
         df_original_full |> 
           dplyr::select(e_mrn_deidentified, dplyr::all_of(vars_to_add)),
-        by = "e_mrn_deidentified"
+        by = "e_mrn_deidentified",
+        relationship = "many-to-many"  # Expected: multiple eyes per patient
       )
     
     return(imp_data)
