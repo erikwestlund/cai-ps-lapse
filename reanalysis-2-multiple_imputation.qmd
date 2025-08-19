@@ -28,15 +28,17 @@ analysis_mode <- "final"  # Change to "final" for production run
 if (analysis_mode == "test") {
   n_imputations <- 2
   n_iterations <- 2
-  message("Running in TEST mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
 } else if (analysis_mode == "final") {
   n_imputations <- 10
   n_iterations <- 20
-  message("Running in FINAL mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
 } else {
   stop("Invalid analysis_mode. Must be 'test' or 'final'")
 }
 ```
+
+**Running in `r toupper(analysis_mode)` mode:**  
+- **Imputations:** `r n_imputations`  
+- **Iterations:** `r n_iterations`
 
 ## Load Prepared Data
 
@@ -320,16 +322,23 @@ if(sum(is.na(df_mice$person_dr)) > 0) {
     prop.table(table(imp_data$person_dr))
   })
   
-  message("Proportion of DR severity across imputations:")
-  message("No_DR: ", round(mean(dr_props[1,]), 3), " (SD: ", round(sd(dr_props[1,]), 3), ")")
-  message("NPDR: ", round(mean(dr_props[2,]), 3), " (SD: ", round(sd(dr_props[2,]), 3), ")")
-  message("PDR: ", round(mean(dr_props[3,]), 3), " (SD: ", round(sd(dr_props[3,]), 3), ")")
+  # Create summary table
+  dr_summary <- data.frame(
+    Category = c("No_DR", "NPDR", "PDR"),
+    Mean_Proportion = c(round(mean(dr_props[1,]), 3), 
+                       round(mean(dr_props[2,]), 3),
+                       round(mean(dr_props[3,]), 3)),
+    SD = c(round(sd(dr_props[1,]), 3),
+           round(sd(dr_props[2,]), 3), 
+           round(sd(dr_props[3,]), 3))
+  )
+  kable(dr_summary, caption = "DR severity proportions across imputations")
   
   # Visual check if stripplot works with factors
   tryCatch({
     stripplot(mice_results, person_dr ~ .imp, pch = 20, cex = 1.2) |> print()
   }, error = function(e) {
-    message("Note: Stripplot not available for categorical person_dr")
+    # Note: Stripplot not available for categorical person_dr
   })
 }
 
@@ -342,15 +351,21 @@ if(sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
     prop.table(table(imp_data$catsurg_before_hitplus_cat))
   })
   
-  message("Proportion of cataract surgery across imputations:")
+  # Create summary table for cataract surgery proportions
   if(is.matrix(cat_props)) {
-    for(i in 1:nrow(cat_props)) {
-      message("Level ", rownames(cat_props)[i], ": ", 
-              round(mean(cat_props[i,]), 3), " (SD: ", round(sd(cat_props[i,]), 3), ")")
-    }
+    cat_summary <- data.frame(
+      Level = rownames(cat_props),
+      Mean_Proportion = apply(cat_props, 1, mean) |> round(3),
+      SD = apply(cat_props, 1, sd) |> round(3)
+    )
   } else {
-    message("Prop = ", round(mean(cat_props), 3), " (SD: ", round(sd(cat_props), 3), ")")
+    cat_summary <- data.frame(
+      Level = "Cataract Surgery",
+      Mean_Proportion = round(mean(cat_props), 3),
+      SD = round(sd(cat_props), 3)
+    )
   }
+  kable(cat_summary, caption = "Cataract surgery proportions across imputations")
 }
 ```
 
@@ -382,10 +397,14 @@ df_original_full <- df_for_imputation
 # Variables to add back (those not in imputation model or created by transformations)
 vars_in_imputed <- names(imputed_datasets[[1]])
 vars_to_add <- setdiff(names(df_original_full), vars_in_imputed)
+```
 
+### Adding Back Non-Imputed Variables
+
+**Variables to add back:** `r if(length(vars_to_add) > 0) length(vars_to_add) else 0` variables not in imputation model
+
+```{r add-back-vars}
 if(length(vars_to_add) > 0) {
-  message("Adding back ", length(vars_to_add), " variables not in imputation model...")
-  
   # Add these variables back to each imputed dataset
   imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
     imp_data <- imp_data |>

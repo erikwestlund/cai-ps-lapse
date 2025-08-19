@@ -126,23 +126,19 @@ load_required_libraries <- function() {
   
   for (pkg in required_packages) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
-      cat("Installing missing package:", pkg, "\n")
-      install.packages(pkg, dependencies = TRUE)
+      install.packages(pkg, dependencies = TRUE, quiet = TRUE)
     }
-    library(pkg, character.only = TRUE)
+    library(pkg, character.only = TRUE, quietly = TRUE)
   }
 }
 
 # Setup function for quarto documents
 setup_analysis <- function(seed = 2025) {
   set.seed(seed)
-  cat("Random seed set to:", seed, "\n")
   
   source("settings.R")
   source("functions.R")
   source("dependencies.R")
   
   load_required_libraries()
-  
-  cat("Analysis environment loaded successfully\n")
 }

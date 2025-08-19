@@ -23,9 +23,11 @@ analysis_mode <- "test"  # Should match imputation mode
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
+  max_imputations_to_process <- 2  # Process only 2 imputations in test mode
   max_imputations_for_diagnostics <- 2  # Show diagnostics for 2 imputations in test
   n_trees <- 1000  # Fewer trees for testing
 } else {
+  max_imputations_to_process <- NULL  # Process all available imputations
   max_imputations_for_diagnostics <- 5  # Show diagnostics for up to 5 imputations in final
   n_trees <- 3000  # More trees for final analysis
 }
@@ -33,18 +35,31 @@ if (analysis_mode == "test") {
 ```
 
 **Analysis mode:** `r analysis_mode`  
-**Will show diagnostics for up to** `r max_imputations_for_diagnostics` **imputations**  
-**Using** `r n_trees` **trees for GBM**
+**Imputations to process:** `r if(!is.null(max_imputations_to_process)) max_imputations_to_process else "all available"`  
+**Diagnostics shown for:** `r max_imputations_for_diagnostics` **imputations**  
+**GBM trees:** `r n_trees`
 
 ## Load Imputed Datasets
 
 ```{r load-data}
 imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
-n_imputations <- length(imputed_datasets)
+n_available <- length(imputed_datasets)
+
+# Determine how many imputations to actually process
+if (!is.null(max_imputations_to_process)) {
+  n_imputations <- min(max_imputations_to_process, n_available)
+  
+  if (n_imputations < n_available) {
+    imputed_datasets <- imputed_datasets[1:n_imputations]
+  }
+} else {
+  n_imputations <- n_available
+}
 
 ```
 
-**Loaded** `r n_imputations` **imputed datasets**
+**Available imputed datasets:** `r n_available`  
+**Processing:** `r n_imputations` **datasets** `r if(analysis_mode == "test") "(test mode limit)" else "(all available)"`
 
 ```{r continue-load}
 
@@ -230,32 +245,27 @@ Showing diagnostic plots for the first **`r min(max_imputations_for_diagnostics,
 
 n_to_show <- min(max_imputations_for_diagnostics, n_imputations)
 imps_to_show <- 1:n_to_show
+```
 
+```{r diagnostics-loop}
 # Generate diagnostic plots for selected imputations
 for (i in imps_to_show) {
+  cat("\n### Imputation", i, "\n\n")
   
   twang_model <- twang_results[[i]]$model
   
-  # Print section header
-  cat("\n### Imputation", i, "\n\n")
-  
-  # Plot 1: Iteration convergence
   cat("#### Convergence\n")
   plot(twang_model, plots = 1)
   
-  # Plot 2: Boxplots of weights
   cat("\n#### Weight Distribution\n")
   plot(twang_model, plots = 2)
   
-  # Plot 3: Balance reduction (standardized effect sizes)
   cat("\n#### Covariate Balance\n")
   plot(twang_model, plots = 3)
   
-  # Plot 6: Proportion of weights histogram
   cat("\n#### Weight Proportions\n")
   plot(twang_model, plots = 6)
   
-  # Display balance summary table
   cat("\n#### Balance Summary Table\n")
   print(summary(twang_model))
 }

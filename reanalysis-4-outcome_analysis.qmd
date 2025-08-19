@@ -20,16 +20,16 @@ library(survey)
 library(ggplot2)
 library(gridExtra)
 library(knitr)
-library(tidyr)    # For pivot_wider
-library(dplyr)    # For data manipulation
-library(mitools)  # For proper MI pooling with survey weights
-library(mice)     # For pooling utilities
+library(tidyr)
+library(dplyr)
+library(mitools)
+library(mice)
 
 # ANALYSIS MODE: Use same as imputation/PS
 analysis_mode <- "test"  # Should match imputation and PS modes
-
-message("Analysis mode: ", analysis_mode)
 ```
+
+**Analysis mode:** `r analysis_mode`
 
 ## Pooling Methodology for Survey-Weighted Multiple Imputation
 
@@ -77,16 +77,21 @@ for (i in 1:n_imputations) {
   imputed_datasets[[i]]$iptw_weight <- ps_results$twang_results[[i]]$weights
 }
 
-message("Loaded ", n_imputations, " imputed datasets with IPTW weights")
-
 # Summary of first dataset for verification
 first_data <- imputed_datasets[[1]]
-message("First dataset summary:")
-message("  - N observations: ", nrow(first_data))
-message("  - N unique patients: ", length(unique(first_data$e_mrn_deidentified)))
-message("  - Mean IPTW weight: ", round(mean(first_data$iptw_weight), 3))
-message("  - Weight range: [", round(min(first_data$iptw_weight), 3), ", ", 
-        round(max(first_data$iptw_weight), 3), "]")
+
+dataset_summary <- data.frame(
+  Metric = c("Imputed datasets loaded", "N observations", "N unique patients", 
+             "Mean IPTW weight", "Weight range"),
+  Value = c(n_imputations,
+            nrow(first_data),
+            length(unique(first_data$e_mrn_deidentified)),
+            round(mean(first_data$iptw_weight), 3),
+            paste0("[", round(min(first_data$iptw_weight), 3), ", ",
+                   round(max(first_data$iptw_weight), 3), "]"))
+)
+
+kable(dataset_summary, caption = "Dataset Summary")
 ```
 
 ## Create Analysis Variables
@@ -112,17 +117,27 @@ for (i in 1:n_imputations) {
     )
 }
 
-# Check distributions in first dataset
-message("Variable distributions in first imputed dataset:")
-message("DR Severity:")
-print(table(imputed_datasets[[1]]$dr_severity))
-message("Treatment Status:")
-print(table(imputed_datasets[[1]]$any_treatment))
-message("Lapse Status:")
-print(table(imputed_datasets[[1]]$ever_lapse_binary))
+```
 
-# Cross-tabulation of the three factors
-message("Three-way cross-tabulation:")
+### Variable Distributions in First Imputed Dataset
+
+**DR Severity:**
+```{r dr-severity-dist}
+table(imputed_datasets[[1]]$dr_severity)
+```
+
+**Treatment Status:**
+```{r treatment-dist}
+table(imputed_datasets[[1]]$any_treatment)
+```
+
+**Lapse Status:**
+```{r lapse-dist}
+table(imputed_datasets[[1]]$ever_lapse_binary)
+```
+
+**Three-way Cross-tabulation:**
+```{r crosstab}
 with(imputed_datasets[[1]], 
      ftable(dr_severity, any_treatment, ever_lapse_binary))
 ```
@@ -151,16 +166,20 @@ interaction_formula <- as.formula(paste(
   paste(base_covariates, collapse = " + ")
 ))
 
-message("Model formula:")
-print(interaction_formula)
-
-# Count interaction terms
-message("Interaction structure:")
-message("  - Main effects: 3 (lapse, DR severity [2 df], treatment)")
-message("  - Two-way interactions: 3 (lapse×DR [2 df], lapse×treatment [1 df], DR×treatment [2 df])")
-message("  - Three-way interaction: 1 (lapse×DR×treatment [2 df])")
-message("  - Total interaction df: 7")
 ```
+
+### Model Specification
+
+**Formula:**
+```{r show-formula}
+print(interaction_formula)
+```
+
+**Interaction Structure:**
+- Main effects: 3 (lapse, DR severity [2 df], treatment)
+- Two-way interactions: 3 (lapse×DR [2 df], lapse×treatment [1 df], DR×treatment [2 df])
+- Three-way interaction: 1 (lapse×DR×treatment [2 df])
+- Total interaction df: 7
 
 ## Fit Models to Each Imputed Dataset
 
@@ -169,10 +188,14 @@ message("  - Total interaction df: 7")
 models <- list()
 model_summaries <- list()
 
-message("Fitting weighted models to each imputed dataset...")
+# Track model fitting progress
+model_progress <- data.frame(
+  Imputation = integer(),
+  Converged = logical(),
+  ThreeWay_Terms = integer()
+)
 
 for (i in 1:n_imputations) {
-  message("Imputation ", i, " of ", n_imputations, ":")
   
   # Create weighted survey design
   design_weighted <- svydesign(
