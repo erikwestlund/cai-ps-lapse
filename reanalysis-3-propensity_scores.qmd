@@ -239,10 +239,24 @@ for (i in imps_to_show) {
   # Print section header
   cat("\n### Imputation", i, "\n\n")
   
-  # Display twang diagnostic plots
-  plot(twang_model)
+  # Plot 1: Iteration convergence
+  cat("#### Convergence\n")
+  plot(twang_model, plots = 1)
   
-  # Display balance summary
+  # Plot 2: Boxplots of weights
+  cat("\n#### Weight Distribution\n")
+  plot(twang_model, plots = 2)
+  
+  # Plot 3: Balance reduction (standardized effect sizes)
+  cat("\n#### Covariate Balance\n")
+  plot(twang_model, plots = 3)
+  
+  # Plot 6: Proportion of weights histogram
+  cat("\n#### Weight Proportions\n")
+  plot(twang_model, plots = 6)
+  
+  # Display balance summary table
+  cat("\n#### Balance Summary Table\n")
   print(summary(twang_model))
 }
 ```
@@ -367,12 +381,10 @@ kable(weight_stats, caption = "Weight Statistics (Averaged Across Imputations)")
 
 ```{r weight-stability}
 if (avg_weights$Max_Weight_Overall > 10) {
-  print("⚠ WARNING: Maximum weight > 10, indicating potential instability")
+  print("WARNING: Maximum weight > 10, indicating potential instability")
   print("Consider increasing n.trees or adjusting twang parameters")
-} else if (avg_weights$Max_Weight_Overall > 5) {
-  print("📊 NOTE: Maximum weight > 5, monitor for stability in outcome analysis")
 } else {
-  print("✓ GOOD: Weights appear stable (max < 5)")
+  print("GOOD: Weights appear stable (max < 10)")
 }
 ```
 
