@@ -21,12 +21,12 @@ library(naniar)
 # ANALYSIS MODE: "test" or "final"
 # test = 2 imputations, 5 iterations (fast)
 # final = 30 imputations, 20 iterations (slow but thorough)
-analysis_mode <- "final"  # Change to "final" for production run
+analysis_mode <- "test"  # Change to "final" for production run
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
   n_imputations <- 2
-  n_iterations <- 5
+  n_iterations <- 2
   message("Running in TEST mode: ", n_imputations, " imputations, ", n_iterations, " iterations")
 } else if (analysis_mode == "final") {
   n_imputations <- 10
@@ -226,11 +226,11 @@ predictors <- names(which(colSums(pred_matrix) > 0))
 print(predictors)
 
 # Print model parameters
-message("=== IMPUTATION PARAMETERS ===")
+message("Imputation Parameters:")
 message("Mode: ", analysis_mode)
 message("Number of imputations (m): ", n_imputations)
 message("Max iterations per imputation (maxit): ", n_iterations)
-message("Random seed: 2025")
+message(paste("Random seed: ", seed))
 ```
 
 ## Run Multiple Imputation
@@ -376,7 +376,6 @@ if(length(vars_to_add) > 0) {
   })
 }
 
-# Verify completeness
 completeness_check <- lapply(imputed_datasets, function(d) {
   sum(!complete.cases(d[, ps_model_vars]))
 })
