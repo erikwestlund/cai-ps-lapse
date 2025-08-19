@@ -107,7 +107,7 @@ Following the approach in twang-analysis.Rmd, we'll use GBM via twang package to
 twang_results <- list()
 
 for (i in 1:n_imputations) {
-  cat("Processing imputation", i, "of", n_imputations, "...\n")
+  cat("Processing imputation", i, "of", n_imputations, "...")
   
   # Run twang ps model - following analysis.Rmd approach
   twang_model <- ps(
@@ -131,11 +131,11 @@ for (i in 1:n_imputations) {
     n_trees_used = twang_model$desc$es.mean$n.trees
   )
   
-  cat("  - Trees used (es.mean):", twang_model$desc$es.mean$n.trees, "\n")
-  cat("  - Weight range: [", round(min(weights), 3), ",", round(max(weights), 3), "]\n")
+  cat("  - Trees used (es.mean):", twang_model$desc$es.mean$n.trees, "")
+  cat("  - Weight range: [", round(min(weights), 3), ",", round(max(weights), 3), "]")
 }
 
-cat("\nTwang propensity score calculation complete\n")
+cat("Twang propensity score calculation complete")
 ```
 
 ## Balance Assessment
@@ -161,7 +161,7 @@ for (i in 1:n_imputations) {
   )
   
   if (i <= max_imputations_for_diagnostics) {
-    cat("\nBalance summary for imputation", i, ":\n")
+    cat("Balance summary for imputation", i)
     print(summary(twang_model))
   }
 }
@@ -218,18 +218,18 @@ if (avg_weights$Max_Weight_Overall > 10) {
 n_to_show <- min(max_imputations_for_diagnostics, n_imputations)
 imps_to_show <- 1:n_to_show
 
-cat("\nGenerating twang diagnostic plots for", n_to_show, "imputations...\n")
+cat("Generating twang diagnostic plots for", n_to_show, "imputations...")
 
 # For each selected imputation, show twang-specific diagnostics
 for (i in imps_to_show) {
-  cat("\nDiagnostics for Imputation", i, ":\n")
+  cat("Diagnostics for Imputation", i, ":")
   
   twang_model <- twang_results[[i]]$model
   
   tryCatch({
     plot(twang_model)
   }, error = function(e) {
-    cat("  Standard plots not available, generating custom diagnostics...\n")
+    cat("  Standard plots not available, generating custom diagnostics...")
     
     ps_scores <- twang_results[[i]]$ps_scores
     weights <- twang_results[[i]]$weights
@@ -262,7 +262,7 @@ for (i in imps_to_show) {
 
 # Plot PS distribution for first few imputations
 for (i in imps_to_show) {
-  cat("\nPropensity score distributions for imputation", i, "\n")
+  cat("Propensity score distributions for imputation", i, "")
   
   twang_model <- twang_results[[i]]$model
   weights <- twang_results[[i]]$weights
@@ -286,11 +286,11 @@ for (i in imps_to_show) {
   
   par(mfrow = c(1, 1))
   
-  cat("  Weight summary:\n")
+  cat("  Weight summary:")
   cat("    Control: mean =", round(mean(weights[!treated]), 3), 
-      ", max =", round(max(weights[!treated]), 3), "\n")
+      ", max =", round(max(weights[!treated]), 3), "")
   cat("    Treated: mean =", round(mean(weights[treated]), 3),
-      "(should be 1.0 for ATT)\n")
+      "(should be 1.0 for ATT)")
 }
 ```
 
