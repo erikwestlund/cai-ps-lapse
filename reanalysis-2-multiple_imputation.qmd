@@ -114,7 +114,7 @@ mice_dry <- mice(df_mice, maxit = 0, printFlag = FALSE)
 message("Total variables in dataset: ", ncol(df_mice))
 message("Variables to be imputed: ", sum(mice_dry$nmis > 0))
 message("Total missing values: ", sum(mice_dry$nmis))
-message("\nMissing data by variable:")
+message("Missing data by variable:")
 miss_vars <- data.frame(
   Variable = names(mice_dry$nmis),
   N_Missing = mice_dry$nmis,
@@ -132,7 +132,7 @@ method_table <- data.frame(
 ) |>
   filter(Method != "")
 
-message("\nDefault imputation methods:")
+message("Default imputation methods:")
 print(method_table)
 
 # Customize imputation methods as needed
@@ -185,7 +185,7 @@ pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 
 # Print final imputation model configuration
-message("\n=== FINAL IMPUTATION MODEL ===\n")
+message("FINAL IMPUTATION MODEL")
 
 # Summary of methods
 final_methods <- data.frame(
@@ -211,18 +211,18 @@ print(final_methods)
 
 # Show which variables will be imputed
 vars_to_impute <- names(custom_methods)[custom_methods != ""]
-message("\nVariables that WILL be imputed (", length(vars_to_impute), " total):")
+message("Variables that WILL be imputed (", length(vars_to_impute), " total):")
 print(vars_to_impute)
 
 # Show predictor matrix summary
-message("\nPredictor matrix summary:")
+message("Predictor matrix summary:")
 message("- Each variable uses ", sum(pred_matrix[1,]), " predictors on average")
 message("- Variables used as predictors:")
 predictors <- names(which(colSums(pred_matrix) > 0))
 print(predictors)
 
 # Print model parameters
-message("\n=== IMPUTATION PARAMETERS ===")
+message("=== IMPUTATION PARAMETERS ===")
 message("Mode: ", analysis_mode)
 message("Number of imputations (m): ", n_imputations)
 message("Max iterations per imputation (maxit): ", n_iterations)
@@ -426,7 +426,7 @@ summary_table |>
 
 # Variables that were imputed
 imputed_vars <- names(mice_results$nmis)[mice_results$nmis > 0]
-message("\nVariables that were imputed:")
+message("Variables that were imputed:")
 print(imputed_vars)
 ```
 

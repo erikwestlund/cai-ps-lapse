@@ -95,7 +95,7 @@ Following the approach in twang-analysis.Rmd, we'll use GBM via twang package to
 twang_results <- list()
 
 # Run twang for each imputed dataset
-message("\nCalculating propensity scores using Twang GBM...")
+message("Calculating propensity scores using Twang GBM...")
 message("Parameters:")
 message("  - n.trees: ", n_trees)
 message("  - interaction.depth: 3")
@@ -104,7 +104,7 @@ message("  - estimand: ATT")
 message("  - stop.method: es.mean (effect size only)")
 
 for (i in 1:n_imputations) {
-  message("\nProcessing imputation ", i, " of ", n_imputations, "...")
+  message("Processing imputation ", i, " of ", n_imputations, "...")
   
   # Run twang ps model - following analysis.Rmd approach
   twang_model <- ps(
@@ -132,7 +132,7 @@ for (i in 1:n_imputations) {
   message("  - Weight range: [", round(min(weights), 3), ", ", round(max(weights), 3), "]")
 }
 
-message("\nTwang propensity score calculation complete")
+message("Twang propensity score calculation complete")
 ```
 
 ## Balance Assessment
@@ -165,7 +165,7 @@ for (i in 1:n_imputations) {
   
   # Print summary for diagnostic purposes (this will show balance)
   if (i <= max_imputations_for_diagnostics) {
-    message("\nBalance summary for imputation ", i, ":")
+    message("Balance summary for imputation ", i, ":")
     print(summary(twang_model))
   }
 }
@@ -173,7 +173,7 @@ for (i in 1:n_imputations) {
 # Combine all summaries
 balance_summary_all <- do.call(rbind, balance_summaries)
 
-message("\nWeight Summary Across All Imputations:")
+message("Weight Summary Across All Imputations:")
 kable(balance_summary_all, 
       caption = "Weight distribution by imputation",
       digits = 3)
@@ -187,21 +187,21 @@ avg_weights <- data.frame(
   Max_Weight_Overall = max(balance_summary_all$Max_Weight)
 )
 
-message("\nAverage Weights Across Imputations:")
+message("Average Weights Across Imputations:")
 kable(avg_weights,
       caption = "Average weight statistics across all imputations",
       digits = 3)
 
 # Check weight stability
 if (avg_weights$Max_Weight_Overall > 10) {
-  message("\n⚠ Warning: Maximum weight > 10, indicating potential instability")
+  message("⚠ Warning: Maximum weight > 10, indicating potential instability")
 } else if (avg_weights$Max_Weight_Overall > 5) {
-  message("\nNote: Maximum weight > 5, monitor for stability")
+  message("Note: Maximum weight > 5, monitor for stability")
 } else {
-  message("\n✓ Weights appear stable (max < 5)")
+  message("✓ Weights appear stable (max < 5)")
 }
 
-message("\nNote: Balance statistics are shown in the summary output above.")
+message("Note: Balance statistics are shown in the summary output above.")
 message("The twang package optimizes to minimize effect sizes (es.mean).")
 ```
 
@@ -215,11 +215,11 @@ message("The twang package optimizes to minimize effect sizes (es.mean).")
 n_to_show <- min(max_imputations_for_diagnostics, n_imputations)
 imps_to_show <- 1:n_to_show
 
-message("\nGenerating twang diagnostic plots for ", n_to_show, " imputations...")
+message("Generating twang diagnostic plots for ", n_to_show, " imputations...")
 
 # For each selected imputation, show twang-specific diagnostics
 for (i in imps_to_show) {
-  message("\nDiagnostics for Imputation ", i, ":")
+  message("Diagnostics for Imputation ", i, ":")
   
   # Get the twang model for this imputation
   twang_model <- twang_results[[i]]$model
@@ -266,7 +266,7 @@ for (i in imps_to_show) {
 
 # Plot PS distribution for first few imputations
 for (i in imps_to_show) {
-  message("\nPropensity score distributions for imputation ", i)
+  message("Propensity score distributions for imputation ", i)
   
   # Get propensity scores from the twang model
   twang_model <- twang_results[[i]]$model
@@ -323,7 +323,7 @@ ps_output <- list(
 
 saveRDS(ps_output, file.path(reanalysis_data_dir, "ps_results_twang.rds"))
 
-message("\nTwang propensity score results saved to: ", 
+message("Twang propensity score results saved to: ", 
         file.path(reanalysis_data_dir, "ps_results_twang.rds"))
 ```
 
@@ -331,7 +331,7 @@ message("\nTwang propensity score results saved to: ",
 
 ```{r summary}
 # Final summary
-message("\n=== TWANG PROPENSITY SCORE ANALYSIS SUMMARY ===")
+message("=== TWANG PROPENSITY SCORE ANALYSIS SUMMARY ===")
 message("Method: Generalized Boosted Models (GBM) via twang")
 message("Imputations processed: ", n_imputations)
 message("Analysis mode: ", analysis_mode)
@@ -340,28 +340,28 @@ message("Estimand: ATT (Average Treatment Effect on the Treated)")
 message("Stop method: es.mean (effect size minimization)")
 
 # Enhanced formula summary
-message("\nEnhanced formula included:")
+message("Enhanced formula included:")
 message("  - DR severity (person_dr)")
 message("  - Treatment type")
 message("  - All standard covariates from original analysis")
 
 # Weight summary  
-message("\nWeight Statistics (averaged across imputations):")
+message("Weight Statistics (averaged across imputations):")
 message("  - Mean weight (treated): ", round(avg_weights$Avg_Weight_Treated, 3))
 message("  - Mean weight (control): ", round(avg_weights$Avg_Weight_Control, 3))
 message("  - Maximum weight: ", round(avg_weights$Max_Weight_Overall, 2))
 
 # Weight stability assessment
 if (avg_weights$Max_Weight_Overall > 10) {
-  message("\n⚠ Warning: Maximum weight > 10, indicating potential instability")
+  message("⚠ Warning: Maximum weight > 10, indicating potential instability")
   message("  Consider increasing n.trees or adjusting twang parameters")
 } else if (avg_weights$Max_Weight_Overall > 5) {
-  message("\nNote: Maximum weight > 5, monitor for stability in outcome analysis")
+  message("Note: Maximum weight > 5, monitor for stability in outcome analysis")
 } else {
-  message("\n✓ Weights appear stable (max < 5)")
+  message("✓ Weights appear stable (max < 5)")
 }
 
-message("\nBalance Assessment:")
+message("Balance Assessment:")
 message("  See summary output above for detailed balance statistics.")
 message("  The twang package optimizes es.mean to achieve covariate balance.")
 ```

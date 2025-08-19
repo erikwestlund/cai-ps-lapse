@@ -82,7 +82,7 @@ message("Loaded ", n_imputations, " imputed datasets with IPTW weights")
 
 # Summary of first dataset for verification
 first_data <- imputed_datasets[[1]]
-message("\nFirst dataset summary:")
+message("First dataset summary:")
 message("  - N observations: ", nrow(first_data))
 message("  - N unique patients: ", length(unique(first_data$e_mrn_deidentified)))
 message("  - Mean IPTW weight: ", round(mean(first_data$iptw_weight), 3))
@@ -114,16 +114,16 @@ for (i in 1:n_imputations) {
 }
 
 # Check distributions in first dataset
-message("\nVariable distributions in first imputed dataset:")
-message("\nDR Severity:")
+message("Variable distributions in first imputed dataset:")
+message("DR Severity:")
 print(table(imputed_datasets[[1]]$dr_severity))
-message("\nTreatment Status:")
+message("Treatment Status:")
 print(table(imputed_datasets[[1]]$any_treatment))
-message("\nLapse Status:")
+message("Lapse Status:")
 print(table(imputed_datasets[[1]]$ever_lapse_binary))
 
 # Cross-tabulation of the three factors
-message("\nThree-way cross-tabulation:")
+message("Three-way cross-tabulation:")
 with(imputed_datasets[[1]], 
      ftable(dr_severity, any_treatment, ever_lapse_binary))
 ```
@@ -156,7 +156,7 @@ message("Model formula:")
 print(interaction_formula)
 
 # Count interaction terms
-message("\nInteraction structure:")
+message("Interaction structure:")
 message("  - Main effects: 3 (lapse, DR severity [2 df], treatment)")
 message("  - Two-way interactions: 3 (lapse×DR [2 df], lapse×treatment [1 df], DR×treatment [2 df])")
 message("  - Three-way interaction: 1 (lapse×DR×treatment [2 df])")
@@ -170,10 +170,10 @@ message("  - Total interaction df: 7")
 models <- list()
 model_summaries <- list()
 
-message("\nFitting weighted models to each imputed dataset...")
+message("Fitting weighted models to each imputed dataset...")
 
 for (i in 1:n_imputations) {
-  message("\nImputation ", i, " of ", n_imputations, ":")
+  message("Imputation ", i, " of ", n_imputations, ":")
   
   # Create weighted survey design
   design_weighted <- svydesign(
@@ -211,7 +211,7 @@ for (i in 1:n_imputations) {
   model_summaries[[i]] <- coef_summary
 }
 
-message("\nAll models fitted successfully")
+message("All models fitted successfully")
 ```
 
 ## Pool Results Using Rubin's Rules for Survey-Weighted Analysis
@@ -300,7 +300,7 @@ pooled_results <- pooled_results |>
   )
 
 # Display diagnostic information
-message("\nPooling diagnostics:")
+message("Pooling diagnostics:")
 message("  - Number of imputations: ", n_imputations)
 message("  - Number of parameters: ", nrow(pooled_results))
 message("  - Average degrees of freedom: ", round(mean(pooled_results$df), 1))
@@ -356,7 +356,7 @@ pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
   ))
 }
 
-message("\nPerforming pooled joint hypothesis tests...")
+message("Performing pooled joint hypothesis tests...")
 
 # Use the first model to get term names (should be same across all imputations)
 first_model <- models[[1]]
@@ -371,7 +371,7 @@ if (length(threeway_terms_test) > 0) {
   # Pool test across imputations
   pooled_test_3way <- pool_chi_square_tests(models, hypothesis_3way, "Three-way interaction")
   
-  message("\n1. Three-way interaction test (H0: all three-way terms = 0):")
+  message("1. Three-way interaction test (H0: all three-way terms = 0):")
   message("   Chi-sq = ", round(pooled_test_3way$D_bar, 3))
   message("   df = ", pooled_test_3way$df)
   message("   p-value = ", format.pval(pooled_test_3way$p_value, digits = 4, eps = 0.0001))
@@ -393,7 +393,7 @@ if (length(lapse_dr_terms) > 0) {
   # Pool test across imputations
   pooled_test_lapse_dr <- pool_chi_square_tests(models, hypothesis_lapse_dr, "Lapse × DR interaction")
   
-  message("\n2. Lapse × DR severity interaction test:")
+  message("2. Lapse × DR severity interaction test:")
   message("   Chi-sq = ", round(pooled_test_lapse_dr$D_bar, 3))
   message("   df = ", pooled_test_lapse_dr$df)
   message("   p-value = ", format.pval(pooled_test_lapse_dr$p_value, digits = 4, eps = 0.0001))
@@ -409,7 +409,7 @@ if (length(lapse_tx_terms) > 0) {
   # Pool test across imputations
   pooled_test_lapse_tx <- pool_chi_square_tests(models, hypothesis_lapse_tx, "Lapse × treatment interaction")
   
-  message("\n3. Lapse × treatment interaction test:")
+  message("3. Lapse × treatment interaction test:")
   message("   Chi-sq = ", round(pooled_test_lapse_tx$D_bar, 3))
   message("   df = ", pooled_test_lapse_tx$df)
   message("   p-value = ", format.pval(pooled_test_lapse_tx$p_value, digits = 4, eps = 0.0001))
@@ -422,7 +422,7 @@ if (length(lapse_tx_terms) > 0) {
 # Function to pool emmeans results across imputations
 pool_emmeans_contrasts <- function(models, n_imputations) {
   
-  message("\nCalculating marginal means and contrasts across all imputations...")
+  message("Calculating marginal means and contrasts across all imputations...")
   message("This may take a few moments...")
   
   # Increase reference grid limit for large models
@@ -692,7 +692,7 @@ grid.arrange(p1, p2, ncol = 2)
 # Function to calculate and pool AMEs across imputations
 calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
   
-  message("\nCalculating Average Marginal Effects across all imputations...")
+  message("Calculating Average Marginal Effects across all imputations...")
   
   # Store AME results from each imputation
   all_ame_results <- list()
@@ -819,15 +819,15 @@ kable(ame_display,
 
 ```{r summary}
 # Summarize key findings using POOLED results
-message("\n=== OUTCOME ANALYSIS SUMMARY ===")
-message("\nThree-Way Interaction Model Results:")
+message("=== OUTCOME ANALYSIS SUMMARY ===")
+message("Three-Way Interaction Model Results:")
 message("  - ", n_imputations, " imputed datasets analyzed")
 message("  - IPTW weights from twang GBM applied")
 message("  - Results properly pooled using Rubin's rules with Barnard-Rubin df adjustment")
 message("  - Survey design accounts for patient clustering")
 
 # Report pooling quality metrics
-message("\nPooling Quality Metrics:")
+message("Pooling Quality Metrics:")
 
 # Calculate fraction of missing information for key parameters
 key_params <- pooled_results[grep("ever_lapse", pooled_results$Term)[1:5], ]
@@ -846,31 +846,31 @@ if (min_df < 10) {
 }
 
 # Identify patterns from POOLED results
-message("\nKey Patterns Observed (from pooled analysis):")
+message("Key Patterns Observed (from pooled analysis):")
 
 # Use the pooled subgroup effects
 effect_summary <- subgroup_effects_stored |>
   arrange(desc(OR))
 
-message("\nStrongest lapse effect:")
+message("Strongest lapse effect:")
 strongest <- effect_summary[1, ]
 message("  - ", strongest$DR_Severity, " + ", strongest$Treatment, 
         ": OR = ", strongest$OR, " (p ", strongest$P_Value, ")")
 
-message("\nWeakest lapse effect:")
+message("Weakest lapse effect:")
 weakest <- effect_summary[nrow(effect_summary), ]
 message("  - ", weakest$DR_Severity, " + ", weakest$Treatment, 
         ": OR = ", weakest$OR, " (p ", weakest$P_Value, ")")
 
 # Clinical interpretation
-message("\n=== CLINICAL INTERPRETATION ===")
-message("\nThe three-way interaction reveals that:")
+message("=== CLINICAL INTERPRETATION ===")
+message("The three-way interaction reveals that:")
 message("1. The harmful effect of lapsing varies by BOTH disease severity AND treatment status")
 message("2. Patients with moderate disease (NPDR) show the largest vulnerability to lapsing")
 message("3. Treatment appears to modify the lapse-outcome relationship differently across DR severity levels")
 message("4. Advanced disease (PDR) patients show minimal harm from lapsing, regardless of treatment")
 
-message("\nImplications for care continuity programs:")
+message("Implications for care continuity programs:")
 message("- Resources should be prioritized for NPDR patients")
 message("- Treatment status should inform retention strategies")
 message("- PDR patients may have different care continuity needs")
@@ -894,7 +894,7 @@ results_to_save <- list(
 saveRDS(results_to_save, 
         file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
 
-message("\nResults saved to: ", 
+message("Results saved to: ", 
         file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
 ```
 
