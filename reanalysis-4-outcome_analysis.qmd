@@ -10,7 +10,6 @@ format: html
 
 ```{r setup}
 #| include: false
-# Setup analysis environment
 source("dependencies.R")
 setup_analysis(seed = 2025)
 

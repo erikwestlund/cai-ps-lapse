@@ -115,11 +115,7 @@ df_mice <- df_for_imputation |>
 # First, do a dry run to check the imputation setup
 mice_dry <- mice(df_mice, maxit = 0, printFlag = FALSE)
 
-# Print initial imputation model summary
-message("Total variables in dataset: ", ncol(df_mice))
-message("Variables to be imputed: ", sum(mice_dry$nmis > 0))
-message("Total missing values: ", sum(mice_dry$nmis))
-message("Missing data by variable:")
+# Imputation model summary
 miss_vars <- data.frame(
   Variable = names(mice_dry$nmis),
   N_Missing = mice_dry$nmis,
@@ -127,8 +123,17 @@ miss_vars <- data.frame(
 ) |>
   filter(N_Missing > 0) |>
   arrange(desc(N_Missing))
+```
 
-print(miss_vars)
+### Initial Imputation Model Summary
+
+**Total variables in dataset:** `r ncol(df_mice)`  
+**Variables to be imputed:** `r sum(mice_dry$nmis > 0)`  
+**Total missing values:** `r sum(mice_dry$nmis)`  
+
+**Missing data by variable:**
+```{r missing-vars-table}
+kable(miss_vars)
 
 method_table <- data.frame(
   Variable = names(mice_dry$method),
@@ -136,9 +141,11 @@ method_table <- data.frame(
   stringsAsFactors = FALSE
 ) |>
   filter(Method != "")
+```
 
-message("Default imputation methods:")
-print(method_table)
+**Default imputation methods:**
+```{r method-table}
+kable(method_table)
 
 # Customize imputation methods as needed
 custom_methods <- mice_dry$method
@@ -189,8 +196,11 @@ pred_matrix["outcome_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Don't predict itse
 pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 
-# Print final imputation model configuration
-message("FINAL IMPUTATION MODEL")
+```
+
+### Final Imputation Model Configuration
+
+```{r final-model-config}
 
 # Summary of methods
 final_methods <- data.frame(
@@ -211,27 +221,40 @@ final_methods <- data.frame(
 final_methods <- final_methods |>
   dplyr::arrange(Method == "", Variable)
 
-message("Imputation methods by variable:")
-print(final_methods)
-
-# Show which variables will be imputed
 vars_to_impute <- names(custom_methods)[custom_methods != ""]
-message("Variables that WILL be imputed (", length(vars_to_impute), " total):")
+```
+
+**Imputation methods by variable:**
+```{r final-methods-table}
+kable(final_methods)
+```
+
+**Variables that WILL be imputed** (`r length(vars_to_impute)` total):
+```{r vars-to-impute}
 print(vars_to_impute)
 
 # Show predictor matrix summary
-message("Predictor matrix summary:")
-message("- Each variable uses ", sum(pred_matrix[1,]), " predictors on average")
-message("- Variables used as predictors:")
+avg_predictors <- sum(pred_matrix[1,])
 predictors <- names(which(colSums(pred_matrix) > 0))
-print(predictors)
+```
 
-# Print model parameters
-message("Imputation Parameters:")
-message("Mode: ", analysis_mode)
-message("Number of imputations (m): ", n_imputations)
-message("Max iterations per imputation (maxit): ", n_iterations)
-message(paste("Random seed: ", seed))
+### Predictor Matrix Summary
+
+Each variable uses an average of **`r avg_predictors`** predictors.
+
+**Variables used as predictors:**
+```{r predictor-list}
+print(predictors)
+```
+
+### Imputation Parameters
+
+```{r imputation-params}
+imp_params <- data.frame(
+  Parameter = c("Mode", "Number of imputations (m)", "Max iterations (maxit)", "Random seed"),
+  Value = c(analysis_mode, n_imputations, n_iterations, seed)
+)
+kable(imp_params)
 ```
 
 ## Run Multiple Imputation
@@ -239,16 +262,17 @@ message(paste("Random seed: ", seed))
 ```{r run-imputation}
 # Run mice imputation
 # Note: Parameters are set based on analysis_mode in setup
-message("Starting multiple imputation...")
-message("Mode: ", analysis_mode)
-message("Imputations: ", n_imputations)
-message("Iterations: ", n_iterations)
+time_estimate <- if(analysis_mode == "test") "a few minutes" else "15-30 minutes or more"
+```
 
-if (analysis_mode == "test") {
-  message("This should take a few minutes...")
-} else {
-  message("This may take 15-30 minutes or more...")
-}
+**Starting multiple imputation...**
+
+- Mode: `r analysis_mode`
+- Imputations: `r n_imputations`
+- Iterations: `r n_iterations`
+- Estimated time: `r time_estimate`
+
+```{r mice-run}
 
 mice_results <- mice(
   df_mice,
@@ -337,7 +361,6 @@ if(sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
 imputed_datasets <- complete(mice_results, action = "all")
 
 # Apply transformation functions to recreate derived variables
-message("Recreating derived variables for each imputed dataset...")
 
 imputed_datasets <- lapply(1:n_imputations, function(i) {
   imp_data <- imputed_datasets[[i]]
@@ -381,7 +404,12 @@ completeness_check <- lapply(imputed_datasets, function(d) {
   sum(!complete.cases(d[, ps_model_vars]))
 })
 
-message("Number of incomplete cases in PS model variables per imputed dataset:")
+```
+
+### Completeness Check
+
+**Number of incomplete cases in PS model variables per imputed dataset:**
+```{r completeness-results}
 print(unlist(completeness_check))
 ```
 
@@ -391,7 +419,11 @@ print(unlist(completeness_check))
 saveRDS(mice_results, file.path(reanalysis_data_dir, "mice_results.rds"))
 saveRDS(imputed_datasets, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
 saveRDS(imputed_datasets[[1]], file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
-message("Saved ", n_imputations, " imputed datasets to: ", reanalysis_data_dir)
+```
+
+**Saved `r n_imputations` imputed datasets to:** `r reanalysis_data_dir`
+
+```{r empty-chunk}
 ```
 
 ## Summary
@@ -420,7 +452,10 @@ summary_table |>
   kable(caption = "Multiple imputation summary")
 
 imputed_vars <- names(mice_results$nmis)[mice_results$nmis > 0]
-message("Variables that were imputed:")
+```
+
+**Variables that were imputed:**
+```{r imputed-vars-list}
 print(imputed_vars)
 ```
 
