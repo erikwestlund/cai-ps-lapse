@@ -886,68 +886,6 @@ kable(ame_display,
       row.names = FALSE)
 ```
 
-
-## Summary and Interpretation
-
-```{r summary}
-# Summarize key findings using POOLED results
-message("=== OUTCOME ANALYSIS SUMMARY ===")
-message("Three-Way Interaction Model Results:")
-message("  - ", n_imputations, " imputed datasets analyzed")
-message("  - IPTW weights from twang GBM applied")
-message("  - Results properly pooled using Rubin's rules with Barnard-Rubin df adjustment")
-message("  - Survey design accounts for patient clustering")
-
-# Report pooling quality metrics
-message("Pooling Quality Metrics:")
-
-# Calculate fraction of missing information for key parameters
-key_params <- pooled_results[grep("ever_lapse", pooled_results$Term)[1:5], ]
-avg_df <- mean(key_params$df, na.rm = TRUE)
-min_df <- min(key_params$df, na.rm = TRUE)
-
-message("  - Average degrees of freedom for key terms: ", round(avg_df, 1))
-message("  - Minimum degrees of freedom: ", round(min_df, 1))
-
-if (min_df < 10) {
-  message("  - Warning: Low df suggests high fraction of missing information")
-} else if (min_df < 30) {
-  message("  - Note: Moderate df; using t-distribution for inference")
-} else {
-  message("  - Good: Adequate df for reliable inference")
-}
-
-# Identify patterns from POOLED results
-message("Key Patterns Observed (from pooled analysis):")
-
-# Use the pooled subgroup effects
-effect_summary <- subgroup_effects_stored |>
-  arrange(desc(OR))
-
-message("Strongest lapse effect:")
-strongest <- effect_summary[1, ]
-message("  - ", strongest$DR_Severity, " + ", strongest$Treatment, 
-        ": OR = ", strongest$OR, " (p ", strongest$P_Value, ")")
-
-message("Weakest lapse effect:")
-weakest <- effect_summary[nrow(effect_summary), ]
-message("  - ", weakest$DR_Severity, " + ", weakest$Treatment, 
-        ": OR = ", weakest$OR, " (p ", weakest$P_Value, ")")
-
-# Clinical interpretation
-message("=== CLINICAL INTERPRETATION ===")
-message("The three-way interaction reveals that:")
-message("1. The harmful effect of lapsing varies by BOTH disease severity AND treatment status")
-message("2. Patients with moderate disease (NPDR) show the largest vulnerability to lapsing")
-message("3. Treatment appears to modify the lapse-outcome relationship differently across DR severity levels")
-message("4. Advanced disease (PDR) patients show minimal harm from lapsing, regardless of treatment")
-
-message("Implications for care continuity programs:")
-message("- Resources should be prioritized for NPDR patients")
-message("- Treatment status should inform retention strategies")
-message("- PDR patients may have different care continuity needs")
-```
-
 ## Export Results
 
 ```{r export}
