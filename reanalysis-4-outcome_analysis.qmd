@@ -737,6 +737,13 @@ kable(manual_effects,
 # Use the subgroup effects for visualization
 plot_data <- subgroup_effects_stored
 
+# Add OR confidence intervals (converting from log odds scale)
+plot_data <- plot_data |>
+  mutate(
+    OR_CI_Lower = exp(CI_Lower),
+    OR_CI_Upper = exp(CI_Upper)
+  )
+
 # Create interaction plot with Odds Ratios (converted from log odds)
 p1 <- ggplot(plot_data, aes(x = DR_Severity, y = OR, 
                             color = Treatment, group = Treatment)) +
