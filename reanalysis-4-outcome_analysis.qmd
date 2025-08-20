@@ -179,7 +179,7 @@ table(imputed_datasets[[1]]$dr_severity) |> kable()
 
 **Treatment Status:**
 ```{r treatment-dist}
-table(imputed_datasets[[1]]$any_treatment) 
+table(imputed_datasets[[1]]$any_treatment) |> kable()
 ```
 
 **Lapse Status:**
@@ -324,23 +324,26 @@ pooled_summary <- summary(pooled_model)
 # Get pooled variance-covariance matrix for later use
 pooled_vcov <- vcov(pooled_model)
 
+# Check actual structure of pooled_summary
+print(names(pooled_summary))
+print(colnames(pooled_summary))
+
+# Extract results based on actual MIcombine output structure
+# MIcombine typically returns: results, se, (lower, upper), missInfo
 pooled_results <- data.frame(
   Term = rownames(pooled_summary),
   Estimate = pooled_summary[, "results"],
   SE = pooled_summary[, "se"],
-  statistic = pooled_summary[, "(lower"],  
-  df = pooled_summary[, "df"],
-  p.value = pooled_summary[, "upper)"],
-  CI_Lower = pooled_summary[, "2.5 %"],
-  CI_Upper = pooled_summary[, "97.5 %"],
+  CI_Lower = pooled_summary[, "(lower"],  
+  CI_Upper = pooled_summary[, "upper)"],
   OR = exp(pooled_summary[, "results"]),
-  OR_CI_Lower = exp(pooled_summary[, "2.5 %"]),
-  OR_CI_Upper = exp(pooled_summary[, "97.5 %"])
+  OR_CI_Lower = exp(pooled_summary[, "(lower"]),
+  OR_CI_Upper = exp(pooled_summary[, "upper)"])
 )
 
-# Clean column names if needed
-names(pooled_results) <- c("Term", "Estimate", "SE", "t_stat", "df", "P_Value", 
-                           "CI_Lower", "CI_Upper", "OR", "OR_CI_Lower", "OR_CI_Upper")
+# Calculate additional statistics if needed
+pooled_results$t_stat <- pooled_results$Estimate / pooled_results$SE
+pooled_results$P_Value <- 2 * pnorm(-abs(pooled_results$t_stat))
 # Ensure proper formatting
 rownames(pooled_results) <- NULL
 
@@ -349,23 +352,26 @@ rownames(pooled_results) <- NULL
 ### Pooling Diagnostics
 
 ```{r pooling-diagnostics}
+# Create diagnostics table
+# Note: MIcombine doesn't provide df in the standard output
 pool_diag <- data.frame(
   Metric = c("Number of imputations", 
-             "Number of parameters",
-             "Average degrees of freedom"),
+             "Number of parameters"),
   Value = c(n_imputations,
-            nrow(pooled_results),
-            round(mean(pooled_results$df), 1))
+            nrow(pooled_results))
 )
 
 kable(pool_diag, caption = "Pooling diagnostics")
 
+# Show key terms with their estimates and CIs
 key_terms <- grep("ever_lapse", pooled_results$Term, value = TRUE)[1:min(3, length(grep("ever_lapse", pooled_results$Term, value = TRUE)))]
-key_df <- pooled_results[pooled_results$Term %in% key_terms, c("Term", "df")]
-key_df$Term <- substr(key_df$Term, 1, 40)
-key_df$df <- round(key_df$df, 1)
+key_results <- pooled_results[pooled_results$Term %in% key_terms, c("Term", "Estimate", "SE", "P_Value")]
+key_results$Term <- substr(key_results$Term, 1, 40)
+key_results$Estimate <- round(key_results$Estimate, 3)
+key_results$SE <- round(key_results$SE, 3)
+key_results$P_Value <- round(key_results$P_Value, 4)
 
-kable(key_df, caption = "Degrees of freedom for key terms")
+kable(key_results, caption = "Key lapse-related terms")
 
 # Three-way interaction terms are included in the model
 # but not displayed individually as they are not meaningful on their own

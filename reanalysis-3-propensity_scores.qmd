@@ -416,19 +416,3 @@ weight_stats <- data.frame(
 
 kable(weight_stats, caption = "Weight Statistics (Averaged Across Imputations)")
 ```
-
-#### Weight Stability Assessment
-
-```{r weight-stability}
-if (avg_weights$Max_Weight_Overall > 10) {
-  print("WARNING: Maximum weight > 10, indicating potential instability")
-  print("Consider increasing n.trees or adjusting twang parameters")
-} else {
-  print("GOOD: Weights appear stable (max < 10)")
-}
-```
-
-### Balance Achievement
-
-The twang package optimizes es.mean to achieve covariate balance. Detailed balance statistics are shown in the diagnostic outputs above. Results have been saved for use in outcome analysis.
-
