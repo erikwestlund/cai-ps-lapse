@@ -337,11 +337,12 @@ pooled_results <- pooled_summary |>
   ) |>
   select(Term, Estimate, SE, t_stat, df, P_Value, CI_Lower, CI_Upper, OR, OR_CI_Lower, OR_CI_Upper)
 
-# Get pooled variance-covariance matrix for later calculations
-pooled_vcov <- vcov(pooled_model)
-
 # Ensure proper formatting
 rownames(pooled_results) <- NULL
+
+# Get pooled variance-covariance matrix for later calculations
+# Note: vcov() works on the pooled_model object, not the results data frame
+pooled_vcov <- vcov(pooled_model)
 
 ```
 
