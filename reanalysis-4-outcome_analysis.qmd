@@ -737,18 +737,18 @@ kable(manual_effects,
 # Use the subgroup effects for visualization
 plot_data <- subgroup_effects_stored
 
-# Create interaction plot
-p1 <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds, 
+# Create interaction plot with Odds Ratios (converted from log odds)
+p1 <- ggplot(plot_data, aes(x = DR_Severity, y = OR, 
                             color = Treatment, group = Treatment)) +
   geom_point(size = 3) +
   geom_line(size = 1) +
-  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+  geom_errorbar(aes(ymin = OR_CI_Lower, ymax = OR_CI_Upper), 
                 width = 0.1, size = 0.8) +
-  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
   labs(title = "Three-Way Interaction: Lapse × DR Severity × Treatment",
-       subtitle = "Effect of lapsing on vision impairment (log odds scale)",
+       subtitle = "Effect of lapsing on vision impairment (odds ratio scale)",
        x = "DR Severity",
-       y = "Log Odds Ratio",
+       y = "Odds Ratio",
        color = "Treatment Status") +
   theme_minimal() +
   theme(plot.title = element_text(size = 14, face = "bold"),
@@ -756,15 +756,19 @@ p1 <- ggplot(plot_data, aes(x = DR_Severity, y = Log_Odds,
         axis.title = element_text(size = 12),
         legend.position = "bottom") +
   scale_color_manual(values = c("No_Treatment" = "#2ca02c", 
-                               "Any_Treatment" = "#d62728"))
+                               "Any_Treatment" = "#d62728")) +
+  scale_y_continuous(breaks = seq(0, ceiling(max(plot_data$OR_CI_Upper)), 0.5))
 
-# Create OR plot
+# Create OR bar plot with error bars
 p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR, 
                             fill = Treatment)) +
   geom_col(position = position_dodge(width = 0.8), alpha = 0.7) +
+  geom_errorbar(aes(ymin = OR_CI_Lower, ymax = OR_CI_Upper),
+                position = position_dodge(width = 0.8),
+                width = 0.2, size = 0.8) +
   geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
   labs(title = "Odds Ratios by Subgroup",
-       subtitle = "Effect of lapsing on vision impairment",
+       subtitle = "Effect of lapsing on vision impairment (with 95% CI)",
        x = "DR Severity",
        y = "Odds Ratio",
        fill = "Treatment Status") +
@@ -777,7 +781,7 @@ p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR,
                                "Any_Treatment" = "#d62728")) +
   geom_text(aes(label = sprintf("%.2f", OR)),
             position = position_dodge(width = 0.8),
-            vjust = -0.5, size = 3.5)
+            vjust = -1.5, size = 3.5)
 
 # Arrange plots
 grid.arrange(p1, p2, ncol = 2)
