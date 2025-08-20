@@ -22,8 +22,8 @@ library(gridExtra)
 library(knitr)
 library(tidyr)
 library(dplyr)
-library(mitools)  # For pooling multiple imputation results
-library(mice)
+library(mice)  # For pool() function with Barnard-Rubin df adjustment
+library(mitools)  # For additional MI utilities if needed
 
 # ANALYSIS MODE: Use same as imputation/PS
 analysis_mode <- "test"  # Should match imputation and PS modes
@@ -266,20 +266,15 @@ for (i in 1:n_imputations) {
   threeway_terms <- grep("ever_lapse_binary.*:dr_severity.*:any_treatment", 
                          rownames(coef_summary), value = TRUE)
   
-  if (length(threeway_terms) > 0) {
-    message("  - Three-way interaction terms found: ", length(threeway_terms))
-    for (term in threeway_terms) {
-      p_val <- coef_summary[term, "Pr(>|t|)"]
-      message("    ", term, ": p = ", round(p_val, 4))
-    }
-  } else {
-    message("  - Warning: No three-way interaction terms found")
-  }
+  # Track progress
+  model_progress <- rbind(model_progress, data.frame(
+    Imputation = i,
+    Converged = model$converged,
+    ThreeWay_Terms = length(threeway_terms)
+  ))
   
   model_summaries[[i]] <- coef_summary
 }
-
-message("All models fitted successfully")
 
 # Verify we have the expected number of models
 if (length(models) != n_imputations) {
@@ -291,17 +286,21 @@ models <- models[!sapply(models, is.null)]
 if (length(models) == 0) {
   stop("No valid models to pool")
 }
+```
 
-message("Ready to pool ", length(models), " models")
+### Model Fitting Summary
+
+```{r model-summary}
+kable(model_progress, caption = "Model fitting progress across imputations")
 ```
 
 ## Pool Results Using Rubin's Rules
 
 ```{r pool-results}
-# Use mitools for robust pooling implementation
-# MIcombine properly implements Rubin's rules with Barnard-Rubin adjustment
+# Use mice::pool for robust pooling with Barnard-Rubin df adjustment
+# mice::pool automatically applies Barnard-Rubin (1999) correction
 
-# Ensure models is a proper list for MIcombine
+# Ensure models is a proper list
 if (!is.list(models)) {
   stop("Models must be a list")
 }
@@ -316,34 +315,31 @@ if (length(models) > 1) {
   }
 }
 
-pooled_model <- MIcombine(models)
-
-# Extract pooled results
+# Pool using mice with Barnard-Rubin df
+pooled_model <- pool(models)
 pooled_summary <- summary(pooled_model)
 
-# Get pooled variance-covariance matrix for later use
+# Extract results - mice::pool provides df column with Barnard-Rubin adjustment
+pooled_results <- pooled_summary |>
+  mutate(
+    Term = term,
+    Estimate = estimate,
+    SE = std.error,
+    t_stat = statistic,
+    df = df,  # Barnard-Rubin adjusted degrees of freedom
+    P_Value = p.value,
+    # Recalculate CIs using t-distribution with proper df
+    CI_Lower = estimate - qt(0.975, df) * std.error,
+    CI_Upper = estimate + qt(0.975, df) * std.error,
+    OR = exp(estimate),
+    OR_CI_Lower = exp(CI_Lower),
+    OR_CI_Upper = exp(CI_Upper)
+  ) |>
+  select(Term, Estimate, SE, t_stat, df, P_Value, CI_Lower, CI_Upper, OR, OR_CI_Lower, OR_CI_Upper)
+
+# Get pooled variance-covariance matrix for later calculations
 pooled_vcov <- vcov(pooled_model)
 
-# Check actual structure of pooled_summary
-print(names(pooled_summary))
-print(colnames(pooled_summary))
-
-# Extract results based on actual MIcombine output structure
-# MIcombine typically returns: results, se, (lower, upper), missInfo
-pooled_results <- data.frame(
-  Term = rownames(pooled_summary),
-  Estimate = pooled_summary[, "results"],
-  SE = pooled_summary[, "se"],
-  CI_Lower = pooled_summary[, "(lower"],  
-  CI_Upper = pooled_summary[, "upper)"],
-  OR = exp(pooled_summary[, "results"]),
-  OR_CI_Lower = exp(pooled_summary[, "(lower"]),
-  OR_CI_Upper = exp(pooled_summary[, "upper)"])
-)
-
-# Calculate additional statistics if needed
-pooled_results$t_stat <- pooled_results$Estimate / pooled_results$SE
-pooled_results$P_Value <- 2 * pnorm(-abs(pooled_results$t_stat))
 # Ensure proper formatting
 rownames(pooled_results) <- NULL
 
@@ -352,26 +348,32 @@ rownames(pooled_results) <- NULL
 ### Pooling Diagnostics
 
 ```{r pooling-diagnostics}
-# Create diagnostics table
-# Note: MIcombine doesn't provide df in the standard output
+# Create diagnostics table - now with df from mice::pool
 pool_diag <- data.frame(
   Metric = c("Number of imputations", 
-             "Number of parameters"),
+             "Number of parameters",
+             "Average degrees of freedom (Barnard-Rubin adjusted)",
+             "Minimum degrees of freedom",
+             "Maximum degrees of freedom"),
   Value = c(n_imputations,
-            nrow(pooled_results))
+            nrow(pooled_results),
+            round(mean(pooled_results$df), 1),
+            round(min(pooled_results$df), 1),
+            round(max(pooled_results$df), 1))
 )
 
 kable(pool_diag, caption = "Pooling diagnostics")
 
-# Show key terms with their estimates and CIs
+# Show key terms with their df and p-values
 key_terms <- grep("ever_lapse", pooled_results$Term, value = TRUE)[1:min(3, length(grep("ever_lapse", pooled_results$Term, value = TRUE)))]
-key_results <- pooled_results[pooled_results$Term %in% key_terms, c("Term", "Estimate", "SE", "P_Value")]
+key_results <- pooled_results[pooled_results$Term %in% key_terms, c("Term", "Estimate", "SE", "df", "P_Value")]
 key_results$Term <- substr(key_results$Term, 1, 40)
 key_results$Estimate <- round(key_results$Estimate, 3)
 key_results$SE <- round(key_results$SE, 3)
+key_results$df <- round(key_results$df, 1)
 key_results$P_Value <- round(key_results$P_Value, 4)
 
-kable(key_results, caption = "Key lapse-related terms")
+kable(key_results, caption = "Key lapse-related terms with degrees of freedom")
 
 # Three-way interaction terms are included in the model
 # but not displayed individually as they are not meaningful on their own
@@ -414,30 +416,16 @@ pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
   ))
 }
 
-message("Performing pooled joint hypothesis tests...")
-
 first_model <- models[[1]]
 
 # Test 1: Joint test of three-way interaction
 threeway_terms_test <- grep("ever_lapse.*:dr_severity.*:any_treatment", 
                             names(coef(first_model)), value = TRUE)
 
+# Test 1: Three-way interaction
 if (length(threeway_terms_test) > 0) {
   hypothesis_3way <- paste0(threeway_terms_test, " = 0")
-  
-  # Pool test across imputations
   pooled_test_3way <- pool_chi_square_tests(models, hypothesis_3way, "Three-way interaction")
-  
-  message("1. Three-way interaction test (H0: all three-way terms = 0):")
-  message("   Chi-sq = ", round(pooled_test_3way$D_bar, 3))
-  message("   df = ", pooled_test_3way$df)
-  message("   p-value = ", format.pval(pooled_test_3way$p_value, digits = 4, eps = 0.0001))
-  
-  if(pooled_test_3way$p_value < 0.05) {
-    message("   Interpretation: The effect of lapsing varies by BOTH DR severity AND treatment status")
-  } else {
-    message("   Interpretation: No significant three-way interaction detected")
-  }
 }
 
 # Test 2: Joint test of lapse × DR interaction (averaging over treatment)
@@ -446,14 +434,7 @@ lapse_dr_terms <- grep("ever_lapse.*:dr_severity(?!.*:any_treatment)",
 
 if (length(lapse_dr_terms) > 0) {
   hypothesis_lapse_dr <- paste0(lapse_dr_terms, " = 0")
-  
-  # Pool test across imputations
   pooled_test_lapse_dr <- pool_chi_square_tests(models, hypothesis_lapse_dr, "Lapse × DR interaction")
-  
-  message("2. Lapse × DR severity interaction test:")
-  message("   Chi-sq = ", round(pooled_test_lapse_dr$D_bar, 3))
-  message("   df = ", pooled_test_lapse_dr$df)
-  message("   p-value = ", format.pval(pooled_test_lapse_dr$p_value, digits = 4, eps = 0.0001))
 }
 
 # Test 3: Joint test of lapse × treatment interaction (averaging over DR)
@@ -462,15 +443,54 @@ lapse_tx_terms <- grep("ever_lapse.*:any_treatment(?!.*:dr_severity)",
 
 if (length(lapse_tx_terms) > 0) {
   hypothesis_lapse_tx <- paste0(lapse_tx_terms, " = 0")
-  
-  # Pool test across imputations
   pooled_test_lapse_tx <- pool_chi_square_tests(models, hypothesis_lapse_tx, "Lapse × treatment interaction")
-  
-  message("3. Lapse × treatment interaction test:")
-  message("   Chi-sq = ", round(pooled_test_lapse_tx$D_bar, 3))
-  message("   df = ", pooled_test_lapse_tx$df)
-  message("   p-value = ", format.pval(pooled_test_lapse_tx$p_value, digits = 4, eps = 0.0001))
 }
+```
+
+### Joint Hypothesis Test Results
+
+```{r joint-test-results}
+# Compile all test results
+joint_tests <- data.frame(
+  Test = character(),
+  Chi_Square = numeric(),
+  df = numeric(),
+  P_Value = character(),
+  Significant = character(),
+  stringsAsFactors = FALSE
+)
+
+if (exists("pooled_test_3way")) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × DR × Treatment (3-way)",
+    Chi_Square = round(pooled_test_3way$D_bar, 3),
+    df = pooled_test_3way$df,
+    P_Value = format.pval(pooled_test_3way$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_3way$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+if (exists("pooled_test_lapse_dr")) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × DR Severity",
+    Chi_Square = round(pooled_test_lapse_dr$D_bar, 3),
+    df = pooled_test_lapse_dr$df,
+    P_Value = format.pval(pooled_test_lapse_dr$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_lapse_dr$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+if (exists("pooled_test_lapse_tx")) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × Treatment",
+    Chi_Square = round(pooled_test_lapse_tx$D_bar, 3),
+    df = pooled_test_lapse_tx$df,
+    P_Value = format.pval(pooled_test_lapse_tx$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_lapse_tx$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+kable(joint_tests, caption = "Pooled joint hypothesis tests (Li-Raghunathan-Rubin method)")
 ```
 
 ## Calculate Effects Within Each Subgroup Using emmeans
@@ -479,15 +499,11 @@ if (length(lapse_tx_terms) > 0) {
 # Function to pool emmeans results across imputations
 pool_emmeans_contrasts <- function(models, n_imputations) {
   
-  message("Calculating marginal means and contrasts across all imputations...")
-  message("This may take a few moments...")
-  
   emm_options(rg.limit = 500000)
   
   all_contrasts <- list()
   
   for (i in 1:n_imputations) {
-    message("  Processing imputation ", i, "/", n_imputations)
     
     emm <- emmeans(models[[i]], 
                    ~ ever_lapse_binary | dr_severity * any_treatment,
