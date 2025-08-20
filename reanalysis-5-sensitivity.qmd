@@ -22,8 +22,11 @@ library(gridExtra)
 
 # Load results from previous steps
 ps_results <- readRDS(file.path(reanalysis_data_dir, "ps_results_twang.rds"))
-pooled_results <- readRDS(file.path(reanalysis_data_dir, "pooled_results.rds"))
-subgroup_effects <- readRDS(file.path(reanalysis_data_dir, "subgroup_effects.rds"))
+
+# Load outcome analysis results (from step 4)
+outcome_results <- readRDS(file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
+pooled_results <- outcome_results$pooled_coefficients
+subgroup_effects <- outcome_results$subgroup_effects
 ```
 
 ## Introduction

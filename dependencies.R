@@ -53,6 +53,9 @@ install_dependencies <- function() {
     "gridExtra",
     "gee",
     
+    # Sensitivity analysis
+    "EValue",
+    
     # Utility packages
     "scales",
     "purrr",
@@ -121,7 +124,8 @@ load_required_libraries <- function() {
     "gee",
     "flextable",
     "gt",
-    "kableExtra"
+    "kableExtra",
+    "EValue"
   )
   
   for (pkg in required_packages) {
