@@ -45,9 +45,14 @@ or_main <- exp(main_effect$Estimate)
 ci_lower_main <- exp(main_effect$Estimate - 1.96 * main_effect$SE)
 ci_upper_main <- exp(main_effect$Estimate + 1.96 * main_effect$SE)
 
-message("Main Effect of Lapsing on Vision Impairment:")
-message("  Odds Ratio: ", round(or_main, 3))
-message("  95% CI: (", round(ci_lower_main, 3), ", ", round(ci_upper_main, 3), ")")
+```
+
+**Main Effect of Lapsing on Vision Impairment:**  
+- Odds Ratio: `r round(or_main, 3)`  
+- 95% CI: (`r round(ci_lower_main, 3)`, `r round(ci_upper_main, 3)`)
+
+```{r overall-evalue-cont}
+#| echo: false
 
 # Calculate E-value for the main effect
 if (or_main > 1) {
@@ -81,19 +86,9 @@ kable(evalue_summary_main,
       caption = "E-values for Main Treatment Effect",
       col.names = c("Effect", "OR", "CI Lower", "CI Upper", "E-value (Point)", "E-value (CI)"))
 
-# Interpretation
-if (evalue_main$est.Evalue > 2) {
-  message("\nInterpretation: The E-value of ", round(evalue_main$est.Evalue, 2), 
-          " suggests that unmeasured confounding would need to be relatively strong",
-          " to explain away the observed association.")
-} else if (evalue_main$est.Evalue > 1.5) {
-  message("\nInterpretation: The E-value of ", round(evalue_main$est.Evalue, 2),
-          " suggests moderate robustness to unmeasured confounding.")
-} else {
-  message("\nInterpretation: The E-value of ", round(evalue_main$est.Evalue, 2),
-          " suggests the finding could be sensitive to unmeasured confounding.")
-}
 ```
+
+**Interpretation:** `r if(evalue_main$est.Evalue > 2) paste0("The E-value of ", round(evalue_main$est.Evalue, 2), " suggests that unmeasured confounding would need to be relatively strong to explain away the observed association.") else if(evalue_main$est.Evalue > 1.5) paste0("The E-value of ", round(evalue_main$est.Evalue, 2), " suggests moderate robustness to unmeasured confounding.") else paste0("The E-value of ", round(evalue_main$est.Evalue, 2), " suggests the finding could be sensitive to unmeasured confounding.")`
 
 ## Subgroup-Specific E-values
 
@@ -158,14 +153,15 @@ min_evalue <- min(evalue_table$E_Value_Point, na.rm = TRUE)
 most_robust <- evalue_table[which.max(evalue_table$E_Value_Point), ]
 least_robust <- evalue_table[which.min(evalue_table$E_Value_Point), ]
 
-message("\nMost robust finding:")
-message("  Subgroup: ", most_robust$DR_Severity, " with ", most_robust$Treatment)
-message("  E-value: ", most_robust$E_Value_Point)
-
-message("\nLeast robust finding:")
-message("  Subgroup: ", least_robust$DR_Severity, " with ", least_robust$Treatment)
-message("  E-value: ", least_robust$E_Value_Point)
 ```
+
+**Most robust finding:**  
+- Subgroup: `r most_robust$DR_Severity` with `r most_robust$Treatment`  
+- E-value: `r most_robust$E_Value_Point`
+
+**Least robust finding:**  
+- Subgroup: `r least_robust$DR_Severity` with `r least_robust$Treatment`  
+- E-value: `r least_robust$E_Value_Point`
 
 ## Visualization of E-values
 
@@ -234,8 +230,14 @@ grid.arrange(p1, arrangeGrob(p2, p3, ncol = 1), ncol = 2, widths = c(1, 1))
 # To contextualize E-values, we compare against known confounders in our model
 # This helps interpret whether the E-value thresholds are plausible
 
-message("Benchmarking E-values against measured confounders in our model:")
-message("\nNote: These are approximations based on the associations in our data")
+```
+
+**Benchmarking E-values against measured confounders in our model:**
+
+*Note: These are approximations based on the associations in our data*
+
+```{r benchmark-cont}
+#| echo: false
 
 # Extract coefficients for key confounders from the pooled model
 benchmark_vars <- c("baseline_VA_logMAR", "CCI", "DCSI", "age_cat65-74", 
@@ -262,18 +264,14 @@ if (nrow(benchmark_effects) > 0) {
   
   # Compare to E-values
   max_measured_or <- max(benchmark_table$OR, 1/min(benchmark_table$OR))
-  
-  message("\nStrongest measured confounder OR: ", round(max_measured_or, 2))
-  message("Minimum E-value across subgroups: ", round(min_evalue, 2))
-  
-  if (min_evalue > max_measured_or) {
-    message("\nInterpretation: Even the smallest E-value exceeds the strongest",
-            " measured confounder, suggesting good robustness.")
-  } else {
-    message("\nInterpretation: Some E-values are comparable to measured confounders,",
-            " suggesting potential sensitivity to unmeasured confounding of similar strength.")
-  }
 }
+```
+
+`r if(exists("max_measured_or")) paste0("**Strongest measured confounder OR:** ", round(max_measured_or, 2), "\n\n**Minimum E-value across subgroups:** ", round(min_evalue, 2), "\n\n**Interpretation:** ", if(min_evalue > max_measured_or) "Even the smallest E-value exceeds the strongest measured confounder, suggesting good robustness." else "Some E-values are comparable to measured confounders, suggesting potential sensitivity to unmeasured confounding of similar strength.") else ""`
+
+```{r benchmark-cleanup}
+#| echo: false
+#| eval: false
 ```
 
 ## Sensitivity Analysis for Different Outcome Assumptions
@@ -282,13 +280,21 @@ if (nrow(benchmark_effects) > 0) {
 # E-values can vary based on outcome rarity assumption
 # Calculate under different assumptions
 
-message("E-values under different outcome prevalence assumptions:\n")
+```
 
+### E-values under different outcome prevalence assumptions
+
+```{r outcome-calc}
+#| echo: false
 # Get overall outcome prevalence from first imputed dataset
 first_data <- readRDS(file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
 outcome_prev <- mean(first_data$outcome_va_vi_binary == 1, na.rm = TRUE)
+```
 
-message("Actual outcome prevalence in data: ", round(outcome_prev * 100, 1), "%")
+**Actual outcome prevalence in data:** `r round(outcome_prev * 100, 1)`%
+
+```{r outcome-cont}
+#| echo: false
 
 # Recalculate for main effect under different assumptions
 evalue_common <- evalues.OR(
@@ -309,21 +315,14 @@ kable(evalue_comparison,
       col.names = c("Assumption", "E-value (Point)", "E-value (CI)"),
       digits = 3)
 
-if (outcome_prev > 0.1) {
-  message("\nNote: Since outcome prevalence is ", round(outcome_prev * 100, 1), 
-          "%, the 'Common Outcome' assumption may be more appropriate.")
-}
 ```
+
+`r if(outcome_prev > 0.1) paste0("*Note: Since outcome prevalence is ", round(outcome_prev * 100, 1), "%, the 'Common Outcome' assumption may be more appropriate.*") else ""`
 
 ## Summary and Interpretation
 
 ```{r summary}
-# Overall summary
-message("=== SENSITIVITY ANALYSIS SUMMARY ===\n")
-
-message("Main Findings:")
-message("  - Overall E-value: ", round(evalue_main$est.Evalue, 2))
-message("  - Range of subgroup E-values: ", round(min_evalue, 2), " to ", round(max_evalue, 2))
+# Calculate summary statistics
 
 # Categorize robustness
 robust_subgroups <- sum(evalue_table$E_Value_Point > 2, na.rm = TRUE)
@@ -331,24 +330,25 @@ moderate_subgroups <- sum(evalue_table$E_Value_Point > 1.5 &
                           evalue_table$E_Value_Point <= 2, na.rm = TRUE)
 sensitive_subgroups <- sum(evalue_table$E_Value_Point <= 1.5, na.rm = TRUE)
 
-message("\nRobustness Classification:")
-message("  - Robust to unmeasured confounding (E > 2): ", robust_subgroups, " subgroups")
-message("  - Moderately robust (1.5 < E ≤ 2): ", moderate_subgroups, " subgroups")
-message("  - Potentially sensitive (E ≤ 1.5): ", sensitive_subgroups, " subgroups")
-
-# Clinical interpretation
-message("\nClinical Interpretation:")
-if (min_evalue > 1.5) {
-  message("  All subgroup findings show at least moderate robustness to unmeasured confounding.")
-} else {
-  message("  Some subgroups may be sensitive to unmeasured confounding.")
-  message("  Findings should be interpreted with appropriate caution.")
-}
-
 # Save E-value results
 saveRDS(evalue_table, file.path(reanalysis_data_dir, "evalue_results.rds"))
-message("\nE-value results saved to: ", file.path(reanalysis_data_dir, "evalue_results.rds"))
 ```
+
+### SENSITIVITY ANALYSIS SUMMARY
+
+**Main Findings:**  
+- Overall E-value: `r round(evalue_main$est.Evalue, 2)`  
+- Range of subgroup E-values: `r round(min_evalue, 2)` to `r round(max_evalue, 2)`
+
+**Robustness Classification:**  
+- Robust to unmeasured confounding (E > 2): `r robust_subgroups` subgroups  
+- Moderately robust (1.5 < E ≤ 2): `r moderate_subgroups` subgroups  
+- Potentially sensitive (E ≤ 1.5): `r sensitive_subgroups` subgroups
+
+**Clinical Interpretation:**  
+`r if(min_evalue > 1.5) "All subgroup findings show at least moderate robustness to unmeasured confounding." else "Some subgroups may be sensitive to unmeasured confounding. Findings should be interpreted with appropriate caution."`
+
+**E-value results saved to:** `r file.path(reanalysis_data_dir, "evalue_results.rds")`
 
 ## Recommendations
 
