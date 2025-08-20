@@ -340,9 +340,13 @@ pooled_results <- pooled_summary |>
 # Ensure proper formatting
 rownames(pooled_results) <- NULL
 
-# Get pooled variance-covariance matrix for later calculations
-# Note: vcov() works on the pooled_model object, not the results data frame
-pooled_vcov <- vcov(pooled_model)
+# Construct pooled variance-covariance matrix from the pooled variances
+# mice::pool returns a mipo object which stores variances in pooled$t
+# We need to create a diagonal matrix since pool() doesn't provide covariances
+pooled_variances <- pooled_model$pooled$t
+pooled_vcov <- diag(pooled_variances)
+rownames(pooled_vcov) <- pooled_model$pooled$term
+colnames(pooled_vcov) <- pooled_model$pooled$term
 
 ```
 
