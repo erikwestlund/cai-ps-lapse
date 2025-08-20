@@ -616,6 +616,11 @@ subgroup_effects_stored <- subgroup_effects
 
 ## Manual Calculation of Subgroup Effects (Validation)
 
+::: {.callout-note collapse="true"}
+## Click to expand manual calculations
+
+This section shows the manual calculation of subgroup effects for validation purposes.
+
 ```{r manual-effects}
 # Manually calculate effects for each of the 6 subgroups
 # This validates the emmeans results and provides a fallback
@@ -727,6 +732,8 @@ kable(manual_effects,
       caption = "Manual Calculation of Subgroup Effects (Validation)",
       row.names = FALSE)
 ```
+
+:::
 
 ## Visualization of Three-Way Interaction
 
@@ -1019,15 +1026,13 @@ forest_plot <- ggplot(forest_data, aes(x = AME, y = Subgroup)) +
   # X-axis formatting
   scale_x_continuous(labels = scales::percent_format(accuracy = 0.1))
 
-# Display the plot
-print(forest_plot)
-
 # Add text annotations with exact values
 forest_plot_annotated <- forest_plot +
   geom_text(aes(label = sprintf("%.3f", AME)),
             nudge_y = 0.3, size = 3.5, color = "black")
 
-print(forest_plot_annotated)
+# Display the annotated plot
+forest_plot_annotated
 ```
 
 ## Export Results
