@@ -744,16 +744,40 @@ plot_data <- plot_data |>
     OR_CI_Upper = exp(CI_Upper)
   )
 
+# Check for extreme values and cap if necessary
+max_or <- max(c(plot_data$OR, plot_data$OR_CI_Upper), na.rm = TRUE)
+if (max_or > 100) {
+  warning(paste("Extreme OR values detected (max =", round(max_or, 1), "). Consider checking the model."))
+  # Cap at reasonable values for visualization
+  plot_data <- plot_data |>
+    mutate(
+      OR_display = pmin(OR, 20),
+      OR_CI_Lower_display = pmax(OR_CI_Lower, 0.05),
+      OR_CI_Upper_display = pmin(OR_CI_Upper, 20),
+      capped = OR > 20 | OR_CI_Upper > 20
+    )
+} else {
+  plot_data <- plot_data |>
+    mutate(
+      OR_display = OR,
+      OR_CI_Lower_display = OR_CI_Lower,
+      OR_CI_Upper_display = OR_CI_Upper,
+      capped = FALSE
+    )
+}
+
 # Create interaction plot with Odds Ratios (converted from log odds)
-p1 <- ggplot(plot_data, aes(x = DR_Severity, y = OR, 
+p1 <- ggplot(plot_data, aes(x = DR_Severity, y = OR_display, 
                             color = Treatment, group = Treatment)) +
   geom_point(size = 3) +
   geom_line(size = 1) +
-  geom_errorbar(aes(ymin = OR_CI_Lower, ymax = OR_CI_Upper), 
+  geom_errorbar(aes(ymin = OR_CI_Lower_display, ymax = OR_CI_Upper_display), 
                 width = 0.1, size = 0.8) +
   geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
   labs(title = "Three-Way Interaction: Lapse × DR Severity × Treatment",
-       subtitle = "Effect of lapsing on vision impairment (odds ratio scale)",
+       subtitle = ifelse(any(plot_data$capped), 
+                        "Effect of lapsing (OR scale, capped at 20 for display)",
+                        "Effect of lapsing on vision impairment (odds ratio scale)"),
        x = "DR Severity",
        y = "Odds Ratio",
        color = "Treatment Status") +
@@ -763,18 +787,21 @@ p1 <- ggplot(plot_data, aes(x = DR_Severity, y = OR,
         axis.title = element_text(size = 12),
         legend.position = "bottom") +
   scale_color_manual(values = c("No_Treatment" = "#2ca02c", 
-                               "Any_Treatment" = "#d62728"))
+                               "Any_Treatment" = "#d62728")) +
+  coord_cartesian(ylim = c(0, max(plot_data$OR_CI_Upper_display) * 1.1))
 
 # Create OR bar plot with error bars
-p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR, 
+p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR_display, 
                             fill = Treatment)) +
   geom_col(position = position_dodge(width = 0.8), alpha = 0.7) +
-  geom_errorbar(aes(ymin = OR_CI_Lower, ymax = OR_CI_Upper),
+  geom_errorbar(aes(ymin = OR_CI_Lower_display, ymax = OR_CI_Upper_display),
                 position = position_dodge(width = 0.8),
                 width = 0.2, size = 0.8) +
   geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
   labs(title = "Odds Ratios by Subgroup",
-       subtitle = "Effect of lapsing on vision impairment (with 95% CI)",
+       subtitle = ifelse(any(plot_data$capped),
+                        "Effect of lapsing (with 95% CI, capped at 20 for display)",
+                        "Effect of lapsing on vision impairment (with 95% CI)"),
        x = "DR Severity",
        y = "Odds Ratio",
        fill = "Treatment Status") +
@@ -785,9 +812,12 @@ p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR,
         legend.position = "bottom") +
   scale_fill_manual(values = c("No_Treatment" = "#2ca02c", 
                                "Any_Treatment" = "#d62728")) +
-  geom_text(aes(label = sprintf("%.2f", OR)),
+  geom_text(aes(label = ifelse(capped, 
+                               sprintf(">%.0f", OR_display),
+                               sprintf("%.2f", OR))),
             position = position_dodge(width = 0.8),
-            vjust = -1.5, size = 3.5)
+            vjust = -1.5, size = 3.5) +
+  coord_cartesian(ylim = c(0, max(plot_data$OR_CI_Upper_display) * 1.1))
 
 # Arrange plots
 grid.arrange(p1, p2, ncol = 2)
@@ -919,6 +949,85 @@ kable(ame_display,
       caption = "Average Marginal Effects of Lapsing by Subgroup",
       col.names = c("DR Severity", "Treatment", "N", "AME", "SE", "95% CI", "P-value"),
       row.names = FALSE)
+```
+
+### Forest Plot of Average Marginal Effects
+
+```{r ame-forest-plot}
+#| fig-height: 6
+#| fig-width: 10
+
+# Prepare data for forest plot
+forest_data <- ame_results |>
+  mutate(
+    # Create a combined label for the y-axis
+    Subgroup = paste0(DR_Severity, " + ", Treatment),
+    # Order for plotting (reverse for forest plot convention)
+    Subgroup = factor(Subgroup, levels = rev(unique(Subgroup)))
+  ) |>
+  arrange(desc(Subgroup))
+
+# Create forest plot
+forest_plot <- ggplot(forest_data, aes(x = AME, y = Subgroup)) +
+  # Add reference line at 0 (no effect)
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.7) +
+  
+  # Add confidence intervals
+  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper), 
+                 height = 0.2, size = 0.8, color = "gray30") +
+  
+  # Add point estimates
+  geom_point(aes(color = DR_Severity, shape = Treatment), size = 4) +
+  
+  # Labels and theme
+  labs(
+    title = "Average Marginal Effects of Lapsing on Vision Impairment",
+    subtitle = "By DR severity and treatment status (with 95% CI)",
+    x = "Average Marginal Effect (Probability Scale)",
+    y = "",
+    color = "DR Severity",
+    shape = "Treatment"
+  ) +
+  
+  # Theme adjustments
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.text.y = element_text(size = 11, hjust = 0),
+    axis.text.x = element_text(size = 11),
+    axis.title = element_text(size = 12),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    panel.grid.major.y = element_line(color = "gray90"),
+    panel.grid.minor = element_blank()
+  ) +
+  
+  # Color scale
+  scale_color_manual(values = c(
+    "No_DR" = "#1f77b4",
+    "NPDR" = "#ff7f0e", 
+    "PDR" = "#d62728"
+  )) +
+  
+  # Shape scale
+  scale_shape_manual(values = c(
+    "No_Treatment" = 16,  # Circle
+    "Any_Treatment" = 17   # Triangle
+  )) +
+  
+  # X-axis formatting
+  scale_x_continuous(labels = scales::percent_format(accuracy = 0.1))
+
+# Display the plot
+print(forest_plot)
+
+# Add text annotations with exact values
+forest_plot_annotated <- forest_plot +
+  geom_text(aes(label = sprintf("%.3f", AME)),
+            nudge_y = 0.3, size = 3.5, color = "black")
+
+print(forest_plot_annotated)
 ```
 
 ## Export Results
