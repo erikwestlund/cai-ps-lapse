@@ -189,8 +189,25 @@ table(imputed_datasets[[1]]$ever_lapse_binary) |> kable()
 
 **Three-way Cross-tabulation:**
 ```{r crosstab}
-with(imputed_datasets[[1]], 
-     ftable(dr_severity, any_treatment, ever_lapse_binary)) |> kable()
+# Create cross-tabulation and convert to data frame for proper display
+crosstab <- with(imputed_datasets[[1]], 
+                 table(dr_severity, any_treatment, ever_lapse_binary))
+
+# Convert to data frame format
+crosstab_df <- as.data.frame(crosstab)
+names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Count")
+
+# Pivot to wide format for better readability
+library(tidyr)
+crosstab_wide <- crosstab_df |>
+  pivot_wider(names_from = Lapse_Status, 
+              values_from = Count,
+              values_fill = 0) |>
+  arrange(DR_Severity, Treatment)
+
+kable(crosstab_wide, 
+      caption = "Distribution of patients by DR severity, treatment, and lapse status",
+      col.names = c("DR Severity", "Treatment", "No Lapse", "Lapsed"))
 ```
 
 ## Define Model Formula
@@ -315,18 +332,26 @@ if (length(models) > 1) {
   }
 }
 
-# Pool using mice with Barnard-Rubin df
-pooled_model <- pool(models)
+# Calculate complete-data degrees of freedom for Barnard-Rubin adjustment
+# dfcom = residual degrees of freedom from complete-data model
+n_obs <- nrow(models[[1]]$data)
+n_params <- length(coef(models[[1]]))
+dfcom <- n_obs - n_params  # This is the residual df
+
+# Pool using mice with explicit dfcom for proper Barnard-Rubin df calculation
+# mice::pool automatically applies Barnard-Rubin (1999) small-sample correction
+pooled_model <- pool(models, dfcom = dfcom)
 pooled_summary <- summary(pooled_model)
 
 # Extract results - mice::pool provides df column with Barnard-Rubin adjustment
+# Each parameter gets its own df based on its fraction of missing information
 pooled_results <- pooled_summary |>
   mutate(
     Term = term,
     Estimate = estimate,
     SE = std.error,
     t_stat = statistic,
-    df = df,  # Barnard-Rubin adjusted degrees of freedom
+    df = df,  # Barnard-Rubin (1999) adjusted degrees of freedom
     P_Value = p.value,
     # Recalculate CIs using t-distribution with proper df
     CI_Lower = estimate - qt(0.975, df) * std.error,
