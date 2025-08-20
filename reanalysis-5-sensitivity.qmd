@@ -76,13 +76,17 @@ if (or_main > 1) {
 }
 
 # Create summary table
+# evalues.OR returns a matrix with rows "RR" and "E-values"
+evalue_point <- evalue_main["E-values", "point"]
+evalue_ci <- evalue_main["E-values", "lower"]
+
 evalue_summary_main <- data.frame(
   Effect = "Main Effect (Lapsing)",
   OR = round(or_main, 3),
   CI_Lower = round(ci_lower_main, 3),
   CI_Upper = round(ci_upper_main, 3),
-  E_Value_Point = round(evalue_main$est.Evalue, 3),
-  E_Value_CI = round(evalue_main$lower.Evalue, 3)
+  E_Value_Point = round(evalue_point, 3),
+  E_Value_CI = round(evalue_ci, 3)
 )
 
 kable(evalue_summary_main,
@@ -91,7 +95,7 @@ kable(evalue_summary_main,
 
 ```
 
-**Interpretation:** `r if(evalue_main$est.Evalue > 2) paste0("The E-value of ", round(evalue_main$est.Evalue, 2), " suggests that unmeasured confounding would need to be relatively strong to explain away the observed association.") else if(evalue_main$est.Evalue > 1.5) paste0("The E-value of ", round(evalue_main$est.Evalue, 2), " suggests moderate robustness to unmeasured confounding.") else paste0("The E-value of ", round(evalue_main$est.Evalue, 2), " suggests the finding could be sensitive to unmeasured confounding.")`
+**Interpretation:** `r if(evalue_point > 2) paste0("The E-value of ", round(evalue_point, 2), " suggests that unmeasured confounding would need to be relatively strong to explain away the observed association.") else if(evalue_point > 1.5) paste0("The E-value of ", round(evalue_point, 2), " suggests moderate robustness to unmeasured confounding.") else paste0("The E-value of ", round(evalue_point, 2), " suggests the finding could be sensitive to unmeasured confounding.")`
 
 ## Subgroup-Specific E-values
 
@@ -135,8 +139,8 @@ for (i in 1:nrow(subgroup_effects)) {
     OR = round(or_val, 3),
     CI_Lower = round(ci_lower, 3),
     CI_Upper = round(ci_upper, 3),
-    E_Value_Point = round(evalue$est.Evalue, 3),
-    E_Value_CI = round(evalue$lower.Evalue, 3)
+    E_Value_Point = round(evalue["E-values", "point"], 3),
+    E_Value_CI = round(evalue["E-values", "lower"], 3)
   )
 }
 
@@ -309,8 +313,8 @@ evalue_common <- evalues.OR(
 
 evalue_comparison <- data.frame(
   Assumption = c("Rare Outcome (<10%)", "Common Outcome"),
-  E_Value_Point = c(evalue_main$est.Evalue, evalue_common$est.Evalue),
-  E_Value_CI = c(evalue_main$lower.Evalue, evalue_common$lower.Evalue)
+  E_Value_Point = c(evalue_main["E-values", "point"], evalue_common["E-values", "point"]),
+  E_Value_CI = c(evalue_main["E-values", "lower"], evalue_common["E-values", "lower"])
 )
 
 kable(evalue_comparison,
@@ -340,7 +344,7 @@ saveRDS(evalue_table, file.path(reanalysis_data_dir, "evalue_results.rds"))
 ### SENSITIVITY ANALYSIS SUMMARY
 
 **Main Findings:**  
-- Overall E-value: `r round(evalue_main$est.Evalue, 2)`  
+- Overall E-value: `r round(evalue_point, 2)`  
 - Range of subgroup E-values: `r round(min_evalue, 2)` to `r round(max_evalue, 2)`
 
 **Robustness Classification:**  
