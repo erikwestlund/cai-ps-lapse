@@ -20,8 +20,8 @@ library(VIM)
 library(naniar)
 
 # ANALYSIS MODE: "test" or "final"
-# test = 2 imputations, 5 iterations (fast)
-# final = 30 imputations, 20 iterations (slow but thorough)
+# test = 2 imputations, 2 iterations (fast)
+# final = 50 imputations, 20 iterations (slow but thorough)
 analysis_mode <- "final"  # Change to "final" for production run
 
 # Set parameters based on mode
@@ -29,7 +29,7 @@ if (analysis_mode == "test") {
   n_imputations <- 2
   n_iterations <- 2
 } else if (analysis_mode == "final") {
-  n_imputations <- 10
+  n_imputations <- 50
   n_iterations <- 20
 } else {
   stop("Invalid analysis_mode. Must be 'test' or 'final'")
@@ -62,15 +62,17 @@ outcome_model_vars <- variable_lists$outcome_model_vars
 imputation_vars <- c(
   "e_mrn_deidentified",
   
-  # Outcome variable - SOURCE ONLY
-  "outcome_VA_logMAR",  # Continuous version (source)
+  # Temporal VA variables
+  "cohort_id",  # Indicates if true 2-year outcome available
+  "baseline_VA_logMAR",  # Baseline VA
+  "intermediate_VA_logMAR",  # Intermediate follow-up VA (for excluded cohort)
+  "outcome_VA_logMAR",  # 2-year outcome (true for submitted, missing for excluded)
   # NOT outcome_va_vi_binary - derived from logMAR >= 0.3
   
   # Exposure
   "ever_lapse_binary",
   
   # Demographics/Clinical
-  "baseline_VA_logMAR",
   "gender_cat",
   "race_ethnic_cat",
   "insurance_cat",
@@ -108,6 +110,7 @@ df_mice <- df_for_imputation |>
                       labels = c("No_DR", "NPDR", "PDR"),
                       ordered = TRUE),
     # Lock factor levels for categorical variables to ensure consistency
+    cohort_id = factor(cohort_id),  # Ensure cohort_id is a factor
     gender_cat = factor(gender_cat),
     race_ethnic_cat = factor(race_ethnic_cat),
     insurance_cat = factor(insurance_cat)
@@ -156,11 +159,16 @@ kable(method_table)
 # Customize imputation methods as needed
 custom_methods <- mice_dry$method
 
+# Temporal VA variables
+custom_methods["baseline_VA_logMAR"] <- "pmm"  # Impute if missing
+custom_methods["intermediate_VA_logMAR"] <- "pmm"  # IMPUTE intermediate values
+custom_methods["outcome_VA_logMAR"] <- "pmm"  # Impute 2-year outcomes
+custom_methods["cohort_id"] <- ""  # Never impute - complete indicator
+
+# Other continuous variables
 custom_methods["CCI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["DCSI"] <- "pmm"  # Predictive mean matching for count data
-custom_methods["baseline_VA_logMAR"] <- "pmm"
 custom_methods["age"] <- "pmm"
-custom_methods["outcome_VA_logMAR"] <- "pmm"
 
 # Use proportional odds model for ordinal person_dr (0/1/2)
 custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
@@ -200,11 +208,31 @@ pred_matrix["e_mrn_deidentified", ] <- 0
 pred_matrix[, "row_id"] <- 0
 pred_matrix["row_id", ] <- 0
 
-# Ensure outcome is used to predict missingness (important for MAR assumption)
-pred_matrix[, "outcome_VA_logMAR"] <- 1
-pred_matrix["outcome_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Don't predict itself
+# TEMPORAL STRUCTURE RULES
+# 1. Baseline can predict intermediate and outcome
+pred_matrix["intermediate_VA_logMAR", "baseline_VA_logMAR"] <- 1
+pred_matrix["outcome_VA_logMAR", "baseline_VA_logMAR"] <- 1
 
-# Ensure exposure is used as predictor
+# 2. Intermediate can predict outcome
+pred_matrix["outcome_VA_logMAR", "intermediate_VA_logMAR"] <- 1
+
+# 3. Cohort_id can predict VA variables (indicates data structure)
+pred_matrix["baseline_VA_logMAR", "cohort_id"] <- 1
+pred_matrix["intermediate_VA_logMAR", "cohort_id"] <- 1
+pred_matrix["outcome_VA_logMAR", "cohort_id"] <- 1
+
+# 4. CRITICAL: Prevent reverse-time prediction
+pred_matrix["intermediate_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Outcome cannot predict intermediate
+pred_matrix["baseline_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Outcome cannot predict baseline
+pred_matrix["baseline_VA_logMAR", "intermediate_VA_logMAR"] <- 0  # Intermediate cannot predict baseline
+
+# Cohort_id should not be predicted by anything
+pred_matrix["cohort_id", ] <- 0
+
+# Don't use variables as their own predictors
+diag(pred_matrix) <- 0
+
+# Ensure exposure is used as predictor for outcomes
 pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 
@@ -274,7 +302,8 @@ if (length(vars_to_impute) > 0) {
   ) |>
   kable()
 } else {
-  cat("No variables require imputation (all data complete)")
+  no_imputation_msg <- "No variables require imputation (all data complete)"
+  print(no_imputation_msg)
 }
 
 # Show complete variables with methods assigned
@@ -289,7 +318,8 @@ These variables have no missing data and won't be imputed, but have methods spec
 if (nrow(complete_with_methods) > 0) {
   kable(complete_with_methods, col.names = c("Variable", "Method Type"))
 } else {
-  cat("No complete variables with methods assigned")
+  no_complete_msg <- "No complete variables with methods assigned"
+  print(no_complete_msg)
 }
 
 # Show predictor matrix summary
@@ -325,12 +355,47 @@ if ("row_id" %in% predictors || "e_mrn_deidentified" %in% predictors) {
 print(predictors)
 ```
 
+### Visit Sequence
+
+```{r visit-sequence}
+# Define the order of imputation to respect temporal flow
+# Impute earlier timepoints before later ones
+visit_sequence <- c()
+
+# First impute baseline if needed
+if ("baseline_VA_logMAR" %in% vars_to_impute) {
+  visit_sequence <- c(visit_sequence, "baseline_VA_logMAR")
+}
+
+# Then impute intermediate
+if ("intermediate_VA_logMAR" %in% vars_to_impute) {
+  visit_sequence <- c(visit_sequence, "intermediate_VA_logMAR")
+}
+
+# Then impute outcome
+if ("outcome_VA_logMAR" %in% vars_to_impute) {
+  visit_sequence <- c(visit_sequence, "outcome_VA_logMAR")
+}
+
+# Add other variables that need imputation
+other_vars_to_impute <- vars_to_impute[!vars_to_impute %in% 
+                                       c("baseline_VA_logMAR", 
+                                         "intermediate_VA_logMAR", 
+                                         "outcome_VA_logMAR")]
+visit_sequence <- c(visit_sequence, other_vars_to_impute)
+
+# Store for display
+imputation_order <- paste(visit_sequence, collapse = ", ")
+```
+
+**Imputation order (respecting temporal structure):** `r imputation_order`
+
 ### Imputation Parameters
 
 ```{r imputation-params}
 imp_params <- data.frame(
-  Parameter = c("Mode", "Number of imputations (m)", "Max iterations (maxit)", "Random seed"),
-  Value = c(analysis_mode, n_imputations, n_iterations, seed)
+  Parameter = c("Mode", "Number of imputations (m)", "Max iterations (maxit)", "Random seed", "Visit sequence"),
+  Value = c(analysis_mode, n_imputations, n_iterations, seed, "Temporal order enforced")
 )
 kable(imp_params)
 ```
@@ -357,6 +422,7 @@ mice_results <- mice(
   m = n_imputations,
   method = custom_methods,
   predictorMatrix = pred_matrix,
+  visitSequence = visit_sequence,  # Enforce temporal order
   maxit = n_iterations,  # Uses n_iterations from setup
   seed = 2025,
   printFlag = TRUE
@@ -376,41 +442,54 @@ plot(mice_results)
 
 # CCI - compare observed vs imputed
 if(sum(is.na(df_mice$CCI)) > 0) {
-  cat("### Charlson Comorbidity Index (CCI)\n")
-  cat("**Density plot:** Blue = observed data, Red = imputed values\n")
-  densityplot(mice_results, ~ CCI) |> print()
+  # Density plot: Blue = observed data, Red = imputed values
+  densityplot(mice_results, ~ CCI, 
+              main = "Charlson Comorbidity Index (CCI)") |> print()
   
-  cat("\n**Stripplot:** Column 1 = original data (with gaps for missing), Columns 2+ = imputed datasets\n")
+  # Stripplot: Column 1 = original data, Columns 2+ = imputed datasets
   stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.2,
             xlab = "Dataset (1=Original, 2+=Imputations)",
             main = "CCI Distribution: Original vs Imputed") |> print()
-  cat("\n")
 }
 
 # DCSI - compare observed vs imputed  
 if(sum(is.na(df_mice$DCSI)) > 0) {
-  cat("### Diabetes Complications Severity Index (DCSI)\n")
-  cat("**Density plot:** Blue = observed data, Red = imputed values\n")
-  densityplot(mice_results, ~ DCSI) |> print()
+  densityplot(mice_results, ~ DCSI,
+              main = "Diabetes Complications Severity Index (DCSI)") |> print()
   
-  cat("\n**Stripplot:** Column 1 = original data (with gaps for missing), Columns 2+ = imputed datasets\n")
   stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.2,
             xlab = "Dataset (1=Original, 2+=Imputations)",
             main = "DCSI Distribution: Original vs Imputed") |> print()
-  cat("\n")
 }
 
 # Baseline VA - compare observed vs imputed
 if(sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
-  cat("### Baseline Visual Acuity (logMAR)\n")
-  cat("**Density plot:** Blue = observed data, Red = imputed values\n")
-  densityplot(mice_results, ~ baseline_VA_logMAR) |> print()
+  densityplot(mice_results, ~ baseline_VA_logMAR,
+              main = "Baseline Visual Acuity (logMAR)") |> print()
   
-  cat("\n**Stripplot:** Column 1 = original data (with gaps for missing), Columns 2+ = imputed datasets\n")
   stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
             xlab = "Dataset (1=Original, 2+=Imputations)",
             main = "Baseline VA Distribution: Original vs Imputed") |> print()
-  cat("\n")
+}
+
+# Intermediate VA - compare observed vs imputed
+if(sum(is.na(df_mice$intermediate_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ intermediate_VA_logMAR,
+              main = "Intermediate Visual Acuity (logMAR)") |> print()
+  
+  stripplot(mice_results, intermediate_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "Intermediate VA Distribution: Original vs Imputed") |> print()
+}
+
+# Outcome VA - compare observed vs imputed
+if(sum(is.na(df_mice$outcome_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ outcome_VA_logMAR,
+              main = "Outcome Visual Acuity at 2 Years (logMAR)") |> print()
+  
+  stripplot(mice_results, outcome_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "2-Year Outcome VA Distribution: Original vs Imputed") |> print()
 }
 
 # Person DR - compare observed vs imputed (categorical)
@@ -603,4 +682,12 @@ imputed_vars <- names(mice_results$nmis)[mice_results$nmis > 0]
 ```{r imputed-vars-list}
 print(imputed_vars)
 ```
+
+### Temporal VA Imputation Summary
+
+- **Baseline VA:** Starting point for temporal chain
+- **Intermediate VA:** Bridge between baseline and 2-year outcome
+- **Outcome VA:** Final 2-year outcome (missing for 'excluded' cohort)
+- **Temporal order enforced:** baseline → intermediate → outcome
+- **No reverse-time prediction allowed**
 

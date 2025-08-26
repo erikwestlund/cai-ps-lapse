@@ -1,0 +1,390 @@
+---
+title: "Reanalysis Step 5: Sensitivity Analysis with E-values"
+subtitle: "Assessing robustness to unmeasured confounding"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+# Setup analysis environment
+source("dependencies.R")
+setup_analysis(seed = 2025)
+
+# Additional packages for E-value analysis
+library(EValue)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+
+# Load results from previous steps
+ps_results <- readRDS(file.path(reanalysis_data_dir, "ps_results_twang.rds"))
+
+# Load outcome analysis results (from step 4)
+outcome_results <- readRDS(file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
+pooled_results <- outcome_results$pooled_coefficients
+subgroup_effects <- outcome_results$subgroup_effects
+```
+
+## Introduction
+
+This sensitivity analysis uses E-values to assess how robust our findings are to potential unmeasured confounding. The E-value represents the minimum strength of association that an unmeasured confounder would need to have with both the exposure (lapsing) and outcome (vision impairment) to fully explain away our observed associations.
+
+Key interpretations:
+
+- **E-value**: The minimum strength of association on the risk ratio scale that an unmeasured confounder would need to have with both exposure and outcome to explain away the observed association
+- **E-value for CI**: The minimum strength needed to shift the confidence interval to include the null
+
+## Overall Treatment Effect E-values
+
+```{r overall-evalue}
+# Extract the main lapse effect from pooled results
+main_effect <- pooled_results[pooled_results$Term == "ever_lapse_binaryLapsed", ]
+
+# Convert log odds to odds ratio
+or_main <- exp(main_effect$Estimate)
+ci_lower_main <- exp(main_effect$Estimate - 1.96 * main_effect$SE)
+ci_upper_main <- exp(main_effect$Estimate + 1.96 * main_effect$SE)
+
+```
+
+**Main Effect of Lapsing on Vision Impairment:**  
+
+- Odds Ratio: `r round(or_main, 3)`  
+- 95% CI: (`r round(ci_lower_main, 3)`, `r round(ci_upper_main, 3)`)
+
+```{r overall-evalue-cont}
+#| echo: false
+
+# Calculate E-value for the main effect
+if (or_main > 1) {
+  evalue_main <- evalues.OR(
+    est = or_main,
+    lo = ci_lower_main,
+    hi = ci_upper_main,
+    rare = TRUE  # Assuming rare outcome
+  )
+} else {
+  # If OR < 1, we need to take the reciprocal
+  evalue_main <- evalues.OR(
+    est = 1/or_main,
+    lo = 1/ci_upper_main,
+    hi = 1/ci_lower_main,
+    rare = TRUE
+  )
+}
+
+# Create summary table
+# evalues.OR returns a matrix with rows "RR" and "E-values"
+evalue_point <- evalue_main["E-values", "point"]
+evalue_ci <- evalue_main["E-values", "lower"]
+
+evalue_summary_main <- data.frame(
+  Effect = "Main Effect (Lapsing)",
+  OR = round(or_main, 3),
+  CI_Lower = round(ci_lower_main, 3),
+  CI_Upper = round(ci_upper_main, 3),
+  E_Value_Point = round(evalue_point, 3),
+  E_Value_CI = round(evalue_ci, 3)
+)
+
+kable(evalue_summary_main,
+      caption = "E-values for Main Treatment Effect",
+      col.names = c("Effect", "OR", "CI Lower", "CI Upper", "E-value (Point)", "E-value (CI)"))
+
+```
+
+**Interpretation:** `r if(evalue_point > 2) paste0("The E-value of ", round(evalue_point, 2), " suggests that unmeasured confounding would need to be relatively strong to explain away the observed association.") else if(evalue_point > 1.5) paste0("The E-value of ", round(evalue_point, 2), " suggests moderate robustness to unmeasured confounding.") else paste0("The E-value of ", round(evalue_point, 2), " suggests the finding could be sensitive to unmeasured confounding.")`
+
+## Subgroup-Specific E-values
+
+```{r subgroup-evalues}
+# Calculate E-values for each subgroup
+evalue_results <- list()
+
+for (i in 1:nrow(subgroup_effects)) {
+  subgroup <- subgroup_effects[i, ]
+  
+  # Get OR and CI
+  or_val <- subgroup$OR
+  ci_lower <- exp(subgroup$Log_Odds - 1.96 * subgroup$SE)
+  ci_upper <- exp(subgroup$Log_Odds + 1.96 * subgroup$SE)
+  
+  # Skip if effect is null or SE is missing
+  if (is.na(or_val) || is.na(subgroup$SE)) {
+    next
+  }
+  
+  # Calculate E-value
+  if (or_val > 1) {
+    evalue <- evalues.OR(
+      est = or_val,
+      lo = ci_lower,
+      hi = ci_upper,
+      rare = TRUE
+    )
+  } else {
+    evalue <- evalues.OR(
+      est = 1/or_val,
+      lo = 1/ci_upper,
+      hi = 1/ci_lower,
+      rare = TRUE
+    )
+  }
+  
+  evalue_results[[i]] <- data.frame(
+    DR_Severity = subgroup$DR_Severity,
+    Treatment = subgroup$Treatment,
+    OR = round(or_val, 3),
+    CI_Lower = round(ci_lower, 3),
+    CI_Upper = round(ci_upper, 3),
+    E_Value_Point = round(evalue["E-values", "point"], 3),
+    E_Value_CI = round(evalue["E-values", "lower"], 3)
+  )
+}
+
+# Combine results
+evalue_table <- do.call(rbind, evalue_results)
+
+kable(evalue_table,
+      caption = "E-values by Subgroup",
+      col.names = c("DR Severity", "Treatment", "OR", "CI Lower", "CI Upper", 
+                   "E-value (Point)", "E-value (CI)"),
+      row.names = FALSE)
+
+# Identify most and least robust findings
+max_evalue <- max(evalue_table$E_Value_Point, na.rm = TRUE)
+min_evalue <- min(evalue_table$E_Value_Point, na.rm = TRUE)
+
+most_robust <- evalue_table[which.max(evalue_table$E_Value_Point), ]
+least_robust <- evalue_table[which.min(evalue_table$E_Value_Point), ]
+
+```
+
+**Most robust finding:**  
+
+- Subgroup: `r most_robust$DR_Severity` with `r most_robust$Treatment`  
+- E-value: `r most_robust$E_Value_Point`
+
+**Least robust finding:**  
+
+- Subgroup: `r least_robust$DR_Severity` with `r least_robust$Treatment`  
+- E-value: `r least_robust$E_Value_Point`
+
+## Visualization of E-values
+
+```{r evalue-plot}
+#| fig-height: 8
+#| fig-width: 12
+
+# Create a combined identifier for subgroups
+evalue_table$Subgroup <- paste(evalue_table$DR_Severity, 
+                               evalue_table$Treatment, 
+                               sep = " - ")
+
+# Plot 1: E-values by subgroup
+p1 <- ggplot(evalue_table, aes(x = reorder(Subgroup, E_Value_Point), 
+                               y = E_Value_Point)) +
+  geom_col(aes(fill = DR_Severity), alpha = 0.7) +
+  geom_hline(yintercept = 1.5, linetype = "dashed", color = "red", alpha = 0.5) +
+  geom_hline(yintercept = 2.0, linetype = "dashed", color = "orange", alpha = 0.5) +
+  coord_flip() +
+  labs(title = "E-values by Subgroup",
+       subtitle = "Higher values indicate greater robustness to unmeasured confounding",
+       x = "Subgroup",
+       y = "E-value (Point Estimate)",
+       fill = "DR Severity") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 10)) +
+  annotate("text", x = 0.5, y = 1.5, label = "Moderate robustness", 
+           color = "red", size = 3, hjust = 0) +
+  annotate("text", x = 0.5, y = 2.0, label = "Good robustness", 
+           color = "orange", size = 3, hjust = 0)
+
+# Plot 2: E-values vs Effect Size
+p2 <- ggplot(evalue_table, aes(x = OR, y = E_Value_Point)) +
+  geom_point(aes(color = DR_Severity, shape = Treatment), size = 4) +
+  geom_smooth(method = "loess", se = FALSE, alpha = 0.3) +
+  labs(title = "E-value vs Effect Size",
+       subtitle = "Relationship between odds ratio and robustness",
+       x = "Odds Ratio",
+       y = "E-value (Point Estimate)",
+       color = "DR Severity",
+       shape = "Treatment") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+# Plot 3: Comparison of Point and CI E-values
+p3 <- ggplot(evalue_table, aes(x = E_Value_Point, y = E_Value_CI)) +
+  geom_point(aes(color = DR_Severity, size = OR), alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", alpha = 0.3) +
+  labs(title = "Point Estimate vs CI E-values",
+       subtitle = "CI E-values are always smaller (more conservative)",
+       x = "E-value (Point Estimate)",
+       y = "E-value (CI Lower Bound)",
+       color = "DR Severity",
+       size = "Odds Ratio") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+# Arrange plots
+grid.arrange(p1, arrangeGrob(p2, p3, ncol = 1), ncol = 2, widths = c(1, 1))
+```
+
+## Benchmarking Against Known Confounders
+
+```{r benchmark-confounders}
+# To contextualize E-values, we compare against known confounders in our model
+# This helps interpret whether the E-value thresholds are plausible
+
+```
+
+**Benchmarking E-values against measured confounders in our model:**
+
+*Note: These are approximations based on the associations in our data*
+
+```{r benchmark-cont}
+#| echo: false
+
+# Extract coefficients for key confounders from the pooled model
+benchmark_vars <- c("baseline_VA_logMAR", "CCI", "DCSI", "age_cat65-74", 
+                   "gender_catMale", "insurance_catMedicare")
+
+benchmark_effects <- pooled_results[pooled_results$Term %in% benchmark_vars, ]
+
+if (nrow(benchmark_effects) > 0) {
+  benchmark_table <- benchmark_effects |>
+    mutate(
+      OR = round(exp(Estimate), 3),
+      Strength = case_when(
+        abs(log(OR)) > log(2) ~ "Strong",
+        abs(log(OR)) > log(1.5) ~ "Moderate", 
+        TRUE ~ "Weak"
+      )
+    ) |>
+    dplyr::select(Term, OR, Strength) |>
+    arrange(desc(abs(log(OR))))
+  
+  kable(benchmark_table,
+        caption = "Strength of Association for Measured Confounders",
+        col.names = c("Variable", "OR with Outcome", "Strength"))
+  
+  # Compare to E-values
+  max_measured_or <- max(benchmark_table$OR, 1/min(benchmark_table$OR))
+}
+```
+
+`r if(exists("max_measured_or")) paste0("**Strongest measured confounder OR:** ", round(max_measured_or, 2), "\n\n**Minimum E-value across subgroups:** ", round(min_evalue, 2), "\n\n**Interpretation:** ", if(min_evalue > max_measured_or) "Even the smallest E-value exceeds the strongest measured confounder, suggesting good robustness." else "Some E-values are comparable to measured confounders, suggesting potential sensitivity to unmeasured confounding of similar strength.") else ""`
+
+```{r benchmark-cleanup}
+#| echo: false
+#| eval: false
+```
+
+## Sensitivity Analysis for Different Outcome Assumptions
+
+```{r outcome-assumptions}
+# E-values can vary based on outcome rarity assumption
+# Calculate under different assumptions
+
+```
+
+### E-values under different outcome prevalence assumptions
+
+```{r outcome-calc}
+#| echo: false
+# Get overall outcome prevalence from first imputed dataset
+first_data <- readRDS(file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
+outcome_prev <- mean(first_data$outcome_va_vi_binary == 1, na.rm = TRUE)
+```
+
+**Actual outcome prevalence in data:** `r round(outcome_prev * 100, 1)`%
+
+```{r outcome-cont}
+#| echo: false
+
+# Recalculate for main effect under different assumptions
+evalue_common <- evalues.OR(
+  est = or_main,
+  lo = ci_lower_main,
+  hi = ci_upper_main,
+  rare = FALSE  # Assuming common outcome
+)
+
+evalue_comparison <- data.frame(
+  Assumption = c("Rare Outcome (<10%)", "Common Outcome"),
+  E_Value_Point = c(evalue_main["E-values", "point"], evalue_common["E-values", "point"]),
+  E_Value_CI = c(evalue_main["E-values", "lower"], evalue_common["E-values", "lower"])
+)
+
+kable(evalue_comparison,
+      caption = "E-values Under Different Outcome Assumptions",
+      col.names = c("Assumption", "E-value (Point)", "E-value (CI)"),
+      digits = 3)
+
+```
+
+`r if(outcome_prev > 0.1) paste0("*Note: Since outcome prevalence is ", round(outcome_prev * 100, 1), "%, the 'Common Outcome' assumption may be more appropriate.*") else ""`
+
+## Summary and Interpretation
+
+```{r summary}
+# Calculate summary statistics
+
+# Categorize robustness
+robust_subgroups <- sum(evalue_table$E_Value_Point > 2, na.rm = TRUE)
+moderate_subgroups <- sum(evalue_table$E_Value_Point > 1.5 & 
+                          evalue_table$E_Value_Point <= 2, na.rm = TRUE)
+sensitive_subgroups <- sum(evalue_table$E_Value_Point <= 1.5, na.rm = TRUE)
+
+# Save E-value results
+saveRDS(evalue_table, file.path(reanalysis_data_dir, "evalue_results.rds"))
+```
+
+### SENSITIVITY ANALYSIS SUMMARY
+
+**Main Findings:**  
+- Overall E-value: `r round(evalue_point, 2)`  
+- Range of subgroup E-values: `r round(min_evalue, 2)` to `r round(max_evalue, 2)`
+
+**Robustness Classification:**  
+- Robust to unmeasured confounding (E > 2): `r robust_subgroups` subgroups  
+- Moderately robust (1.5 < E ≤ 2): `r moderate_subgroups` subgroups  
+- Potentially sensitive (E ≤ 1.5): `r sensitive_subgroups` subgroups
+
+**Clinical Interpretation:**  
+`r if(min_evalue > 1.5) "All subgroup findings show at least moderate robustness to unmeasured confounding." else "Some subgroups may be sensitive to unmeasured confounding. Findings should be interpreted with appropriate caution."`
+
+**E-value results saved to:** `r file.path(reanalysis_data_dir, "evalue_results.rds")`
+
+## Recommendations
+
+Based on the E-value analysis:
+
+1. **Most Robust Findings**: Focus interpretation on subgroups with E-values > 2, as these are least likely to be explained by unmeasured confounding.
+
+2. **Moderate Confidence**: Subgroups with E-values between 1.5-2 warrant moderate confidence but should be interpreted in context of other evidence.
+
+3. **Cautious Interpretation**: Subgroups with E-values < 1.5 require careful interpretation and should be considered hypothesis-generating.
+
+4. **Future Research**: Consider measuring additional confounders that could have associations comparable to the E-value thresholds identified here.
+
+## Technical Notes
+
+### E-value Calculation
+- E-values are calculated from odds ratios under the rare outcome assumption when prevalence < 10%
+- For common outcomes, the approximation OR ≈ RR may not hold, affecting E-value interpretation
+- E-values assume no unmeasured confounding beyond what would be needed to explain away the effect
+
+### Limitations
+1. E-values don't prove absence of unmeasured confounding, only quantify robustness
+2. Multiple unmeasured confounders with weaker individual effects could combine to bias results
+3. E-values assume confounders affect exposure and outcome in the same direction
+
+### References
+- VanderWeele TJ, Ding P. Sensitivity Analysis in Observational Research: Introducing the E-Value. Ann Intern Med. 2017;167(4):268-274.
+- Mathur MB, Ding P, Riddell CA, VanderWeele TJ. Website and R package for computing E-values. Epidemiology. 2018;29(5):e45-e47.

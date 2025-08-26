@@ -42,7 +42,8 @@ ps_vars <- c(
 
 outcome_vars <- c(
   "outcome_VA_logMAR",
-  "person_ever_lapse"
+  "person_ever_lapse",
+  "cohort_id"  # Indicates if true 2-year outcome is available
 )
 
 dr_vars <- c(
@@ -61,19 +62,26 @@ all_analysis_vars <- c(
 
 ## Missing Data Handling Strategy
 
+1. **Visual Acuity Outcomes (Temporal Structure)**:
 
-1. **Glaucoma/Other Retina Conditions**: Missing values are recoded as 0 (absence of condition)
+- `cohort_id = "submitted"`: Has true 2-year outcome VA
+- `cohort_id = "excluded"`: Lacks true 2-year outcome
+  - Any existing outcome_VA_logMAR value is an intermediate follow-up
+  - These intermediate values will be moved to a new variable
+  - True 2-year outcome will be imputed using temporal structure
+
+2. **Glaucoma/Other Retina Conditions**: Missing values are recoded as 0 (absence of condition)
    
 - Clinical assumption: These conditions would be documented if present
 - This recoding happens BEFORE propensity score modeling
-- Maintains consistency with original analysis,
+- Maintains consistency with original analysis
 
-2. **CCI/DCSI**:
+3. **CCI/DCSI**:
 
 - Original analysis excluded rows with missing CCI/DCSI; this was only ~10 records
 - Reanalysis will impute these using patient demographics and clinical characteristics
 
-3. **New analysis variables**: 
+4. **New analysis variables**: 
 
 - This includes DR severity and treatment
 - Missing values will be handled via multiple imputation in the next step
@@ -82,11 +90,37 @@ all_analysis_vars <- c(
 ## Variable Creation
 
 ```{r create-variables}
-# Step 1: Create person_dr first (needed for imputation)
+# Step 1: Handle temporal VA structure
+# Create intermediate_VA_logMAR and adjust outcome_VA_logMAR based on cohort_id
 df_analysis <- df_combined |>
+  mutate(
+    # Initialize intermediate VA variable
+    intermediate_VA_logMAR = NA_real_,
+    
+    # For "excluded" cohort, move outcome values to intermediate
+    # These are intermediate follow-ups, not true 2-year outcomes
+    intermediate_VA_logMAR = if_else(
+      cohort_id == "excluded" & !is.na(outcome_VA_logMAR),
+      outcome_VA_logMAR,
+      intermediate_VA_logMAR
+    ),
+    
+    # Set outcome to NA for "excluded" cohort (will be imputed)
+    outcome_VA_logMAR = if_else(
+      cohort_id == "excluded",
+      NA_real_,
+      outcome_VA_logMAR
+    ),
+    
+    # Convert cohort_id to factor
+    cohort_id = factor(cohort_id)
+  )
+
+# Step 2: Create person_dr (needed for imputation)
+df_analysis <- df_analysis |>
   create_person_dr()  # Creates person_dr from No_DR/NPDR/PDR
 
-# Step 2: Create other core variables
+# Step 3: Create other core variables
 df_analysis <- df_analysis |>
   mutate(
     # Exposure variable
@@ -115,7 +149,7 @@ df_analysis <- df_analysis |>
     PRP_flag = factor(PRP_flag)
   )
 
-# Step 3: Create derived variables using transformation functions
+# Step 4: Create derived variables using transformation functions
 df_analysis <- df_analysis |>
   create_outcome_variables() |>  # Creates outcome_va_vi_binary from logMAR
   create_age_cat() |>  # Creates age_cat from continuous age
@@ -166,19 +200,25 @@ missing_before_recoding <- df_combined |>
 
 # Assess missing data AFTER recoding
 missing_summary <- df_analysis |>
-  dplyr::select(dplyr::all_of(c(ps_model_vars, "outcome_va_vi_binary"))) |>
+  dplyr::select(dplyr::all_of(c(ps_model_vars, "outcome_va_vi_binary", 
+                                "outcome_VA_logMAR", "intermediate_VA_logMAR", "cohort_id"))) |>
   dplyr::summarise(dplyr::across(everything(), ~ sum(is.na(.)))) |>
   tidyr::pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
   dplyr::mutate(
     pct_missing = round(n_missing / nrow(df_analysis) * 100, 2),
     var_type = dplyr::case_when(
-      variable %in% c("outcome_va_vi_binary") ~ "Outcome",
+      variable %in% c("outcome_va_vi_binary", "outcome_VA_logMAR") ~ "Outcome",
+      variable == "intermediate_VA_logMAR" ~ "Intermediate (temporal)",
+      variable == "cohort_id" ~ "Cohort indicator",
       variable == "ever_lapse_binary" ~ "Exposure",
       variable %in% c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat") ~ "Covariate (recoded)",
       TRUE ~ "Covariate"
     ),
     handling = dplyr::case_when(
       variable %in% c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat") ~ "Missing → 0 (no condition)",
+      variable == "cohort_id" ~ "Never missing (complete)",
+      variable == "intermediate_VA_logMAR" ~ "To be imputed (temporal predictor)",
+      variable == "outcome_VA_logMAR" ~ "To be imputed (respecting temporal order)",
       variable %in% c("CCI", "DCSI") ~ "To be imputed",
       TRUE ~ "To be imputed"
     )
@@ -188,6 +228,47 @@ missing_summary <- df_analysis |>
 missing_summary |> 
   filter(n_missing > 0) |>
   kable(caption = "Variables with missing data after recoding (glaucoma/retina conditions coded as 0)")
+```
+
+## Temporal VA Structure Summary
+
+```{r temporal-va-summary}
+# Summary of temporal VA structure
+temporal_summary <- df_analysis |>
+  group_by(cohort_id) |>
+  summarise(
+    n = n(),
+    n_has_outcome = sum(!is.na(outcome_VA_logMAR)),
+    n_has_intermediate = sum(!is.na(intermediate_VA_logMAR)),
+    n_has_baseline = sum(!is.na(baseline_VA_logMAR)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    pct_has_outcome = round(100 * n_has_outcome / n, 1),
+    pct_has_intermediate = round(100 * n_has_intermediate / n, 1),
+    pct_has_baseline = round(100 * n_has_baseline / n, 1)
+  )
+
+kable(temporal_summary,
+      caption = "Visual acuity data availability by cohort",
+      col.names = c("Cohort", "N", "Has Outcome", "Has Intermediate", "Has Baseline",
+                   "% Outcome", "% Intermediate", "% Baseline"))
+
+# Verify the temporal recoding worked correctly
+verification_results <- data.frame(
+  Check = c("Excluded cohort with outcome VA (should be 0)",
+            "Submitted cohort with intermediate VA (should be 0)"),
+  Count = c(
+    sum(df_analysis$cohort_id == "excluded" & !is.na(df_analysis$outcome_VA_logMAR)),
+    sum(df_analysis$cohort_id == "submitted" & !is.na(df_analysis$intermediate_VA_logMAR))
+  ),
+  Status = c(
+    ifelse(sum(df_analysis$cohort_id == "excluded" & !is.na(df_analysis$outcome_VA_logMAR)) == 0, "✓ Pass", "✗ Fail"),
+    ifelse(sum(df_analysis$cohort_id == "submitted" & !is.na(df_analysis$intermediate_VA_logMAR)) == 0, "✓ Pass", "✗ Fail")
+  )
+)
+
+kable(verification_results, caption = "Temporal recoding verification")
 ```
 
 ## Data Summary for Analysis Variables
@@ -257,12 +338,16 @@ variable_lists <- list(
   ps_model_vars = ps_model_vars,
   outcome_model_vars = outcome_model_vars,
   dr_vars = dr_vars,
-  all_analysis_vars = all_analysis_vars
+  all_analysis_vars = all_analysis_vars,
+  temporal_vars = c("cohort_id", "intermediate_VA_logMAR", "outcome_VA_logMAR", "baseline_VA_logMAR")
 )
 saveRDS(variable_lists, file.path(reanalysis_data_dir, "variable_lists.rds"))
 
-message("Data saved to: ", reanalysis_data_dir)
+# Create a variable to show in text
+data_save_path <- reanalysis_data_dir
 ```
+
+**Data saved to:** `r data_save_path`
 
 ## Summary
 
