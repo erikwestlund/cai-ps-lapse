@@ -293,8 +293,16 @@ if (nrow(complete_with_methods) > 0) {
 }
 
 # Show predictor matrix summary
-# Calculate average predictors (excluding self-predictions)
-avg_predictors <- round(mean(rowSums(pred_matrix)), 1)
+# Get the number of predictors for each variable
+predictors_per_var <- rowSums(pred_matrix)
+
+# Separate by variable type
+id_vars_pred <- predictors_per_var[c("row_id", "e_mrn_deidentified")]
+imputed_vars_pred <- predictors_per_var[vars_to_impute]
+other_vars_pred <- predictors_per_var[!names(predictors_per_var) %in% c("row_id", "e_mrn_deidentified", vars_to_impute)]
+
+# Calculate meaningful statistics
+n_predictors_for_imputed <- if(length(imputed_vars_pred) > 0) unique(imputed_vars_pred)[1] else NA
 predictors <- names(which(colSums(pred_matrix) > 0))
 
 # Verify IDs are excluded
@@ -303,9 +311,11 @@ ids_excluded <- all(pred_matrix[, "row_id"] == 0) & all(pred_matrix[, "e_mrn_dei
 
 ### Predictor Matrix Summary
 
-Each variable uses an average of **`r avg_predictors`** predictors.
+**Number of predictors used:**
+- For variables being imputed: **`r if(!is.na(n_predictors_for_imputed)) n_predictors_for_imputed else 0`** predictors each
+- For ID variables: **0** predictors (excluded from imputation)
 
-**ID variables properly excluded from predictors:** `r if(ids_excluded) "✓ Yes" else "✗ No"`
+**ID variables properly excluded from predictors:** `r if(ids_excluded) "Yes" else "No"`
 
 **Variables used as predictors** (`r length(predictors)` total):
 ```{r predictor-list}
