@@ -312,8 +312,19 @@ table(df_analysis$treatment_type, useNA = "ifany")
 ```{r imputation-dataset}
 df_for_imputation <- df_analysis
 
+# Complete cases should have no missing data in key analysis variables
+# This includes outcome, exposure, and all covariates
+key_vars_for_complete <- c(
+  "outcome_VA_logMAR",  # Outcome
+  "ever_lapse_binary",   # Exposure
+  "baseline_VA_logMAR",  # Key covariate
+  "CCI", "DCSI",        # Comorbidity scores
+  "dr_severity",         # DR severity
+  "any_treatment"        # Treatment status
+)
+
 df_complete_original <- df_analysis |>
-  filter(!is.na(CCI) & !is.na(DCSI))
+  filter(complete.cases(select(., all_of(key_vars_for_complete))))
 
 n_total <- nrow(df_analysis)
 n_complete_original <- nrow(df_complete_original)
@@ -322,7 +333,7 @@ n_gained_by_imputation <- n_total - n_complete_original
 tibble(
   Dataset = c(
     "Full dataset (for imputation)",
-    "Complete cases (original approach)", 
+    "Complete cases (no missing in key variables)", 
     "Additional observations from imputation"
   ),
   N = c(n_total, n_complete_original, n_gained_by_imputation),
@@ -367,15 +378,17 @@ data_save_path <- reanalysis_data_dir
 tibble(
   Metric = c(
     "Total observations",
-    "Complete cases (original approach)", 
+    "Complete cases (no missing in key variables)", 
+    "Missing outcome VA (to be imputed)",
     "Missing CCI or DCSI (to be imputed)",
     "Missing baseline VA (to be imputed)",
     "Patients who lapsed",
-    "Patients with vision impairment"
+    "Patients with vision impairment (observed)"
   ),
   N = c(
     nrow(df_for_imputation),
     nrow(df_complete_original),
+    sum(is.na(df_for_imputation$outcome_VA_logMAR)),
     sum(is.na(df_for_imputation$CCI) | is.na(df_for_imputation$DCSI)),
     sum(is.na(df_for_imputation$baseline_VA_logMAR)),
     sum(df_for_imputation$ever_lapse_binary == 1, na.rm = TRUE),
