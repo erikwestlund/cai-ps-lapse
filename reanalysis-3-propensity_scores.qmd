@@ -299,43 +299,66 @@ for (i in imps_to_show) {
   
   # Get balance statistics from the twang model
   # The bal.table function gives us the detailed balance statistics
-  bal_table <- bal.table(twang_model, digits = 4)
-  
-  # Extract the summary statistics for the optimal stopping point
-  # twang stores these in the desc slot
-  es_mean_stats <- twang_model$desc$es.mean
-  
-  # Create a clean summary table
-  summary_df <- data.frame(
-    Metric = c("N Treated", "N Control", 
-               "ESS Treated", "ESS Control",
-               "Max ES", "Mean ES", "Max KS",
-               "Iterations"),
-    Unweighted = c(
-      es_mean_stats$n.treat,
-      es_mean_stats$n.ctrl,
-      es_mean_stats$n.treat,  # ESS = n for unweighted
-      es_mean_stats$n.ctrl,    # ESS = n for unweighted
-      round(bal_table$unw$max.es, 4),
-      round(bal_table$unw$mean.es, 4),
-      round(bal_table$unw$max.ks, 4),
-      NA
-    ),
-    Weighted = c(
-      es_mean_stats$n.treat,
-      es_mean_stats$n.ctrl,
-      round(es_mean_stats$ess.treat, 2),
-      round(es_mean_stats$ess.ctrl, 2),
-      round(bal_table$es.mean$max.es, 4),
-      round(bal_table$es.mean$mean.es, 4),
-      round(bal_table$es.mean$max.ks, 4),
-      es_mean_stats$n.trees
+  tryCatch({
+    bal_table <- bal.table(twang_model, digits = 4)
+    
+    # Extract the summary statistics for the optimal stopping point
+    # twang stores these in the desc slot
+    es_mean_stats <- twang_model$desc$es.mean
+    
+    # Safely extract values with error checking
+    safe_round <- function(x, digits = 4) {
+      if (is.null(x) || !is.numeric(x)) return(NA)
+      return(round(x, digits))
+    }
+    
+    # Create a clean summary table
+    summary_df <- data.frame(
+      Metric = c("N Treated", "N Control", 
+                 "ESS Treated", "ESS Control",
+                 "Max ES", "Mean ES", "Max KS",
+                 "Iterations"),
+      Unweighted = c(
+        es_mean_stats$n.treat,
+        es_mean_stats$n.ctrl,
+        es_mean_stats$n.treat,  # ESS = n for unweighted
+        es_mean_stats$n.ctrl,    # ESS = n for unweighted
+        safe_round(bal_table$unw$max.es, 4),
+        safe_round(bal_table$unw$mean.es, 4),
+        safe_round(bal_table$unw$max.ks, 4),
+        NA
+      ),
+      Weighted = c(
+        es_mean_stats$n.treat,
+        es_mean_stats$n.ctrl,
+        safe_round(es_mean_stats$ess.treat, 2),
+        safe_round(es_mean_stats$ess.ctrl, 2),
+        safe_round(bal_table$es.mean$max.es, 4),
+        safe_round(bal_table$es.mean$mean.es, 4),
+        safe_round(bal_table$es.mean$max.ks, 4),
+        es_mean_stats$n.trees
+      )
     )
-  )
+    
+    kable(summary_df, 
+          caption = paste("Balance Summary for Imputation", i),
+          align = c('l', 'r', 'r'))
+    
+  }, error = function(e) {
+    # Fallback to simpler summary if bal.table fails
+    cat("Note: Detailed balance table unavailable. Showing basic summary:\n\n")
+    
+    # Use the summary method which is more reliable
+    sum_output <- summary(twang_model)
+    
+    # Try to extract key metrics from the summary
+    if (!is.null(sum_output)) {
+      print(sum_output)
+    } else {
+      cat("Balance statistics not available for this imputation.\n")
+    }
+  })
   
-  kable(summary_df, 
-        caption = paste("Balance Summary for Imputation", i),
-        align = c('l', 'r', 'r'))
   cat("\n\n")
 }
 ```

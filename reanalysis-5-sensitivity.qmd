@@ -34,6 +34,7 @@ subgroup_effects <- outcome_results$subgroup_effects
 This sensitivity analysis uses E-values to assess how robust our findings are to potential unmeasured confounding. The E-value represents the minimum strength of association that an unmeasured confounder would need to have with both the exposure (lapsing) and outcome (vision impairment) to fully explain away our observed associations.
 
 Key interpretations:
+
 - **E-value**: The minimum strength of association on the risk ratio scale that an unmeasured confounder would need to have with both exposure and outcome to explain away the observed association
 - **E-value for CI**: The minimum strength needed to shift the confidence interval to include the null
 
@@ -51,6 +52,7 @@ ci_upper_main <- exp(main_effect$Estimate + 1.96 * main_effect$SE)
 ```
 
 **Main Effect of Lapsing on Vision Impairment:**  
+
 - Odds Ratio: `r round(or_main, 3)`  
 - 95% CI: (`r round(ci_lower_main, 3)`, `r round(ci_upper_main, 3)`)
 
@@ -163,10 +165,12 @@ least_robust <- evalue_table[which.min(evalue_table$E_Value_Point), ]
 ```
 
 **Most robust finding:**  
+
 - Subgroup: `r most_robust$DR_Severity` with `r most_robust$Treatment`  
 - E-value: `r most_robust$E_Value_Point`
 
 **Least robust finding:**  
+
 - Subgroup: `r least_robust$DR_Severity` with `r least_robust$Treatment`  
 - E-value: `r least_robust$E_Value_Point`
 
