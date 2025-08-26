@@ -105,6 +105,14 @@ df_analysis <- df_combined |>
       intermediate_VA_logMAR
     ),
     
+    # For "submitted" cohort with observed outcome, use outcome as intermediate
+    # If we have 2-year outcome, patient must have had intermediate value
+    intermediate_VA_logMAR = if_else(
+      cohort_id == "submitted" & !is.na(outcome_VA_logMAR),
+      outcome_VA_logMAR,
+      intermediate_VA_logMAR
+    ),
+    
     # Set outcome to NA for "excluded" cohort (will be imputed)
     outcome_VA_logMAR = if_else(
       cohort_id == "excluded",
@@ -255,16 +263,19 @@ kable(temporal_summary,
                    "% Outcome", "% Intermediate", "% Baseline"))
 
 # Verify the temporal recoding worked correctly
+n_submitted_with_outcome <- sum(df_analysis$cohort_id == "submitted" & !is.na(df_analysis$outcome_VA_logMAR))
+n_submitted_with_intermediate <- sum(df_analysis$cohort_id == "submitted" & !is.na(df_analysis$intermediate_VA_logMAR))
+
 verification_results <- data.frame(
   Check = c("Excluded cohort with outcome VA (should be 0)",
-            "Submitted cohort with intermediate VA (should be 0)"),
+            "Submitted cohort: intermediate matches outcome count"),
   Count = c(
     sum(df_analysis$cohort_id == "excluded" & !is.na(df_analysis$outcome_VA_logMAR)),
-    sum(df_analysis$cohort_id == "submitted" & !is.na(df_analysis$intermediate_VA_logMAR))
+    paste(n_submitted_with_intermediate, "vs", n_submitted_with_outcome)
   ),
   Status = c(
     ifelse(sum(df_analysis$cohort_id == "excluded" & !is.na(df_analysis$outcome_VA_logMAR)) == 0, "✓ Pass", "✗ Fail"),
-    ifelse(sum(df_analysis$cohort_id == "submitted" & !is.na(df_analysis$intermediate_VA_logMAR)) == 0, "✓ Pass", "✗ Fail")
+    ifelse(n_submitted_with_intermediate == n_submitted_with_outcome, "✓ Pass", "✗ Fail")
   )
 )
 

@@ -687,6 +687,9 @@ print(imputed_vars)
 
 - **Baseline VA:** Starting point for temporal chain
 - **Intermediate VA:** Bridge between baseline and 2-year outcome
+  - For "submitted" cohort with observed outcome: set to outcome value
+  - For "excluded" cohort: contains observed intermediate follow-up values
+  - Reduces missing data substantially compared to leaving as NA
 - **Outcome VA:** Final 2-year outcome (missing for 'excluded' cohort)
 - **Temporal order enforced:** baseline → intermediate → outcome
 - **No reverse-time prediction allowed**
