@@ -319,7 +319,6 @@ key_vars_for_complete <- c(
   "ever_lapse_binary",   # Exposure
   "baseline_VA_logMAR",  # Key covariate
   "CCI", "DCSI",        # Comorbidity scores
-  "dr_severity",         # DR severity
   "any_treatment"        # Treatment status
 )
 
