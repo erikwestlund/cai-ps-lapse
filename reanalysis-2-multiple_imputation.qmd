@@ -22,7 +22,7 @@ library(naniar)
 # ANALYSIS MODE: "test" or "final"
 # test = 2 imputations, 5 iterations (fast)
 # final = 30 imputations, 20 iterations (slow but thorough)
-analysis_mode <- "final"  # Change to "final" for production run
+analysis_mode <- "test"  # Change to "final" for production run
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
@@ -149,7 +149,7 @@ method_table <- data.frame(
   filter(Method != "")
 ```
 
-**Default imputation methods:**
+**Initial imputation methods by variable:**
 ```{r method-table}
 kable(method_table)
 
@@ -173,20 +173,23 @@ custom_methods["race_ethnic_cat"] <- "polyreg"
 custom_methods["insurance_cat"] <- "polyreg"
 
 # Don't impute these variables
-# Method = "" means: don't impute (but still use as predictor EXCEPT for ID)
-custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor
-custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor
-custom_methods["ever_lapse_binary"] <- ""  # Complete - use as predictor only
-custom_methods["glaucoma_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
-custom_methods["otherretina_bef_hitplus_cat"] <- ""  # Already recoded to 0/1
-custom_methods["gender_cat"] <- ""  # Likely complete
-custom_methods["other_inject"] <- ""  # Likely complete
-custom_methods["anti_VEGF"] <- ""  # Likely complete  
-custom_methods["focal_laser_flag"] <- ""  # Likely complete
-custom_methods["PRP_flag"] <- ""  # Likely complete
+# Method = "" means: don't impute (but still use as predictor EXCEPT for IDs)
+custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor; see below.
+custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor; see below.
 
-# Note: Variables with method = "" (except ID) are STILL USED as predictors for other variables
-# They just aren't imputed themselves. The ID is excluded from both imputation and prediction.
+# Variables that are complete (no missing data) - set method but won't actually be imputed
+# Setting methods ensures correct measurement level is used IF they had missing data
+custom_methods["ever_lapse_binary"] <- "logreg"  # Binary - complete
+custom_methods["glaucoma_bef_hitplus_cat"] <- "logreg"  # Binary - already recoded to 0/1
+custom_methods["otherretina_bef_hitplus_cat"] <- "logreg"  # Binary - already recoded to 0/1
+custom_methods["gender_cat"] <- "logreg"  # Binary categorical - likely complete
+custom_methods["other_inject"] <- "logreg"  # Binary - likely complete
+custom_methods["anti_VEGF"] <- "logreg"  # Binary - likely complete  
+custom_methods["focal_laser_flag"] <- "logreg"  # Binary - likely complete
+custom_methods["PRP_flag"] <- "logreg"  # Binary - likely complete
+
+# Note: Variables with complete data won't be imputed even if they have a method assigned
+# The method specification ensures proper measurement level if imputation were needed
 
 # Check predictor matrix (which variables predict which)
 pred_matrix <- mice_dry$predictorMatrix
@@ -211,12 +214,19 @@ pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 
 ```{r final-model-config}
 
+# Get actual missing data information
+missing_info <- data.frame(
+  Variable = names(mice_dry$nmis),
+  N_Missing = mice_dry$nmis,
+  stringsAsFactors = FALSE
+)
+
 # Summary of methods
 final_methods <- data.frame(
   Variable = names(custom_methods),
   Method = custom_methods,
   Type = dplyr::case_when(
-    custom_methods == "" ~ "Predictor only (not imputed)",
+    custom_methods == "" ~ "Excluded (IDs - not used as predictor)",
     custom_methods == "pmm" ~ "Predictive mean matching",
     custom_methods == "polr" ~ "Proportional odds regression",
     custom_methods == "logreg" ~ "Logistic regression",
@@ -224,35 +234,69 @@ final_methods <- data.frame(
     TRUE ~ custom_methods
   ),
   stringsAsFactors = FALSE
-)
+) |>
+  left_join(missing_info, by = "Variable") |>
+  mutate(
+    Will_Be_Imputed = N_Missing > 0 & Method != "",
+    Role = case_when(
+      Variable %in% c("row_id", "e_mrn_deidentified") ~ "ID (excluded)",
+      N_Missing == 0 & Method != "" ~ "Complete predictor",
+      N_Missing > 0 & Method != "" ~ "To be imputed",
+      TRUE ~ "Other"
+    )
+  )
 
-# Sort to show imputed variables first
+# Sort to show meaningful groupings
 final_methods <- final_methods |>
-  dplyr::arrange(Method == "", Variable)
+  dplyr::arrange(Role == "ID (excluded)", N_Missing == 0, Variable)
 
-vars_to_impute <- names(custom_methods)[custom_methods != ""]
+# Variables that will ACTUALLY be imputed (have missing data AND a method)
+vars_to_impute <- final_methods |>
+  filter(Will_Be_Imputed) |>
+  pull(Variable)
 ```
 
-**Imputation methods by variable:**
+**Imputation methods and missing data by variable:**
 ```{r final-methods-table}
-kable(final_methods)
+final_methods |>
+  select(Variable, Type, N_Missing, Role) |>
+  kable(col.names = c("Variable", "Method Type", "Missing Values", "Role in Imputation"))
 ```
 
-**Variables that WILL be imputed** (`r length(vars_to_impute)` total):
+**Variables that will ACTUALLY be imputed** (have missing data, `r length(vars_to_impute)` total):
 ```{r vars-to-impute}
-print(vars_to_impute)
+if (length(vars_to_impute) > 0) {
+  data.frame(
+    Variable = vars_to_impute,
+    Missing_Count = final_methods |> 
+      filter(Variable %in% vars_to_impute) |> 
+      pull(N_Missing)
+  ) |>
+  kable()
+} else {
+  cat("No variables require imputation (all data complete)")
+}
 
 # Show predictor matrix summary
-avg_predictors <- sum(pred_matrix[1,])
+# Calculate average predictors (excluding self-predictions)
+avg_predictors <- round(mean(rowSums(pred_matrix[pred_matrix != 0, ])), 1)
 predictors <- names(which(colSums(pred_matrix) > 0))
+
+# Verify IDs are excluded
+ids_excluded <- all(pred_matrix[, "row_id"] == 0) & all(pred_matrix[, "e_mrn_deidentified"] == 0)
 ```
 
 ### Predictor Matrix Summary
 
 Each variable uses an average of **`r avg_predictors`** predictors.
 
-**Variables used as predictors:**
+**ID variables properly excluded from predictors:** `r if(ids_excluded) "✓ Yes" else "✗ No"`
+
+**Variables used as predictors** (`r length(predictors)` total):
 ```{r predictor-list}
+if ("row_id" %in% predictors || "e_mrn_deidentified" %in% predictors) {
+  warning("WARNING: ID variables are being used as predictors! This should not happen.")
+}
 print(predictors)
 ```
 
