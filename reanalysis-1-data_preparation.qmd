@@ -324,7 +324,7 @@ key_vars_for_complete <- c(
 )
 
 df_complete_original <- df_analysis |>
-  filter(complete.cases(select(., all_of(key_vars_for_complete))))
+  filter(complete.cases(pick(all_of(key_vars_for_complete))))
 
 n_total <- nrow(df_analysis)
 n_complete_original <- nrow(df_complete_original)
