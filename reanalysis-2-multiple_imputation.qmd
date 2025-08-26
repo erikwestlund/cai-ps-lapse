@@ -277,9 +277,24 @@ if (length(vars_to_impute) > 0) {
   cat("No variables require imputation (all data complete)")
 }
 
+# Show complete variables with methods assigned
+complete_with_methods <- final_methods |>
+  filter(N_Missing == 0 & Method != "") |>
+  select(Variable, Type)
+```
+
+**Complete variables with imputation methods assigned** (`r nrow(complete_with_methods)` total):
+These variables have no missing data and won't be imputed, but have methods specified to ensure proper measurement level:
+```{r complete-vars-table}
+if (nrow(complete_with_methods) > 0) {
+  kable(complete_with_methods, col.names = c("Variable", "Method Type"))
+} else {
+  cat("No complete variables with methods assigned")
+}
+
 # Show predictor matrix summary
 # Calculate average predictors (excluding self-predictions)
-avg_predictors <- round(mean(rowSums(pred_matrix[pred_matrix != 0, ])), 1)
+avg_predictors <- round(mean(rowSums(pred_matrix)), 1)
 predictors <- names(which(colSums(pred_matrix) > 0))
 
 # Verify IDs are excluded
