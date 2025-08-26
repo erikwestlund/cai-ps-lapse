@@ -174,17 +174,35 @@ for (i in 1:n_imputations) {
 
 **DR Severity:**
 ```{r dr-severity-dist}
-table(imputed_datasets[[1]]$dr_severity) |> kable()
+dr_table <- table(imputed_datasets[[1]]$dr_severity)
+dr_df <- data.frame(
+  Category = names(dr_table),
+  Count = as.numeric(dr_table),
+  Percentage = paste0(round(100 * as.numeric(dr_table) / sum(dr_table), 1), "%")
+)
+kable(dr_df, align = c('l', 'r', 'r'))
 ```
 
 **Treatment Status:**
 ```{r treatment-dist}
-table(imputed_datasets[[1]]$any_treatment) |> kable()
+treatment_table <- table(imputed_datasets[[1]]$any_treatment)
+treatment_df <- data.frame(
+  Treatment = c("No Treatment", "Treatment"),
+  Count = as.numeric(treatment_table),
+  Percentage = paste0(round(100 * as.numeric(treatment_table) / sum(treatment_table), 1), "%")
+)
+kable(treatment_df, align = c('l', 'r', 'r'))
 ```
 
 **Lapse Status:**
 ```{r lapse-dist}
-table(imputed_datasets[[1]]$ever_lapse_binary) |> kable()
+lapse_table <- table(imputed_datasets[[1]]$ever_lapse_binary)
+lapse_df <- data.frame(
+  Lapse_Status = c("No Lapse", "Lapsed"),
+  Count = as.numeric(lapse_table),
+  Percentage = paste0(round(100 * as.numeric(lapse_table) / sum(lapse_table), 1), "%")
+)
+kable(lapse_df, align = c('l', 'r', 'r'))
 ```
 
 **Three-way Cross-tabulation:**
@@ -197,17 +215,34 @@ crosstab <- with(imputed_datasets[[1]],
 crosstab_df <- as.data.frame(crosstab)
 names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Count")
 
-# Pivot to wide format for better readability
+# Calculate total for percentages
+total_n <- sum(crosstab_df$Count)
+
+# Pivot to wide format for better readability with percentages
 library(tidyr)
 crosstab_wide <- crosstab_df |>
   pivot_wider(names_from = Lapse_Status, 
               values_from = Count,
               values_fill = 0) |>
-  arrange(DR_Severity, Treatment)
+  arrange(DR_Severity, Treatment) |>
+  mutate(
+    Total = `0` + `1`,
+    No_Lapse_Pct = paste0(round(100 * `0` / Total, 1), "%"),
+    Lapsed_Pct = paste0(round(100 * `1` / Total, 1), "%"),
+    Row_Pct = paste0(round(100 * Total / total_n, 1), "%")
+  ) |>
+  select(DR_Severity, Treatment, 
+         No_Lapse = `0`, No_Lapse_Pct,
+         Lapsed = `1`, Lapsed_Pct,
+         Total, Row_Pct)
 
 kable(crosstab_wide, 
       caption = "Distribution of patients by DR severity, treatment, and lapse status",
-      col.names = c("DR Severity", "Treatment", "No Lapse", "Lapsed"))
+      col.names = c("DR Severity", "Treatment", 
+                    "No Lapse (n)", "No Lapse (%)",
+                    "Lapsed (n)", "Lapsed (%)",
+                    "Total (n)", "Row %"),
+      align = c('l', 'l', 'r', 'r', 'r', 'r', 'r', 'r'))
 ```
 
 ## Define Model Formula

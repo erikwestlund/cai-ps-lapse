@@ -358,25 +358,49 @@ plot(mice_results)
 
 ## Imputation Diagnostics
 
+**Note:** In the stripplots below, the leftmost column (labeled 1) shows the **original observed data** with missing values. Columns 2 through `r n_imputations + 1` show the imputed datasets.
+
 ```{r imputation-diagnostics}
 # Check imputed values for key variables
+# In mice stripplots: .imp = 1 is original data, .imp = 2+ are imputations
 
 # CCI - compare observed vs imputed
 if(sum(is.na(df_mice$CCI)) > 0) {
+  cat("### Charlson Comorbidity Index (CCI)\n")
+  cat("**Density plot:** Blue = observed data, Red = imputed values\n")
   densityplot(mice_results, ~ CCI) |> print()
-  stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.2) |> print()
+  
+  cat("\n**Stripplot:** Column 1 = original data (with gaps for missing), Columns 2+ = imputed datasets\n")
+  stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "CCI Distribution: Original vs Imputed") |> print()
+  cat("\n")
 }
 
 # DCSI - compare observed vs imputed  
 if(sum(is.na(df_mice$DCSI)) > 0) {
+  cat("### Diabetes Complications Severity Index (DCSI)\n")
+  cat("**Density plot:** Blue = observed data, Red = imputed values\n")
   densityplot(mice_results, ~ DCSI) |> print()
-  stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.2) |> print()
+  
+  cat("\n**Stripplot:** Column 1 = original data (with gaps for missing), Columns 2+ = imputed datasets\n")
+  stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "DCSI Distribution: Original vs Imputed") |> print()
+  cat("\n")
 }
 
 # Baseline VA - compare observed vs imputed
 if(sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
+  cat("### Baseline Visual Acuity (logMAR)\n")
+  cat("**Density plot:** Blue = observed data, Red = imputed values\n")
   densityplot(mice_results, ~ baseline_VA_logMAR) |> print()
-  stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.2) |> print()
+  
+  cat("\n**Stripplot:** Column 1 = original data (with gaps for missing), Columns 2+ = imputed datasets\n")
+  stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "Baseline VA Distribution: Original vs Imputed") |> print()
+  cat("\n")
 }
 
 # Person DR - compare observed vs imputed (categorical)
@@ -528,19 +552,31 @@ saveRDS(imputed_datasets[[1]], file.path(reanalysis_data_dir, "imputed_dataset_1
 ## Summary
 
 ```{r summary}
+# Count variables more precisely
+# Total columns in df_mice includes row_id which we added
+total_vars <- ncol(df_mice)
+id_vars <- 2  # row_id and e_mrn_deidentified
+substantive_vars <- total_vars - id_vars  # Variables actually used in the imputation model
+
 summary_table <- tibble(
   Metric = c(
     "Original observations",
-    "Variables in imputation model",
+    "Total variables in dataset",
+    "ID variables (excluded from model)",
+    "Substantive variables in imputation model",
     "Variables with missing data",
+    "Variables actually imputed",
     "Number of imputations",
     "Maximum missing percentage",
     "Imputation iterations"
   ),
   Value = c(
     nrow(df_mice),
-    ncol(df_mice),
+    total_vars,
+    id_vars,
+    substantive_vars,
     sum(mice_results$nmis > 0),
+    length(vars_to_impute),
     n_imputations,
     paste0(round(max(mice_results$nmis/nrow(df_mice)) * 100, 1), "%"),
     mice_results$iteration
