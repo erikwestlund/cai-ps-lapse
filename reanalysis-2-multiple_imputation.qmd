@@ -63,7 +63,7 @@ imputation_vars <- c(
   "e_mrn_deidentified",
   
   # Temporal VA variables
-  "cohort_id",  # Indicates if true 2-year outcome available
+  "cohort_id",  # Data indicator only - not used as predictor
   "baseline_VA_logMAR",  # Baseline VA
   "intermediate_VA_logMAR",  # Intermediate follow-up VA (for excluded cohort)
   "outcome_VA_logMAR",  # 2-year outcome (true for submitted, missing for excluded)
@@ -163,7 +163,7 @@ custom_methods <- mice_dry$method
 custom_methods["baseline_VA_logMAR"] <- "pmm"  # Impute if missing
 custom_methods["intermediate_VA_logMAR"] <- "pmm"  # IMPUTE intermediate values
 custom_methods["outcome_VA_logMAR"] <- "pmm"  # Impute 2-year outcomes
-custom_methods["cohort_id"] <- ""  # Never impute - complete indicator
+custom_methods["cohort_id"] <- ""  # Never impute - data management indicator only
 
 # Other continuous variables
 custom_methods["CCI"] <- "pmm"  # Predictive mean matching for count data
@@ -216,18 +216,14 @@ pred_matrix["outcome_VA_logMAR", "baseline_VA_logMAR"] <- 1
 # 2. Intermediate can predict outcome
 pred_matrix["outcome_VA_logMAR", "intermediate_VA_logMAR"] <- 1
 
-# 3. Cohort_id can predict VA variables (indicates data structure)
-pred_matrix["baseline_VA_logMAR", "cohort_id"] <- 1
-pred_matrix["intermediate_VA_logMAR", "cohort_id"] <- 1
-pred_matrix["outcome_VA_logMAR", "cohort_id"] <- 1
-
-# 4. CRITICAL: Prevent reverse-time prediction
+# 3. CRITICAL: Prevent reverse-time prediction
 pred_matrix["intermediate_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Outcome cannot predict intermediate
 pred_matrix["baseline_VA_logMAR", "outcome_VA_logMAR"] <- 0  # Outcome cannot predict baseline
 pred_matrix["baseline_VA_logMAR", "intermediate_VA_logMAR"] <- 0  # Intermediate cannot predict baseline
 
-# Cohort_id should not be predicted by anything
-pred_matrix["cohort_id", ] <- 0
+# Cohort_id should not be predicted by anything AND should not predict anything
+pred_matrix["cohort_id", ] <- 0  # Not predicted
+pred_matrix[, "cohort_id"] <- 0  # Not a predictor
 
 # Don't use variables as their own predictors
 diag(pred_matrix) <- 0
