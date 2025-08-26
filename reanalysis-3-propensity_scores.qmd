@@ -19,7 +19,7 @@ library(gridExtra)
 library(knitr)
 
 # ANALYSIS MODE: Use same as imputation
-analysis_mode <- "test"  # Should match imputation mode
+analysis_mode <- "final"  # Should match imputation mode
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
