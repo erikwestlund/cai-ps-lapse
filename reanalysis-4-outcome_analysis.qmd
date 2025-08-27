@@ -402,16 +402,29 @@ get_mode <- function(x, w) {
   names(tbl)[which.max(tbl)]
 }
 
-scenarios$baseline_VA_logMAR <- weighted_means["baseline_VA_logMAR"]
-scenarios$age_cat <- get_mode(imp_data$age_cat, imp_data$weights)
-scenarios$gender_cat <- get_mode(imp_data$gender_cat, imp_data$weights)
-scenarios$race_ethnic_cat <- get_mode(imp_data$race_ethnic_cat, imp_data$weights)
-scenarios$insurance_cat <- get_mode(imp_data$insurance_cat, imp_data$weights)
-scenarios$CCI <- round(weighted_means["CCI"])
-scenarios$DCSI <- round(weighted_means["DCSI"])
-scenarios$glaucoma_bef_hitplus_cat <- 0
-scenarios$otherretina_bef_hitplus_cat <- 0
-scenarios$catsurg_before_hitplus_cat <- 0
+# Set continuous variables
+scenarios$baseline_VA_logMAR <- as.numeric(weighted_means["baseline_VA_logMAR"])
+scenarios$CCI <- round(as.numeric(weighted_means["CCI"]))
+scenarios$DCSI <- round(as.numeric(weighted_means["DCSI"]))
+
+# Set categorical variables as factors with proper levels
+scenarios$age_cat <- factor(get_mode(imp_data$age_cat, imp_data$weights), 
+                            levels = levels(imp_data$age_cat))
+scenarios$gender_cat <- factor(get_mode(imp_data$gender_cat, imp_data$weights),
+                               levels = levels(imp_data$gender_cat))
+scenarios$race_ethnic_cat <- factor(get_mode(imp_data$race_ethnic_cat, imp_data$weights),
+                                    levels = levels(imp_data$race_ethnic_cat))
+scenarios$insurance_cat <- factor(get_mode(imp_data$insurance_cat, imp_data$weights),
+                                  levels = levels(imp_data$insurance_cat))
+
+# Set binary factors
+scenarios$glaucoma_bef_hitplus_cat <- factor(0, levels = c(0, 1))
+scenarios$otherretina_bef_hitplus_cat <- factor(0, levels = c(0, 1))
+scenarios$catsurg_before_hitplus_cat <- factor(0, levels = levels(imp_data$catsurg_before_hitplus_cat))
+
+# Ensure dr_severity and any_treatment are factors
+scenarios$dr_severity <- factor(scenarios$dr_severity, levels = c("No_DR", "NPDR", "PDR"))
+scenarios$any_treatment <- factor(scenarios$any_treatment, levels = c(0, 1))
 
 # Get predictions
 predictions <- predict(fitted_models[[1]], newdata = scenarios, type = "response")
