@@ -21,6 +21,7 @@ library(survey)
 library(broom)
 library(marginaleffects)
 library(emmeans)
+library(tidyr)
 
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "test"  # Should match imputation mode
@@ -174,19 +175,17 @@ if (file.exists(models_cache_file) && !force_refit) {
   cached_models <- readRDS(models_cache_file)
   fitted_models <- cached_models$fitted_models
   model_summaries <- cached_models$model_summaries
-  cat("Loaded cached models from:", models_cache_file, "\n")
-  cat("To refit models, set force_refit <- TRUE\n")
+  models_loaded_from_cache <- TRUE
+  cache_location <- models_cache_file
 } else {
   # Fit new models
-  cat("Fitting models to each imputed dataset...\n")
+  models_loaded_from_cache <- FALSE
   
   # Store fitted models and extracted coefficients
   fitted_models <- list()
   model_summaries <- list()
   
   for (i in 1:n_imputations) {
-    cat("Fitting model", i, "of", n_imputations, "\r")
-    
     # Get dataset and weights
     imp_data <- imputed_datasets[[i]]
     imp_data$weights <- twang_weights[[i]]
@@ -212,8 +211,6 @@ if (file.exists(models_cache_file) && !force_refit) {
     model_summaries[[i]] <- tidy(model, conf.int = TRUE)
   }
   
-  cat("\n")
-  
   # Save to cache
   cached_models <- list(
     fitted_models = fitted_models,
@@ -224,14 +221,19 @@ if (file.exists(models_cache_file) && !force_refit) {
   )
   
   saveRDS(cached_models, models_cache_file)
-  cat("Models cached to:", models_cache_file, "\n")
+  cache_location <- models_cache_file
 }
+```
 
-# Show first model summary as example
-cat("Example model summary (Imputation 1):\n")
+**Models cache status:** `r ifelse(models_loaded_from_cache, paste("Loaded from", cache_location), paste("Newly fitted and saved to", cache_location))`
+
+### Example Model Summary (First Imputation)
+
+```{r model-summary-display}
 kable(model_summaries[[1]] |> 
       select(term, estimate, std.error, p.value) |> 
-      head(10))
+      head(10),
+      caption = "First 10 coefficients from imputation 1")
 ```
 
 ## Pool Results Across Imputations
@@ -355,14 +357,14 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
   # Load cached AMEs
   ame_cache <- readRDS(ame_cache_file)
   ame_list <- ame_cache$ame_list
-  cat("Loaded cached AMEs from:", ame_cache_file, "\n")
+  ame_loaded_from_cache <- TRUE
+  ame_cache_location <- ame_cache_file
 } else {
   # Calculate AME for each imputed dataset then pool
-  cat("Calculating AMEs for each imputed dataset...\n")
+  ame_loaded_from_cache <- FALSE
   ame_list <- list()
   
   for (i in 1:n_imputations) {
-    cat("Calculating AME", i, "of", n_imputations, "\r")
     imp_data <- imputed_datasets[[i]]
     imp_data$weights <- twang_weights[[i]]
     
@@ -379,8 +381,6 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
     ame_list[[i]] <- ame
   }
   
-  cat("\n")
-  
   # Save to cache
   ame_cache <- list(
     ame_list = ame_list,
@@ -388,7 +388,7 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
     timestamp = Sys.time()
   )
   saveRDS(ame_cache, ame_cache_file)
-  cat("AMEs cached to:", ame_cache_file, "\n")
+  ame_cache_location <- ame_cache_file
 }
 
 # Extract estimates and SEs for pooling
@@ -432,6 +432,8 @@ kable(pooled_ame |> select(-Interpretation),
 ame_text <- pooled_ame$Interpretation
 ```
 
+**AME cache status:** `r ifelse(ame_loaded_from_cache, paste("Loaded from", ame_cache_location), paste("Newly calculated and saved to", ame_cache_location))`
+
 `r ame_text`
 
 ## Predicted Probabilities
@@ -440,79 +442,53 @@ ame_text <- pooled_ame$Interpretation
 # Use emmeans for predicted probabilities - it handles survey models properly
 # We'll use the first imputed model for illustration
 
-# Get estimated marginal means for key combinations
-emm_results <- tryCatch({
-  # Get predictions for lapse x dr_severity x any_treatment
-  emmeans(fitted_models[[1]], 
-          ~ ever_lapse_binary * dr_severity * any_treatment,
-          type = "response",  # Get probabilities not log-odds
-          weights = "proportional")  # Use observed proportions for other variables
-}, error = function(e) {
-  # If emmeans fails, try a simpler specification
-  emmeans(fitted_models[[1]], 
-          ~ ever_lapse_binary + dr_severity + any_treatment,
-          type = "response",
-          weights = "proportional")
-})
+# Set emmeans options to handle larger reference grids
+emm_options(rg.limit = 50000)
 
-# Convert to data frame for display
-if (!is.null(emm_results)) {
-  pred_df <- as.data.frame(emm_results)
-  
-  # Clean up column names
-  if ("prob" %in% names(pred_df)) {
-    pred_df$Predicted_Prob <- round(pred_df$prob, 3)
-  } else if ("response" %in% names(pred_df)) {
-    pred_df$Predicted_Prob <- round(pred_df$response, 3)
-  } else if ("emmean" %in% names(pred_df)) {
-    # If we're on the link scale, transform to probability
-    pred_df$Predicted_Prob <- round(plogis(pred_df$emmean), 3)
-  }
-  
-  # Create lapse and treatment labels
-  pred_df$Lapse <- ifelse(pred_df$ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
-  pred_df$Treatment <- ifelse(pred_df$any_treatment == 1, "Treated", "Not Treated")
-  
-  # Select and reshape for display
-  library(tidyr)
-  pred_wide <- pred_df |>
-    select(Lapse, dr_severity, Treatment, Predicted_Prob) |>
-    pivot_wider(names_from = Lapse, values_from = Predicted_Prob) |>
-    arrange(dr_severity, Treatment)
-  
-  kable(pred_wide, 
-        caption = "Predicted probability of VI/blindness by lapse status (from first imputation)",
-        col.names = c("DR Severity", "Treatment", "Not Lapsed", "Lapsed"),
-        digits = 3)
-  
-  # Calculate contrasts for risk differences
-  # This properly accounts for the survey design
-  contrasts_lapse <- tryCatch({
-    pairs(emmeans(fitted_models[[1]], 
-                  ~ ever_lapse_binary | dr_severity * any_treatment,
-                  type = "response"))
-  }, error = function(e) {
-    NULL
-  })
-  
-  if (!is.null(contrasts_lapse)) {
-    contrasts_df <- as.data.frame(contrasts_lapse)
-    kable(contrasts_df |> 
-          select(dr_severity, any_treatment, estimate, SE, p.value) |>
-          mutate(
-            Treatment = ifelse(any_treatment == 1, "Treated", "Not Treated"),
-            Risk_Difference = round(estimate, 3),
-            SE = round(SE, 4),
-            p.value = format.pval(p.value, digits = 4, eps = 0.0001)
-          ) |>
-          select(dr_severity, Treatment, Risk_Difference, SE, p.value),
-          caption = "Risk differences (Lapsed - Not Lapsed) with proper variance estimation",
-          col.names = c("DR Severity", "Treatment", "Risk Diff", "SE", "P-value"))
-  }
-} else {
-  cat("Note: Predicted probabilities using emmeans could not be calculated.\n")
-  cat("The main analysis results above remain valid.\n")
+# Get estimated marginal means for the main effect of lapse
+emm_results <- emmeans(fitted_models[[1]], 
+                      ~ ever_lapse_binary,
+                      type = "response",  # Get probabilities not log-odds
+                      weights = "proportional")  # Use observed proportions
+
+# Display the main effect predictions
+pred_df <- as.data.frame(emm_results)
+
+# Clean up column names
+if ("prob" %in% names(pred_df)) {
+  pred_df$Predicted_Prob <- round(pred_df$prob, 3)
+} else if ("response" %in% names(pred_df)) {
+  pred_df$Predicted_Prob <- round(pred_df$response, 3)
+} else if ("emmean" %in% names(pred_df)) {
+  # If we're on the link scale, transform to probability
+  pred_df$Predicted_Prob <- round(plogis(pred_df$emmean), 3)
 }
+
+# Create lapse labels
+pred_df$Lapse_Status <- ifelse(pred_df$ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
+
+# Display predictions
+kable(pred_df |> select(Lapse_Status, Predicted_Prob, SE, lower.CL, upper.CL), 
+      caption = "Predicted probability of VI/blindness by lapse status (marginalized over all covariates)",
+      col.names = c("Lapse Status", "Predicted Probability", "SE", "Lower CI", "Upper CI"),
+      digits = 3)
+
+# Calculate and display the contrast (risk difference)
+contrasts_lapse <- pairs(emm_results)
+contrasts_df <- as.data.frame(contrasts_lapse)
+
+kable(contrasts_df |> 
+      mutate(
+        Contrast = "Lapsed - Not Lapsed",
+        Risk_Difference = round(estimate, 3),
+        SE = round(SE, 4),
+        CI_Lower = round(lower.CL, 3),
+        CI_Upper = round(upper.CL, 3),
+        p.value = format.pval(p.value, digits = 4, eps = 0.0001)
+      ) |>
+      select(Contrast, Risk_Difference, SE, CI_Lower, CI_Upper, p.value),
+      caption = "Main effect: Risk difference with proper variance estimation",
+      col.names = c("Contrast", "Risk Difference", "SE", "Lower CI", "Upper CI", "P-value"))
 ```
 
 ## Save Results
