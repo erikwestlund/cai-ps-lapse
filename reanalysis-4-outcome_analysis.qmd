@@ -393,8 +393,8 @@ scenarios <- expand.grid(
 )
 
 # Set other variables to their weighted means/modes
-weighted_means <- svydesign(ids = ~1, weights = ~weights, data = imp_data) |>
-  svymean(~baseline_VA_logMAR + age + CCI + DCSI, na.rm = TRUE)
+design_temp <- svydesign(ids = ~1, weights = ~weights, data = imp_data)
+weighted_means <- svymean(~baseline_VA_logMAR + CCI + DCSI, design_temp, na.rm = TRUE)
 
 # Get modes for categorical variables
 get_mode <- function(x, w) {
