@@ -22,7 +22,7 @@ library(broom)
 library(marginaleffects)
 
 # ANALYSIS MODE: Use same as imputation
-analysis_mode <- "final"  # Should match imputation mode
+analysis_mode <- "test"  # Should match imputation mode
 
 # Check for required files
 required_files <- c(
@@ -204,22 +204,20 @@ kable(model_summaries[[1]] |>
 ## Pool Results Across Imputations
 
 ```{r pool-results}
-# Extract coefficient for lapse effect from each imputation
-lapse_coefficients <- sapply(model_summaries, function(x) {
-  x$estimate[x$term == "ever_lapse_binary"]
-})
+# Create a proper mira object for mice pooling
+# The key is to create a list with the correct structure
+mira_object <- list(
+  call = fitted_models[[1]]$call,
+  call1 = fitted_models[[1]]$call,
+  nmis = rep(1, n_imputations),  # Placeholder
+  analyses = fitted_models
+)
+class(mira_object) <- "mira"
 
-lapse_ses <- sapply(model_summaries, function(x) {
-  x$std.error[x$term == "ever_lapse_binary"]
-})
+# Now pool using mice's native function
+pooled <- pool(mira_object)
 
-# Pool using Rubin's rules (via mice)
-# Create a mira object for pooling
-model_list <- lapply(fitted_models, as.mira)
-class(model_list) <- c("mira", "list")
-
-# Pool the results
-pooled <- pool(model_list)
+# Get pooled results with confidence intervals
 pooled_results <- summary(pooled, conf.int = TRUE) |> 
   as.data.frame()
 
@@ -306,50 +304,56 @@ kable(key_results,
 ## Average Marginal Effects
 
 ```{r marginal-effects}
-# Calculate AME for the main effect of lapse
-# Use the first few imputations for AME calculation
-n_ame_imps <- min(10, n_imputations)  # Use up to 10 imputations for AME
+# Calculate AME for each imputed dataset then pool
+ame_list <- list()
 
-ame_results <- list()
-for (i in 1:n_ame_imps) {
+for (i in 1:n_imputations) {
   imp_data <- imputed_datasets[[i]]
   imp_data$weights <- twang_weights[[i]]
   
-  # Create survey design to properly handle clustering
-  design <- svydesign(
-    ids = ~ e_mrn_deidentified,  # Cluster on patient ID
-    weights = ~ weights,
-    data = imp_data
-  )
-  
-  # Calculate AME with survey design
-  # Note: marginaleffects handles survey objects appropriately
+  # Calculate AME with clustering and weights
+  # marginaleffects handles survey designs well
   ame <- avg_slopes(
     fitted_models[[i]], 
     variables = "ever_lapse_binary",
-    newdata = imp_data,  # Use the full dataset
-    vcov = ~e_mrn_deidentified,  # Cluster standard errors on patient ID
-    wts = imp_data$weights  # Apply propensity score weights
+    newdata = imp_data,
+    vcov = ~e_mrn_deidentified,  # Cluster SEs on patient ID
+    wts = imp_data$weights  # Apply PS weights
   )
   
-  ame_results[[i]] <- data.frame(
-    imp = i,
-    ame = ame$estimate,
-    se = ame$std.error
-  )
+  ame_list[[i]] <- ame
 }
 
-# Combine AME results
-ame_combined <- do.call(rbind, ame_results)
+# Extract estimates and SEs for pooling
+ame_estimates <- sapply(ame_list, function(x) x$estimate)
+ame_ses <- sapply(ame_list, function(x) x$std.error)
 
-# Pool AME estimates using Rubin's rules
+# Apply Rubin's rules for pooling
+pooled_ame_est <- mean(ame_estimates)
+within_var <- mean(ame_ses^2)
+between_var <- var(ame_estimates)
+total_var <- within_var + between_var * (1 + 1/n_imputations)
+pooled_ame_se <- sqrt(total_var)
+
+# Calculate FMI and df
+fmi <- (between_var * (1 + 1/n_imputations)) / total_var
+df_ame <- (n_imputations - 1) / fmi^2
+
+# CI using t-distribution
+t_crit <- qt(0.975, df_ame)
+ci_lower <- pooled_ame_est - t_crit * pooled_ame_se
+ci_upper <- pooled_ame_est + t_crit * pooled_ame_se
+
 pooled_ame <- data.frame(
   Effect = "Average Marginal Effect of Lapse",
-  AME = mean(ame_combined$ame),
-  SE = sqrt(mean(ame_combined$se^2) + var(ame_combined$ame) * (1 + 1/n_ame_imps)),
+  AME = pooled_ame_est,
+  SE = pooled_ame_se,
+  CI_Lower = ci_lower,
+  CI_Upper = ci_upper,
+  FMI = fmi,
   Interpretation = paste0(
     "On average, lapsing from care increases the probability of VI/blindness by ",
-    round(mean(ame_combined$ame), 3)
+    round(pooled_ame_est, 3)
   )
 )
 
@@ -452,3 +456,10 @@ save_location <- file.path(reanalysis_data_dir, "outcome_analysis_main_effects_r
 ```
 
 **Results saved to:** `r save_location`
+
+## Summary
+
+The main effects model shows:
+
+- **Primary finding**: Lapsing from care has a significant effect on vision impairment/blindness (OR = `r round(lapse_effect$OR, 2)`, p `r ifelse(lapse_effect$p.value < 0.001, "< 0.001", paste("=", round(lapse_effect$p.value, 3)))`)
+- **Effect size**: The average marginal effect indicates that lapsing increases the probability of VI/blindness by `r round(pooled_ame_est, 3)`
