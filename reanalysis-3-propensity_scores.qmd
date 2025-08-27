@@ -70,7 +70,7 @@ variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 
 ```{r ps-formula}
 # Original formula from get_matching_formula()
-# Now enhanced to include DR severity and treatment type
+# Now enhanced to include DR severity
 
 # Create enhanced formula including person_dr and treatment interactions
 ps_formula_enhanced <- as.formula("ever_lapse_binary ~ 
@@ -88,8 +88,7 @@ ps_formula_enhanced <- as.formula("ever_lapse_binary ~
   glaucoma_bef_hitplus_cat +
   otherretina_bef_hitplus_cat +
   catsurg_before_hitplus_cat +
-  person_dr +  # Added DR severity
-  treatment_type  # Added treatment type
+  person_dr
 ")
 
 ```
