@@ -420,6 +420,12 @@ kable(weight_dist_summary,
 ## Save Propensity Score Results
 
 ```{r save-results}
+# Extract weights from all twang models for easy access in later steps
+twang_weights <- list()
+for (i in 1:n_imputations) {
+  twang_weights[[i]] <- get.weights(twang_results[[i]], stop.method = "es.mean")
+}
+
 ps_output <- list(
   twang_results = twang_results,
   weight_summary = balance_summary_all,
@@ -432,10 +438,12 @@ ps_output <- list(
 )
 
 saveRDS(ps_output, file.path(reanalysis_data_dir, "ps_results_twang.rds"))
+saveRDS(twang_weights, file.path(reanalysis_data_dir, "twang_weights.rds"))
 
 ```
 
-**Twang propensity score results saved to:** `r file.path(reanalysis_data_dir, "ps_results_twang.rds")`
+**Propensity score results saved to:** `r file.path(reanalysis_data_dir, "ps_results_twang.rds")`
+**Weights saved to:** `r file.path(reanalysis_data_dir, "twang_weights.rds")`
 
 ## Summary
 
