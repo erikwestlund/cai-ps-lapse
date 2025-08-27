@@ -452,14 +452,3 @@ save_location <- file.path(reanalysis_data_dir, "outcome_analysis_main_effects_r
 ```
 
 **Results saved to:** `r save_location`
-
-## Summary
-
-The main effects model shows:
-
-- **Primary finding**: Lapsing from care has a significant effect on vision impairment/blindness (OR = `r round(lapse_effect$OR, 2)`, p `r ifelse(lapse_effect$p.value < 0.001, "< 0.001", paste("=", round(lapse_effect$p.value, 3)))`)
-- **Effect size**: The average marginal effect indicates that lapsing increases the probability of VI/blindness by `r round(mean(ame_combined$ame), 3)`
-- **Consistency**: The effect is present across all levels of DR severity and treatment status
-- **Key insight**: Even patients with no DR and no treatment show increased risk when lapsing from care
-
-This simpler model provides clearer interpretation than the interaction model while maintaining the core finding about the importance of continuous care.

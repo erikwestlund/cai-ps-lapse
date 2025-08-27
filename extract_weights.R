@@ -2,15 +2,15 @@
 # This avoids having to re-run all of Step 3
 
 source("dependencies.R")
-library(twang)
 
 # Load the saved results
 ps_output <- readRDS(file.path(reanalysis_data_dir, "ps_results_twang.rds"))
 
-# Extract weights from all twang models
+# Extract weights that are already stored in twang_results
 twang_weights <- list()
 for (i in 1:ps_output$n_imputations) {
-  twang_weights[[i]] <- get.weights(ps_output$twang_results[[i]], stop.method = "es.mean")
+  # The weights are already extracted and stored in the results
+  twang_weights[[i]] <- ps_output$twang_results[[i]]$weights
 }
 
 # Save the weights
