@@ -24,6 +24,27 @@ library(marginaleffects)
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "final"  # Should match imputation mode
 
+# Check for required files
+required_files <- c(
+  "imputed_datasets.rds",
+  "twang_weights.rds",
+  "variable_lists.rds"
+)
+
+missing_files <- c()
+for (file in required_files) {
+  if (!file.exists(file.path(reanalysis_data_dir, file))) {
+    missing_files <- c(missing_files, file)
+  }
+}
+
+if (length(missing_files) > 0) {
+  stop(paste("Required files not found. Please run previous steps first:\n",
+             "- Step 2 (Multiple Imputation) creates: imputed_datasets.rds\n",
+             "- Step 3 (Propensity Scores) creates: twang_weights.rds\n",
+             "Missing files:", paste(missing_files, collapse = ", ")))
+}
+
 # Load data and weights
 imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
 twang_weights <- readRDS(file.path(reanalysis_data_dir, "twang_weights.rds"))
@@ -294,12 +315,21 @@ for (i in 1:n_ame_imps) {
   imp_data <- imputed_datasets[[i]]
   imp_data$weights <- twang_weights[[i]]
   
-  # Calculate AME
+  # Create survey design to properly handle clustering
+  design <- svydesign(
+    ids = ~ e_mrn_deidentified,  # Cluster on patient ID
+    weights = ~ weights,
+    data = imp_data
+  )
+  
+  # Calculate AME with survey design
+  # Note: marginaleffects handles survey objects appropriately
   ame <- avg_slopes(
     fitted_models[[i]], 
     variables = "ever_lapse_binary",
-    vcov = "HC3",
-    wts = "weights"
+    newdata = imp_data,  # Use the full dataset
+    vcov = ~e_mrn_deidentified,  # Cluster standard errors on patient ID
+    wts = imp_data$weights  # Apply propensity score weights
   )
   
   ame_results[[i]] <- data.frame(
@@ -312,22 +342,26 @@ for (i in 1:n_ame_imps) {
 # Combine AME results
 ame_combined <- do.call(rbind, ame_results)
 
-# Pool AME estimates
+# Pool AME estimates using Rubin's rules
 pooled_ame <- data.frame(
   Effect = "Average Marginal Effect of Lapse",
   AME = mean(ame_combined$ame),
   SE = sqrt(mean(ame_combined$se^2) + var(ame_combined$ame) * (1 + 1/n_ame_imps)),
   Interpretation = paste0(
     "On average, lapsing from care increases the probability of VI/blindness by ",
-    round(mean(ame_combined$ame) * 100, 1), " percentage points"
+    round(mean(ame_combined$ame), 3)
   )
 )
 
 kable(pooled_ame |> select(-Interpretation), 
-      caption = "Average marginal effect of lapsing")
+      caption = "Average marginal effect of lapsing",
+      digits = 4)
 
-cat("\n", pooled_ame$Interpretation, "\n")
+# Display interpretation separately
+ame_text <- pooled_ame$Interpretation
 ```
+
+`r ame_text`
 
 ## Predicted Probabilities
 
@@ -414,16 +448,17 @@ results_to_save <- list(
 saveRDS(results_to_save, 
         file.path(reanalysis_data_dir, "outcome_analysis_main_effects_results.rds"))
 
-message("Results saved to: ", 
-        file.path(reanalysis_data_dir, "outcome_analysis_main_effects_results.rds"))
+save_location <- file.path(reanalysis_data_dir, "outcome_analysis_main_effects_results.rds")
 ```
+
+**Results saved to:** `r save_location`
 
 ## Summary
 
 The main effects model shows:
 
 - **Primary finding**: Lapsing from care has a significant effect on vision impairment/blindness (OR = `r round(lapse_effect$OR, 2)`, p `r ifelse(lapse_effect$p.value < 0.001, "< 0.001", paste("=", round(lapse_effect$p.value, 3)))`)
-- **Effect size**: The average marginal effect indicates that lapsing increases the probability of VI/blindness by approximately `r round(mean(ame_combined$ame) * 100, 1)` percentage points
+- **Effect size**: The average marginal effect indicates that lapsing increases the probability of VI/blindness by `r round(mean(ame_combined$ame), 3)`
 - **Consistency**: The effect is present across all levels of DR severity and treatment status
 - **Key insight**: Even patients with no DR and no treatment show increased risk when lapsing from care
 

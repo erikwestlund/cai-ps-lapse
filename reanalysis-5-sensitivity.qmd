@@ -22,6 +22,28 @@ library(EValue)
 library(ggplot2)
 library(gridExtra)
 
+# Check for required files
+required_files <- c(
+  "outcome_analysis_main_effects_results.rds",
+  "imputed_datasets.rds",
+  "twang_weights.rds"
+)
+
+missing_files <- c()
+for (file in required_files) {
+  if (!file.exists(file.path(reanalysis_data_dir, file))) {
+    missing_files <- c(missing_files, file)
+  }
+}
+
+if (length(missing_files) > 0) {
+  stop(paste("Required files not found. Please run previous steps first:\n",
+             "- Step 2 (Multiple Imputation) creates: imputed_datasets.rds\n",
+             "- Step 3 (Propensity Scores) creates: twang_weights.rds\n",
+             "- Step 4 (Outcome Analysis) creates: outcome_analysis_main_effects_results.rds\n",
+             "Missing files:", paste(missing_files, collapse = ", ")))
+}
+
 # Load main effects results
 main_results <- readRDS(file.path(reanalysis_data_dir, "outcome_analysis_main_effects_results.rds"))
 

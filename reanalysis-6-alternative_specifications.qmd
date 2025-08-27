@@ -27,6 +27,26 @@ library(survey)
 library(ggplot2)
 library(gridExtra)
 
+# Check for required files
+required_files <- c(
+  "imputed_datasets.rds",
+  "variable_lists.rds"
+)
+
+missing_files <- c()
+for (file in required_files) {
+  if (!file.exists(file.path(reanalysis_data_dir, file))) {
+    missing_files <- c(missing_files, file)
+  }
+}
+
+if (length(missing_files) > 0) {
+  stop(paste("Required files not found. Please run previous steps first:\n",
+             "- Step 1 (Data Preparation) creates: variable_lists.rds\n",
+             "- Step 2 (Multiple Imputation) creates: imputed_datasets.rds\n",
+             "Missing files:", paste(missing_files, collapse = ", ")))
+}
+
 # Load imputed datasets
 imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
 n_imputations <- length(imputed_datasets)
