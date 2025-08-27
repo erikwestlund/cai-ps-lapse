@@ -247,6 +247,16 @@ kable(main_effect_summary,
 ### Pooling Diagnostics
 
 ```{r pooling-diagnostics}
+# Check if fmi column exists, otherwise calculate it
+if ("fmi" %in% names(lapse_effect)) {
+  fmi_value <- lapse_effect$fmi
+} else if ("lambda" %in% names(lapse_effect)) {
+  fmi_value <- lapse_effect$lambda
+} else {
+  # If no FMI available, set to NA
+  fmi_value <- NA
+}
+
 # Create diagnostics table
 pool_diag <- data.frame(
   Metric = c("Number of imputations", 
@@ -256,9 +266,9 @@ pool_diag <- data.frame(
              "Relative efficiency"),
   Value = c(n_imputations,
             nrow(pooled_results),
-            round(mean(pooled_results$df), 1),
-            round(lapse_effect$fmi, 3),
-            round(1 / (1 + lapse_effect$fmi/n_imputations), 4))
+            ifelse("df" %in% names(pooled_results), round(mean(pooled_results$df, na.rm = TRUE), 1), NA),
+            ifelse(!is.na(fmi_value), round(fmi_value, 3), "Not available"),
+            ifelse(!is.na(fmi_value), round(1 / (1 + fmi_value/n_imputations), 4), "Not available"))
 )
 
 kable(pool_diag, caption = "Pooling diagnostics for main effect model")
