@@ -377,6 +377,9 @@ convergence_plot <- ggplot(imputation_estimates, aes(x = imputation)) +
     plot.caption = element_text(size = 9, hjust = 0.5)
   ) +
   
+  # Make x-axis show only integers
+  scale_x_continuous(breaks = scales::pretty_breaks(n = min(10, n_imputations))) +
+  
   # Set reasonable y-axis limits
   coord_cartesian(ylim = c(
     min(imputation_estimates$OR) * 0.95,
