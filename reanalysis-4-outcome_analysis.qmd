@@ -439,56 +439,74 @@ ame_text <- pooled_ame$Interpretation
 ## Predicted Probabilities
 
 ```{r predicted-probs}
-# Use emmeans for predicted probabilities - it handles survey models properly
+# Use emmeans for predicted probabilities
 # We'll use the first imputed model for illustration
+
+# Get the data from the first imputation
+imp_data <- imputed_datasets[[1]]
+imp_data$weights <- twang_weights[[1]]
 
 # Set emmeans options to handle larger reference grids
 emm_options(rg.limit = 50000)
 
 # Get estimated marginal means for the main effect of lapse
-emm_results <- emmeans(fitted_models[[1]], 
-                      ~ ever_lapse_binary,
-                      type = "response",  # Get probabilities not log-odds
-                      weights = "proportional")  # Use observed proportions
+# Provide the data explicitly for survey models
+emm_results <- tryCatch({
+  emmeans(fitted_models[[1]], 
+          ~ ever_lapse_binary,
+          data = imp_data,  # Explicitly provide data
+          type = "response",  # Get probabilities not log-odds
+          weights = "proportional")  # Use observed proportions
+}, error = function(e) {
+  # If emmeans fails, return NULL and explain
+  warning("Could not calculate emmeans: ", e$message)
+  NULL
+})
 
-# Display the main effect predictions
-pred_df <- as.data.frame(emm_results)
-
-# Clean up column names
-if ("prob" %in% names(pred_df)) {
-  pred_df$Predicted_Prob <- round(pred_df$prob, 3)
-} else if ("response" %in% names(pred_df)) {
-  pred_df$Predicted_Prob <- round(pred_df$response, 3)
-} else if ("emmean" %in% names(pred_df)) {
-  # If we're on the link scale, transform to probability
-  pred_df$Predicted_Prob <- round(plogis(pred_df$emmean), 3)
+# Display results if emmeans worked
+if (!is.null(emm_results)) {
+  pred_df <- as.data.frame(emm_results)
+  
+  # Clean up column names
+  if ("prob" %in% names(pred_df)) {
+    pred_df$Predicted_Prob <- round(pred_df$prob, 3)
+  } else if ("response" %in% names(pred_df)) {
+    pred_df$Predicted_Prob <- round(pred_df$response, 3)
+  } else if ("emmean" %in% names(pred_df)) {
+    # If we're on the link scale, transform to probability
+    pred_df$Predicted_Prob <- round(plogis(pred_df$emmean), 3)
+  }
+  
+  # Create lapse labels
+  pred_df$Lapse_Status <- ifelse(pred_df$ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
+  
+  # Display predictions
+  kable(pred_df |> select(Lapse_Status, Predicted_Prob, SE, lower.CL, upper.CL), 
+        caption = "Predicted probability of VI/blindness by lapse status (marginalized over all covariates)",
+        col.names = c("Lapse Status", "Predicted Probability", "SE", "Lower CI", "Upper CI"),
+        digits = 3)
+  
+  # Calculate and display the contrast (risk difference)
+  contrasts_lapse <- pairs(emm_results)
+  contrasts_df <- as.data.frame(contrasts_lapse)
+  
+  kable(contrasts_df |> 
+        mutate(
+          Contrast = "Lapsed - Not Lapsed",
+          Risk_Difference = round(estimate, 3),
+          SE = round(SE, 4),
+          CI_Lower = round(lower.CL, 3),
+          CI_Upper = round(upper.CL, 3),
+          p.value = format.pval(p.value, digits = 4, eps = 0.0001)
+        ) |>
+        select(Contrast, Risk_Difference, SE, CI_Lower, CI_Upper, p.value),
+        caption = "Main effect: Risk difference with proper variance estimation",
+        col.names = c("Contrast", "Risk Difference", "SE", "Lower CI", "Upper CI", "P-value"))
+} else {
+  # If emmeans failed, display message
+  print("Note: Predicted probabilities could not be calculated using emmeans.")
+  print("The main analysis results (pooled coefficients and AMEs) above remain valid.")
 }
-
-# Create lapse labels
-pred_df$Lapse_Status <- ifelse(pred_df$ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
-
-# Display predictions
-kable(pred_df |> select(Lapse_Status, Predicted_Prob, SE, lower.CL, upper.CL), 
-      caption = "Predicted probability of VI/blindness by lapse status (marginalized over all covariates)",
-      col.names = c("Lapse Status", "Predicted Probability", "SE", "Lower CI", "Upper CI"),
-      digits = 3)
-
-# Calculate and display the contrast (risk difference)
-contrasts_lapse <- pairs(emm_results)
-contrasts_df <- as.data.frame(contrasts_lapse)
-
-kable(contrasts_df |> 
-      mutate(
-        Contrast = "Lapsed - Not Lapsed",
-        Risk_Difference = round(estimate, 3),
-        SE = round(SE, 4),
-        CI_Lower = round(lower.CL, 3),
-        CI_Upper = round(upper.CL, 3),
-        p.value = format.pval(p.value, digits = 4, eps = 0.0001)
-      ) |>
-      select(Contrast, Risk_Difference, SE, CI_Lower, CI_Upper, p.value),
-      caption = "Main effect: Risk difference with proper variance estimation",
-      col.names = c("Contrast", "Risk Difference", "SE", "Lower CI", "Upper CI", "P-value"))
 ```
 
 ## Save Results
