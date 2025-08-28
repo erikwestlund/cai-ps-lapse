@@ -51,8 +51,16 @@ if (length(missing_files) > 0) {
 imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
 twang_weights <- readRDS(file.path(reanalysis_data_dir, "twang_weights.rds"))
 
-# Get number of imputations from saved data
-n_imputations <- length(imputed_datasets)
+# Determine number of imputations to use based on analysis mode
+n_imputations_available <- length(imputed_datasets)
+if (analysis_mode == "test") {
+  n_imputations <- min(2, n_imputations_available)  # Use only 2 for testing
+  # Subset to first 2 imputations for testing
+  imputed_datasets <- imputed_datasets[1:n_imputations]
+  twang_weights <- twang_weights[1:n_imputations]
+} else {
+  n_imputations <- n_imputations_available  # Use all available
+}
 
 # Load variable lists
 variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
@@ -60,9 +68,8 @@ variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 
 **Analysis Parameters:**
 - Mode: `r analysis_mode`
-- Number of imputations: `r n_imputations`
+- Number of imputations: `r n_imputations` `r if(analysis_mode == "test") paste0("(", n_imputations_available, " available, using first ", n_imputations, " for testing)") else ""`
 - Estimand: ATT (Average Treatment Effect in the Treated)
-- Model: Main effects only (no interactions)
 
 ## Data Overview
 
@@ -84,7 +91,7 @@ prop_vi <- mean(first_imp$outcome_va_vi_binary == 1) * 100
 
 summary_df <- data.frame(
   Measure = c("Total patients", "Lapsed", "Not lapsed", 
-              "VI/Blind outcomes", "VI/Blind proportion"),
+              "VI outcomes", "VI proportion"),
   Value = c(n_total, n_lapsed, n_control, n_vi, paste0(round(prop_vi, 1), "%"))
 )
 
@@ -104,17 +111,6 @@ dr_df <- data.frame(
 kable(dr_df, align = c('l', 'r', 'r'))
 ```
 
-**Treatment Status:**
-```{r treatment-dist}
-treatment_table <- table(first_imp$any_treatment)
-treatment_df <- data.frame(
-  Treatment = c("No Treatment", "Treatment"),
-  Count = as.numeric(treatment_table),
-  Percentage = paste0(round(100 * as.numeric(treatment_table) / sum(treatment_table), 1), "%")
-)
-kable(treatment_df, align = c('l', 'r', 'r'))
-```
-
 **Lapse Status:**
 ```{r lapse-dist}
 lapse_table <- table(first_imp$ever_lapse_binary)
@@ -129,26 +125,37 @@ kable(lapse_df, align = c('l', 'r', 'r'))
 ## Define Model Formula (Main Effects Only)
 
 ```{r define-formula}
-# Base covariates (same as interaction model)
-base_covariates <- c(
-  "baseline_VA_logMAR",
-  "gender_cat",
-  "race_ethnic_cat", 
-  "insurance_cat",
-  "age_cat",
-  "CCI",
-  "DCSI",
-  "glaucoma_bef_hitplus_cat",
-  "otherretina_bef_hitplus_cat",
-  "catsurg_before_hitplus_cat"
-)
+# Load the standard formulas from functions.R
+source("functions.R")
 
-# Main effects formula - NO INTERACTIONS
-# Lapse is the exposure, DR severity and treatment are covariates
-main_effects_formula <- as.formula(paste(
-  "outcome_va_vi_binary ~ ever_lapse_binary + dr_severity + any_treatment +",
-  paste(base_covariates, collapse = " + ")
-))
+# Get the standard analysis formulas used in the original analysis
+standard_formulas <- get_analysis_formulas()
+
+# For reference, the original full formula is:
+# standard_formulas$full
+
+# For the reanalysis, we extend the full formula by adding:
+# - dr_severity: diabetic retinopathy severity (No_DR, NPDR, PDR)
+# - any_treatment: whether patient received any DR treatment
+# These are new covariates not in the original analysis
+main_effects_formula <- as.formula("outcome_va_vi_binary ~ 
+  ever_lapse_binary + 
+  dr_severity +
+  any_treatment +
+  baseline_VA_logMAR +
+  gender_cat +
+  race_ethnic_cat +
+  insurance_cat +
+  age_cat +
+  CCI +
+  DCSI +
+  other_inject +
+  anti_VEGF +
+  focal_laser_flag +
+  PRP_flag +
+  glaucoma_bef_hitplus_cat +
+  otherretina_bef_hitplus_cat +
+  catsurg_before_hitplus_cat")
 ```
 
 ### Model Specification
@@ -296,14 +303,11 @@ if ("fmi" %in% names(lapse_effect)) {
 pool_diag <- data.frame(
   Metric = c("Number of imputations", 
              "Number of parameters",
-             "Average degrees of freedom",
-             "Fraction of missing information (FMI)",
-             "Relative efficiency"),
+             "Average degrees of freedom"),
   Value = c(n_imputations,
             nrow(pooled_results),
-            ifelse("df" %in% names(pooled_results), round(mean(pooled_results$df, na.rm = TRUE), 1), NA),
-            ifelse(!is.na(fmi_value), round(fmi_value, 3), "Not available"),
-            ifelse(!is.na(fmi_value), round(1 / (1 + fmi_value/n_imputations), 4), "Not available"))
+            ifelse("df" %in% names(pooled_results),
+             round(mean(pooled_results$df, na.rm = TRUE), 1), NA))
 )
 
 kable(pool_diag, caption = "Pooling diagnostics for main effect model")
