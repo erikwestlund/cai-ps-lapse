@@ -123,7 +123,7 @@ lapse_df <- data.frame(
 kable(lapse_df, align = c('l', 'r', 'r'))
 ```
 
-## Define Model Formula (Main Effects Only)
+## Define Model Formula
 
 ```{r define-formula}
 # Get the enhanced formulas for reanalysis from functions.R
@@ -292,6 +292,135 @@ pool_diag <- data.frame(
 )
 
 kable(pool_diag, caption = "Pooling diagnostics for main effect model")
+
+# Extract lapse coefficient from each imputation
+imputation_estimates <- data.frame(
+  imputation = 1:n_imputations,
+  log_odds = numeric(n_imputations),
+  OR = numeric(n_imputations),
+  stringsAsFactors = FALSE
+)
+
+# Get the lapse coefficient from each model
+for (i in 1:n_imputations) {
+  # Extract from model summaries
+  lapse_row <- model_summaries[[i]][model_summaries[[i]]$term == "ever_lapse_binary", ]
+  
+  if (nrow(lapse_row) > 0) {
+    imputation_estimates$log_odds[i] <- lapse_row$estimate
+    imputation_estimates$OR[i] <- exp(lapse_row$estimate)
+  }
+}
+
+# Calculate running average
+imputation_estimates$running_avg_OR <- cumsum(imputation_estimates$OR) / seq_along(imputation_estimates$OR)
+
+# Display the convergence table (first 10 and last 10 if more than 20)
+if (n_imputations > 20) {
+  convergence_display <- rbind(
+    head(imputation_estimates, 10),
+    data.frame(imputation = "...", log_odds = "...", OR = "...", running_avg_OR = "..."),
+    tail(imputation_estimates, 10)
+  )
+} else {
+  convergence_display <- imputation_estimates
+}
+
+# Format for display
+convergence_display_formatted <- convergence_display
+if (is.numeric(convergence_display$OR)) {
+  convergence_display_formatted$OR <- round(convergence_display$OR, 4)
+  convergence_display_formatted$running_avg_OR <- round(convergence_display$running_avg_OR, 4)
+  convergence_display_formatted$log_odds <- round(convergence_display$log_odds, 4)
+}
+
+kable(convergence_display_formatted,
+      caption = "Lapse effect estimates by imputation with running average",
+      col.names = c("Imputation", "Log Odds", "OR", "Running Average OR"))
+```
+
+### Pooling Convergence Visualization
+
+```{r convergence-plot}
+#| fig-height: 6
+#| fig-width: 10
+
+library(ggplot2)
+
+# Create the convergence plot
+convergence_plot <- ggplot(imputation_estimates, aes(x = imputation)) +
+  # Individual OR estimates as points
+  geom_point(aes(y = OR), color = "#2E86AB", size = 2, alpha = 0.6) +
+  
+  # Running average as a line
+  geom_line(aes(y = running_avg_OR), color = "#D62728", size = 1.2) +
+  
+  # Add a horizontal line at the final pooled estimate
+  geom_hline(yintercept = tail(imputation_estimates$running_avg_OR, 1), 
+             linetype = "dashed", color = "#D62728", alpha = 0.5) +
+  
+  # Labels and theme
+  labs(
+    title = "Convergence of Pooled Estimate Across Imputations",
+    subtitle = "Blue points = individual imputation OR, Red line = running average",
+    x = "Imputation Number",
+    y = "Odds Ratio",
+    caption = paste0("Final pooled OR: ", round(tail(imputation_estimates$running_avg_OR, 1), 3))
+  ) +
+  
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 11),
+    plot.caption = element_text(size = 9, hjust = 0.5)
+  ) +
+  
+  # Set reasonable y-axis limits
+  coord_cartesian(ylim = c(
+    min(imputation_estimates$OR) * 0.95,
+    max(imputation_estimates$OR) * 1.05
+  ))
+
+# Add annotation showing stabilization
+if (n_imputations >= 10) {
+  # Calculate when estimate stabilized (when running avg changes < 1%)
+  running_changes <- abs(diff(imputation_estimates$running_avg_OR) / 
+                         imputation_estimates$running_avg_OR[-1])
+  stabilized_at <- which(running_changes < 0.01)[1]
+  
+  if (!is.na(stabilized_at) && stabilized_at < n_imputations - 5) {
+    convergence_plot <- convergence_plot +
+      geom_vline(xintercept = stabilized_at, linetype = "dotted", alpha = 0.5) +
+      annotate("text", x = stabilized_at, y = max(imputation_estimates$OR) * 0.98,
+               label = paste0("Stabilized (~", stabilized_at, ")"),
+               hjust = -0.1, size = 3.5)
+  }
+}
+
+print(convergence_plot)
+
+# Calculate and display convergence statistics
+convergence_stats <- data.frame(
+  Metric = c(
+    "Mean OR across imputations",
+    "SD of OR across imputations", 
+    "CV of OR (%)",
+    "Range of OR",
+    "Final running average"
+  ),
+  Value = c(
+    round(mean(imputation_estimates$OR), 4),
+    round(sd(imputation_estimates$OR), 4),
+    round(100 * sd(imputation_estimates$OR) / mean(imputation_estimates$OR), 2),
+    paste0("[", round(min(imputation_estimates$OR), 4), ", ", 
+           round(max(imputation_estimates$OR), 4), "]"),
+    round(tail(imputation_estimates$running_avg_OR, 1), 4)
+  )
+)
+
+kable(convergence_stats, caption = "Convergence statistics for lapse effect")
 ```
 
 ## Full Model Results
