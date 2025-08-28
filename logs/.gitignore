@@ -1,0 +1,6 @@
+# Ignore all log files
+*.log
+*.txt
+
+# But keep this file so the directory structure is preserved
+!.gitignore

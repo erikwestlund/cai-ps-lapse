@@ -1,0 +1,172 @@
+---
+title: "Reanalysis Step 3: Propensity Score Estimation (With Caching)"
+subtitle: "Estimating propensity scores using twang for multiple imputations"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")  # Load formula definitions and helper functions
+setup_analysis(seed = 2025)
+
+library(twang)
+library(cobalt)
+library(ggplot2)
+library(gridExtra)
+
+# ANALYSIS MODE
+analysis_mode <- "final"  # "test" or "final"
+
+# CACHING CONFIGURATION
+use_cache <- TRUE  # Set to FALSE to force re-computation
+cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
+if (!dir.exists(cache_dir)) {
+  dir.create(cache_dir, recursive = TRUE)
+}
+```
+
+## Load Data
+
+```{r load-data}
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_available <- length(imputed_datasets)
+
+# Determine how many imputations to process
+if (analysis_mode == "test") {
+  n_imputations <- min(2, n_available)
+} else {
+  n_imputations <- n_available
+}
+
+variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
+```
+
+## Define Propensity Score Formula
+
+```{r ps-formula}
+ps_formula_original <- get_matching_formula()
+ps_formula <- ps_formula_original
+print(ps_formula)
+```
+
+## Run Twang Models with Caching
+
+```{r fit-twang}
+# Model parameters
+n_trees <- ifelse(analysis_mode == "test", 1000, 3000)
+stop_methods <- c("es.mean", "ks.max")
+
+# Initialize results storage
+twang_results <- list()
+balance_summaries <- list()
+
+# Process each imputation with caching
+for (i in 1:n_imputations) {
+  cat(paste0("\n--- Processing Imputation ", i, "/", n_imputations, " ---\n"))
+  
+  # Check for cached result
+  cache_file <- file.path(cache_dir, paste0("twang_imp_", i, ".rds"))
+  
+  if (use_cache && file.exists(cache_file)) {
+    cat("  Loading from cache...\n")
+    twang_results[[i]] <- readRDS(cache_file)
+  } else {
+    cat("  Fitting twang model...\n")
+    
+    # Get imputed dataset
+    imp_data <- imputed_datasets[[i]]
+    
+    # Fit twang model
+    twang_model <- ps(
+      formula = ps_formula,
+      data = imp_data,
+      n.trees = n_trees,
+      interaction.depth = 3,
+      shrinkage = 0.01,
+      estimand = "ATT",
+      stop.method = stop_methods,
+      n.minobsinnode = 10,
+      verbose = FALSE
+    )
+    
+    # Extract weights
+    weights <- get.weights(twang_model, stop.method = "es.mean")
+    
+    # Store results
+    result <- list(
+      model = twang_model,
+      weights = weights,
+      n_trees_used = twang_model$desc$es.mean$n.trees
+    )
+    
+    twang_results[[i]] <- result
+    
+    # Save to cache
+    saveRDS(result, cache_file)
+    cat(paste0("  Saved to cache: ", cache_file, "\n"))
+  }
+  
+  # Calculate balance (always, even for cached results)
+  imp_data <- imputed_datasets[[i]]
+  imp_data$weights <- twang_results[[i]]$weights
+  
+  balance_obj <- bal.tab(
+    ps_formula,
+    data = imp_data,
+    weights = imp_data$weights,
+    estimand = "ATT",
+    s.d.denom = "treated",
+    stats = c("m", "v"),
+    thresholds = c(m = 0.1, v = 2)
+  )
+  
+  balance_summaries[[i]] <- balance_obj
+  
+  cat(paste0("  Trees used: ", twang_results[[i]]$n_trees_used, "\n"))
+  cat(paste0("  Max SMD: ", round(max(abs(balance_obj$Balance$Diff.Adj), na.rm = TRUE), 3), "\n"))
+}
+
+cat("\n✓ All imputations processed\n")
+```
+
+## Save Final Results
+
+```{r save-results}
+# Extract weights for easy access
+twang_weights <- list()
+for (i in 1:n_imputations) {
+  twang_weights[[i]] <- twang_results[[i]]$weights
+}
+
+# Create output object
+ps_output <- list(
+  twang_results = twang_results,
+  weight_summary = balance_summaries,
+  formula_used = ps_formula,
+  n_imputations = n_imputations,
+  method = "twang_gbm",
+  n_trees = n_trees,
+  analysis_mode = analysis_mode
+)
+
+# Save main outputs
+saveRDS(ps_output, file.path(reanalysis_data_dir, "ps_results_twang.rds"))
+saveRDS(twang_weights, file.path(reanalysis_data_dir, "twang_weights.rds"))
+
+cat("\nResults saved to:\n")
+cat("  -", file.path(reanalysis_data_dir, "ps_results_twang.rds"), "\n")
+cat("  -", file.path(reanalysis_data_dir, "twang_weights.rds"), "\n")
+```
+
+## Summary
+
+```{r summary}
+cat(paste0("\nSuccessfully processed ", n_imputations, " imputations\n"))
+cat(paste0("Cache directory: ", cache_dir, "\n"))
+cat("\nTo re-run without cache, set use_cache <- FALSE\n")
+```

@@ -11,6 +11,7 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
+source("functions.R")  # Load logging functions and other utilities
 setup_analysis(seed = 2025)
 
 library(twang)
@@ -20,6 +21,13 @@ library(knitr)
 
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "final"  # Should match imputation mode
+
+# CACHING CONFIGURATION
+use_cache <- TRUE  # Set to FALSE to force re-computation
+cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
+if (!dir.exists(cache_dir)) {
+  dir.create(cache_dir, recursive = TRUE)
+}
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
@@ -72,10 +80,6 @@ variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 # Use original formula from get_matching_formula() 
 # to maintain consistency with original analysis
 
-# Load functions with formula definitions
-source("functions.R")
-
-# Get the ORIGINAL formula (does NOT include dr_severity)
 ps_formula_original <- get_matching_formula()
 
 ```
@@ -102,6 +106,13 @@ Following the approach in twang-analysis.Rmd, we'll use GBM via twang package to
 - **stop.method:** es.mean (effect size only)
 
 ```{r ps-models}
+# Initialize logging
+log_file <- init_log("propensity_scores")
+log_message(paste0("Analysis mode: ", analysis_mode))
+log_message(paste0("Number of imputations to process: ", n_imputations))
+log_message(paste0("Cache directory: ", cache_dir))
+log_message(paste0("Use cache: ", use_cache))
+
 # Initialize storage for PS results
 twang_results <- list()
 
@@ -114,35 +125,58 @@ progress_df <- data.frame(
 )
 
 for (i in 1:n_imputations) {
-  # Run twang ps model - following analysis.Rmd approach
-  twang_model <- ps(
-    formula = ps_formula,
-    data = data.frame(imputed_datasets[[i]]),  # Convert to data.frame as in analysis.Rmd
-    n.trees = n_trees,
-    interaction.depth = 3,
-    shrinkage = 0.01,
-    estimand = "ATT",
-    stop.method = c("es.mean"),  # Using es.mean only for speed
-    verbose = FALSE
-  )
+  # Check for cached result
+  cache_file <- file.path(cache_dir, paste0("twang_imp_", i, ".rds"))
   
-  # Extract weights for ATT using es.mean
-  weights <- get.weights(twang_model, stop.method = "es.mean")
+  if (use_cache && file.exists(cache_file)) {
+    log_message(paste0("Imputation ", i, ": Loading from cache"))
+    cached_result <- readRDS(cache_file)
+    twang_results[[i]] <- cached_result
+    weights <- cached_result$weights
+  } else {
+    log_message(paste0("Imputation ", i, ": Fitting twang model"))
+    imp_start <- Sys.time()
+    
+    # Run twang ps model - following analysis.Rmd approach
+    twang_model <- ps(
+      formula = ps_formula,
+      data = data.frame(imputed_datasets[[i]]),  # Convert to data.frame as in analysis.Rmd
+      n.trees = n_trees,
+      interaction.depth = 3,
+      shrinkage = 0.01,
+      estimand = "ATT",
+      stop.method = c("es.mean"),  # Using es.mean only for speed
+      verbose = FALSE
+    )
+    
+    # Extract weights for ATT using es.mean
+    weights <- get.weights(twang_model, stop.method = "es.mean")
+    
+    # Store results
+    result <- list(
+      model = twang_model,
+      weights = weights,
+      n_trees_used = twang_model$desc$es.mean$n.trees
+    )
+    twang_results[[i]] <- result
+    
+    # Save to cache
+    saveRDS(result, cache_file)
+    
+    imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
+    log_message(paste0("Imputation ", i, ": Completed in ", imp_time, " minutes, saved to cache"))
+  }
   
-  # Store results
-  twang_results[[i]] <- list(
-    model = twang_model,
-    weights = weights,
-    n_trees_used = twang_model$desc$es.mean$n.trees
-  )
-  
-  # Track progress
+  # Track progress (works for both cached and newly computed)
   progress_df <- rbind(progress_df, data.frame(
     Imputation = i,
-    Trees_Used = twang_model$desc$es.mean$n.trees,
+    Trees_Used = twang_results[[i]]$n_trees_used,
     Weight_Min = round(min(weights), 3),
     Weight_Max = round(max(weights), 3)
   ))
+  
+  # Log progress with time estimates
+  log_progress(i, n_imputations, "Imputation")
 }
 
 # Display progress summary
@@ -408,7 +442,7 @@ kable(weight_dist_summary,
 # Extract weights from all twang models for easy access in later steps
 twang_weights <- list()
 for (i in 1:n_imputations) {
-  twang_weights[[i]] <- get.weights(twang_results[[i]], stop.method = "es.mean")
+  twang_weights[[i]] <- twang_results[[i]]$weights
 }
 
 ps_output <- list(
@@ -429,6 +463,30 @@ saveRDS(twang_weights, file.path(reanalysis_data_dir, "twang_weights.rds"))
 
 **Propensity score results saved to:** `r file.path(reanalysis_data_dir, "ps_results_twang.rds")`
 **Weights saved to:** `r file.path(reanalysis_data_dir, "twang_weights.rds")`
+**Cache directory:** `r cache_dir`
+
+```{r cache-summary}
+# Check cache status
+cache_files <- list.files(cache_dir, pattern = "twang_imp_.*\\.rds", full.names = FALSE)
+n_cached <- length(cache_files)
+
+cache_status_msg <- paste0("Cache status: ", n_cached, " of ", n_imputations, " imputations cached")
+log_message(cache_status_msg)
+
+if (n_cached > 0) {
+  log_message("To force re-computation, set use_cache <- FALSE in the setup chunk")
+}
+
+# Finalize logging
+final_log <- finalize_log(success = TRUE)
+```
+
+**Log file location:** `r final_log`
+
+To monitor the log during execution:
+```bash
+tail -f `r final_log`
+```
 
 ## Summary
 

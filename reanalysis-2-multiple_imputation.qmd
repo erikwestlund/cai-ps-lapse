@@ -413,6 +413,16 @@ time_estimate <- if(analysis_mode == "test") "a few minutes" else "15-30 minutes
 - Estimated time: `r time_estimate`
 
 ```{r mice-run}
+# Initialize logging
+log_file <- init_log("multiple_imputation")
+log_message(paste0("Analysis mode: ", analysis_mode))
+log_message(paste0("Number of imputations: ", n_imputations))
+log_message(paste0("Number of iterations per imputation: ", n_iterations))
+log_message(paste0("Number of observations: ", nrow(df_mice)))
+log_message(paste0("Variables with missing data: ", sum(colSums(is.na(df_mice)) > 0)))
+
+log_message("Starting MICE imputation process...")
+imp_start <- Sys.time()
 
 mice_results <- mice(
   df_mice,
@@ -424,6 +434,9 @@ mice_results <- mice(
   seed = 2025,
   printFlag = TRUE
 )
+
+imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
+log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
 
 # Check convergence
 plot(mice_results)
@@ -690,4 +703,13 @@ print(imputed_vars)
 - **Outcome VA:** Final 2-year outcome (missing for 'excluded' cohort)
 - **Temporal order enforced:** baseline → intermediate → outcome
 - **No reverse-time prediction allowed**
+
+```{r finalize-log}
+# Finalize logging
+log_message("Multiple imputation analysis completed successfully")
+log_message(paste0("Total imputed datasets created: ", n_imputations))
+final_log <- finalize_log(success = TRUE)
+```
+
+**Log file location:** `r final_log`
 

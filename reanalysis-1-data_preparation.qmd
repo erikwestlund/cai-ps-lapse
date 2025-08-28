@@ -13,12 +13,17 @@ format: html
 source("dependencies.R")
 source("functions.R")  # Load formula definitions and helper functions
 setup_analysis(seed = 2025)
+
+# Initialize logging
+log_file <- init_log("data_preparation")
 ```
 
 ## Data Loading
 
 ```{r load-data}
+log_message(paste0("Loading data from: ", reanalysis_data_file_path))
 df_combined <- readr::read_csv(reanalysis_data_file_path)
+log_message(paste0("Loaded ", nrow(df_combined), " observations"))
 ```
 
 ## Define Analysis Variables
@@ -381,5 +386,11 @@ tibble(
   )
 ) |>
   kable(caption = "Dataset summary for reanalysis with imputation")
+
+# Finalize logging
+log_message(paste0("Data preparation completed: ", nrow(df_for_imputation), " observations ready for imputation"))
+final_log <- finalize_log(success = TRUE)
 ```
+
+**Log file:** `r final_log`
 

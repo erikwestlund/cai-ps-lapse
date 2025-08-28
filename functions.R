@@ -1,3 +1,133 @@
+# ============================================================================
+# Logging System
+# ============================================================================
+
+# Initialize logging for a specific analysis step
+init_log <- function(analysis_name, log_dir = "logs") {
+  # Create log directory if it doesn't exist
+  if (!dir.exists(log_dir)) {
+    dir.create(log_dir, recursive = TRUE)
+  }
+  
+  # Create timestamped log filename
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  log_file <- file.path(log_dir, paste0(analysis_name, "_", timestamp, ".log"))
+  
+  # Initialize log with header
+  cat(paste0("================================================================================\n",
+             "Analysis: ", analysis_name, "\n",
+             "Started: ", Sys.time(), "\n",
+             "================================================================================\n\n"),
+      file = log_file, append = FALSE)
+  
+  # Store in options for easy access
+  options(current_log_file = log_file)
+  options(log_start_time = Sys.time())
+  
+  # Return log file path
+  return(log_file)
+}
+
+# Log a message with timestamp
+log_message <- function(msg, level = "INFO") {
+  log_file <- getOption("current_log_file")
+  
+  if (!is.null(log_file)) {
+    timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    formatted_msg <- paste0("[", timestamp, "] [", level, "] ", msg, "\n")
+    cat(formatted_msg, file = log_file, append = TRUE)
+    
+    # Also return the message for potential console output
+    invisible(formatted_msg)
+  } else {
+    warning("No log file initialized. Call init_log() first.")
+  }
+}
+
+# Log progress with percentage and time estimates
+log_progress <- function(current, total, item_name = "item") {
+  log_file <- getOption("current_log_file")
+  start_time <- getOption("log_start_time")
+  
+  if (!is.null(log_file) && !is.null(start_time)) {
+    pct <- round(100 * current / total, 1)
+    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+    
+    if (current > 0) {
+      rate <- elapsed / current
+      remaining <- rate * (total - current)
+      
+      msg <- sprintf("Progress: %s %d/%d (%.1f%%) - Elapsed: %.1f min - Remaining: ~%.1f min",
+                     item_name, current, total, pct, elapsed, remaining)
+    } else {
+      msg <- sprintf("Starting: %d %ss to process", total, item_name)
+    }
+    
+    log_message(msg, level = "PROGRESS")
+    
+    # Return for potential display
+    invisible(msg)
+  }
+}
+
+# Log an error with traceback
+log_error <- function(error_msg, include_traceback = TRUE) {
+  log_message(error_msg, level = "ERROR")
+  
+  if (include_traceback) {
+    tb <- traceback(max.lines = 5)
+    if (!is.null(tb)) {
+      log_message(paste("Traceback:", paste(tb, collapse = "\n  ")), level = "ERROR")
+    }
+  }
+}
+
+# Finalize log with summary
+finalize_log <- function(success = TRUE) {
+  log_file <- getOption("current_log_file")
+  start_time <- getOption("log_start_time")
+  
+  if (!is.null(log_file) && !is.null(start_time)) {
+    total_time <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+    
+    status <- ifelse(success, "COMPLETED SUCCESSFULLY", "FAILED")
+    
+    cat(paste0("\n================================================================================\n",
+               "Analysis ", status, "\n",
+               "Ended: ", Sys.time(), "\n",
+               "Total time: ", round(total_time, 2), " minutes\n",
+               "Log file: ", log_file, "\n",
+               "================================================================================\n"),
+        file = log_file, append = TRUE)
+    
+    # Clear options
+    options(current_log_file = NULL)
+    options(log_start_time = NULL)
+    
+    # Return log file path for reference
+    return(log_file)
+  }
+}
+
+# Create a latest symlink for easy access
+create_latest_log_link <- function(log_file, analysis_name, log_dir = "logs") {
+  latest_link <- file.path(log_dir, paste0(analysis_name, "_latest.log"))
+  
+  # Remove existing symlink if it exists
+  if (file.exists(latest_link)) {
+    unlink(latest_link)
+  }
+  
+  # Create new symlink (on Unix-like systems)
+  if (.Platform$OS.type == "unix") {
+    system(paste0("ln -s ", basename(log_file), " ", latest_link))
+  }
+}
+
+# ============================================================================
+# Original Functions
+# ============================================================================
+
 # Create person_dr from No_DR/NPDR/PDR columns
 create_person_dr <- function(data) {
   data |>

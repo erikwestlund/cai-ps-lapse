@@ -23,6 +23,9 @@ library(EValue)
 library(ggplot2)
 library(gridExtra)
 
+# Initialize logging
+log_file <- init_log("sensitivity_analysis")
+
 # Check for required files
 required_files <- c(
   "outcome_analysis_main_effects_results.rds",
@@ -535,3 +538,11 @@ The sensitivity analyses demonstrate:
 5. **Influential observations**: The association persists after removing potentially influential observations.
 
 Overall, the main effect of lapsing on vision impairment/blindness appears robust across multiple sensitivity analyses.
+
+```{r finalize-log}
+# Finalize logging
+log_message("Sensitivity analysis completed successfully")
+final_log <- finalize_log(success = TRUE)
+```
+
+**Log file:** `r final_log`
