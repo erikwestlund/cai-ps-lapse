@@ -325,7 +325,7 @@ get_analysis_formulas <- function() {
   )
 }
 
-# Enhanced outcome formulas for reanalysis (includes dr_severity and any_treatment)
+# Enhanced outcome formulas for reanalysis MAIN EFFECTS (includes dr_severity only)
 get_analysis_formulas_reanalysis <- function() {
   list(
     simple = as.formula("outcome_va_vi_binary ~ ever_lapse_binary"),
@@ -338,7 +338,7 @@ get_analysis_formulas_reanalysis <- function() {
     full = as.formula("outcome_va_vi_binary ~
       ever_lapse_binary + 
       dr_severity +
-      any_treatment +
+      baseline_VA_logMAR +
       gender_cat +
       race_ethnic_cat +
       insurance_cat +
@@ -351,8 +351,42 @@ get_analysis_formulas_reanalysis <- function() {
       PRP_flag +
       glaucoma_bef_hitplus_cat +
       otherretina_bef_hitplus_cat +
-      catsurg_before_hitplus_cat +
-      baseline_VA_logMAR")
+      catsurg_before_hitplus_cat")
+  )
+}
+
+# Enhanced outcome formulas for reanalysis INTERACTIONS (includes dr_severity AND any_treatment)
+get_analysis_formulas_reanalysis_interaction <- function() {
+  list(
+    simple = as.formula("outcome_va_vi_binary ~ ever_lapse_binary"),
+    middle = as.formula("outcome_va_vi_binary ~ 
+      ever_lapse_binary + 
+      gender_cat +
+      race_ethnic_cat +
+      insurance_cat +
+      age_cat"),
+    full = as.formula("outcome_va_vi_binary ~
+      ever_lapse_binary + 
+      dr_severity +
+      any_treatment +
+      ever_lapse_binary:dr_severity +
+      ever_lapse_binary:any_treatment +
+      dr_severity:any_treatment +
+      ever_lapse_binary:dr_severity:any_treatment +
+      baseline_VA_logMAR +
+      gender_cat +
+      race_ethnic_cat +
+      insurance_cat +
+      age_cat +
+      CCI +
+      DCSI +
+      other_inject +
+      anti_VEGF +
+      focal_laser_flag +
+      PRP_flag +
+      glaucoma_bef_hitplus_cat +
+      otherretina_bef_hitplus_cat +
+      catsurg_before_hitplus_cat")
   )
 }
 

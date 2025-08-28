@@ -11,6 +11,7 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
+source("functions.R")  # Load formulas and helper functions
 setup_analysis(seed = 2025)
 
 # Additional packages
@@ -248,26 +249,11 @@ kable(crosstab_wide,
 ## Define Model Formula
 
 ```{r define-formula}
-# Base covariates (same as main analysis)
-base_covariates <- c(
-  "baseline_VA_logMAR",
-  "gender_cat",
-  "race_ethnic_cat", 
-  "insurance_cat",
-  "age_cat",
-  "CCI",
-  "DCSI",
-  "glaucoma_bef_hitplus_cat",
-  "otherretina_bef_hitplus_cat",
-  "catsurg_before_hitplus_cat"
-)
+# Get the interaction formulas from functions.R
+interaction_formulas <- get_analysis_formulas_reanalysis_interaction()
 
-# Three-way interaction formula
-# This creates all main effects, two-way interactions, and the three-way interaction
-interaction_formula <- as.formula(paste(
-  "outcome_va_vi_binary ~ ever_lapse_binary * dr_severity * any_treatment +",
-  paste(base_covariates, collapse = " + ")
-))
+# Use the full formula which includes three-way interaction
+interaction_formula <- interaction_formulas$full
 
 ```
 

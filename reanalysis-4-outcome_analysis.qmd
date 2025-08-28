@@ -324,7 +324,7 @@ full_results <- pooled_results |>
   )
 
 # Display key variables
-key_vars <- c("ever_lapse_binary", "dr_severityNPDR", "dr_severityPDR", "any_treatment")
+key_vars <- c("ever_lapse_binary", "dr_severityNPDR", "dr_severityPDR")
 key_results <- full_results[full_results$Variable %in% key_vars, ]
 
 kable(key_results, 
