@@ -23,6 +23,7 @@ library(broom)
 library(marginaleffects)
 library(emmeans)
 library(tidyr)
+library(ggplot2)
 
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "test"  # Should match imputation mode
@@ -345,8 +346,6 @@ kable(convergence_display_formatted,
 #| fig-height: 6
 #| fig-width: 10
 
-library(ggplot2)
-
 # Create the convergence plot
 convergence_plot <- ggplot(imputation_estimates, aes(x = imputation)) +
   # Individual OR estimates as points
@@ -387,22 +386,6 @@ convergence_plot <- ggplot(imputation_estimates, aes(x = imputation)) +
     min(imputation_estimates$OR) * 0.95,
     max(imputation_estimates$OR) * 1.05
   ))
-
-# Add annotation showing stabilization
-if (n_imputations >= 10) {
-  # Calculate when estimate stabilized (when running avg changes < 1%)
-  running_changes <- abs(diff(imputation_estimates$running_avg_OR) / 
-                         imputation_estimates$running_avg_OR[-1])
-  stabilized_at <- which(running_changes < 0.01)[1]
-  
-  if (!is.na(stabilized_at) && stabilized_at < n_imputations - 5) {
-    convergence_plot <- convergence_plot +
-      geom_vline(xintercept = stabilized_at, linetype = "dotted", alpha = 0.5) +
-      annotate("text", x = stabilized_at, y = max(imputation_estimates$OR) * 0.98,
-               label = paste0("Stabilized (~", stabilized_at, ")"),
-               hjust = -0.1, size = 3.5)
-  }
-}
 
 print(convergence_plot)
 
