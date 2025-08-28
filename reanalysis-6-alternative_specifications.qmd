@@ -16,6 +16,7 @@ format:
 ```{r setup}
 #| include: false
 source("dependencies.R")
+source("functions.R")  # Load formula definitions and helper functions
 setup_analysis(seed = 2025)
 
 library(MatchIt)

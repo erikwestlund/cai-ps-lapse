@@ -11,6 +11,7 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
+source("functions.R")  # Load formula definitions and helper functions
 setup_analysis(seed = 2025)
 ```
 
@@ -168,24 +169,11 @@ df_analysis <- df_analysis |>
 ## Missing Data Assessment
 
 ```{r missing-assessment}
-# Variables used in propensity score model
-ps_model_vars <- c(
-  "ever_lapse_binary",
-  "baseline_VA_logMAR",
-  "gender_cat",
-  "race_ethnic_cat", 
-  "insurance_cat",
-  "age_cat",
-  "CCI",
-  "DCSI",
-  "other_inject",
-  "anti_VEGF",
-  "focal_laser_flag",
-  "PRP_flag",
-  "glaucoma_bef_hitplus_cat",  # Missing coded as 0 (no condition)
-  "otherretina_bef_hitplus_cat",  # Missing coded as 0 (no condition)
-  "catsurg_before_hitplus_cat"
-)
+# Get variable lists from functions.R
+reanalysis_vars <- get_reanalysis_variables()
+
+# Variables used in propensity score model (standard version)
+ps_model_vars <- reanalysis_vars$ps_model_vars
 
 # Variables used in outcome model
 outcome_model_vars <- c(
@@ -355,13 +343,11 @@ if (!dir.exists(reanalysis_data_dir)) {
 saveRDS(df_for_imputation, file.path(reanalysis_data_dir, "df_for_imputation.rds"))
 saveRDS(df_complete_original, file.path(reanalysis_data_dir, "df_complete_original.rds"))
 
-variable_lists <- list(
-  ps_model_vars = ps_model_vars,
-  outcome_model_vars = outcome_model_vars,
-  dr_vars = dr_vars,
-  all_analysis_vars = all_analysis_vars,
-  temporal_vars = c("cohort_id", "intermediate_VA_logMAR", "outcome_VA_logMAR", "baseline_VA_logMAR")
-)
+# Use centralized variable lists from functions.R
+variable_lists <- reanalysis_vars
+variable_lists$outcome_model_vars <- outcome_model_vars
+variable_lists$all_analysis_vars <- all_analysis_vars
+
 saveRDS(variable_lists, file.path(reanalysis_data_dir, "variable_lists.rds"))
 
 # Create a variable to show in text

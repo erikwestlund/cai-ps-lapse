@@ -14,6 +14,7 @@ format:
 ```{r setup}
 #| include: false
 source("dependencies.R")
+source("functions.R")  # Load formula definitions and helper functions
 setup_analysis(seed = 2025)
 
 library(mice)
@@ -125,37 +126,11 @@ kable(lapse_df, align = c('l', 'r', 'r'))
 ## Define Model Formula (Main Effects Only)
 
 ```{r define-formula}
-# Load the standard formulas from functions.R
-source("functions.R")
+# Get the enhanced formulas for reanalysis from functions.R
+reanalysis_formulas <- get_analysis_formulas_reanalysis()
 
-# Get the standard analysis formulas used in the original analysis
-standard_formulas <- get_analysis_formulas()
-
-# For reference, the original full formula is:
-# standard_formulas$full
-
-# For the reanalysis, we extend the full formula by adding:
-# - dr_severity: diabetic retinopathy severity (No_DR, NPDR, PDR)
-# - any_treatment: whether patient received any DR treatment
-# These are new covariates not in the original analysis
-main_effects_formula <- as.formula("outcome_va_vi_binary ~ 
-  ever_lapse_binary + 
-  dr_severity +
-  any_treatment +
-  baseline_VA_logMAR +
-  gender_cat +
-  race_ethnic_cat +
-  insurance_cat +
-  age_cat +
-  CCI +
-  DCSI +
-  other_inject +
-  anti_VEGF +
-  focal_laser_flag +
-  PRP_flag +
-  glaucoma_bef_hitplus_cat +
-  otherretina_bef_hitplus_cat +
-  catsurg_before_hitplus_cat")
+# Use the full formula for main effects analysis
+main_effects_formula <- reanalysis_formulas$full
 ```
 
 ### Model Specification
@@ -192,7 +167,13 @@ if (file.exists(models_cache_file) && !force_refit) {
   fitted_models <- list()
   model_summaries <- list()
   
+  # Initialize progress tracking
+  progress <- init_progress(n_imputations, "Fitting models to imputed datasets")
+  
   for (i in 1:n_imputations) {
+    # Update progress
+    progress <- update_progress(progress)
+    
     # Get dataset and weights
     imp_data <- imputed_datasets[[i]]
     imp_data$weights <- twang_weights[[i]]
@@ -368,7 +349,13 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
   ame_loaded_from_cache <- FALSE
   ame_list <- list()
   
+  # Initialize progress tracking
+  progress <- init_progress(n_imputations, "Calculating AMEs")
+  
   for (i in 1:n_imputations) {
+    # Update progress
+    progress <- update_progress(progress)
+    
     imp_data <- imputed_datasets[[i]]
     imp_data$weights <- twang_weights[[i]]
     

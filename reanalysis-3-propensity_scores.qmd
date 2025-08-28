@@ -72,35 +72,20 @@ variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 # Original formula from get_matching_formula()
 # Now enhanced to include DR severity
 
-# Create enhanced formula including person_dr and treatment interactions
-ps_formula_enhanced <- as.formula("ever_lapse_binary ~ 
-  baseline_VA_logMAR +
-  gender_cat +
-  race_ethnic_cat +
-  insurance_cat +
-  age_cat +
-  CCI +
-  DCSI +
-  other_inject +
-  anti_VEGF +
-  focal_laser_flag +
-  PRP_flag +
-  glaucoma_bef_hitplus_cat +
-  otherretina_bef_hitplus_cat +
-  catsurg_before_hitplus_cat +
-  person_dr
-")
+# Load functions with formula definitions
+source("functions.R")
+
+# Get the enhanced formula for reanalysis (includes dr_severity)
+ps_formula_enhanced <- get_matching_formula_reanalysis()
 
 ```
 
 **Propensity score formula:**
 ```{r print-formula}
+# Show the formula being used
 print(ps_formula_enhanced)
 
-# Alternative: Use the standard formula from functions.R
-ps_formula_standard <- get_matching_formula()
-
-# For this analysis, we'll use the enhanced formula
+# Set the formula to use for analysis
 ps_formula <- ps_formula_enhanced
 ```
 

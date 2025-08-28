@@ -258,6 +258,8 @@ create_balance_table <- function(matched_data, formula, method_name) {
 }
 
 # Define formulas used across analyses
+
+# Original matching formula (used by analysis.Rmd)
 get_matching_formula <- function() {
   as.formula("ever_lapse_binary ~ 
     baseline_VA_logMAR +
@@ -274,6 +276,26 @@ get_matching_formula <- function() {
     glaucoma_bef_hitplus_cat +
     otherretina_bef_hitplus_cat +
     catsurg_before_hitplus_cat")
+}
+
+# Enhanced matching formula for reanalysis (includes dr_severity)
+get_matching_formula_reanalysis <- function() {
+  as.formula("ever_lapse_binary ~ 
+    baseline_VA_logMAR +
+    gender_cat +
+    race_ethnic_cat +
+    insurance_cat +
+    age_cat +
+    CCI +
+    DCSI +
+    other_inject +
+    anti_VEGF +
+    focal_laser_flag +
+    PRP_flag +
+    glaucoma_bef_hitplus_cat +
+    otherretina_bef_hitplus_cat +
+    catsurg_before_hitplus_cat +
+    dr_severity")
 }
 
 get_analysis_formulas <- function() {
@@ -300,6 +322,168 @@ get_analysis_formulas <- function() {
       glaucoma_bef_hitplus_cat +
       otherretina_bef_hitplus_cat +
       catsurg_before_hitplus_cat")
+  )
+}
+
+# Enhanced outcome formulas for reanalysis (includes dr_severity and any_treatment)
+get_analysis_formulas_reanalysis <- function() {
+  list(
+    simple = as.formula("outcome_va_vi_binary ~ ever_lapse_binary"),
+    middle = as.formula("outcome_va_vi_binary ~ 
+      ever_lapse_binary + 
+      gender_cat +
+      race_ethnic_cat +
+      insurance_cat +
+      age_cat"),
+    full = as.formula("outcome_va_vi_binary ~
+      ever_lapse_binary + 
+      dr_severity +
+      any_treatment +
+      gender_cat +
+      race_ethnic_cat +
+      insurance_cat +
+      age_cat +
+      CCI +
+      DCSI +
+      other_inject +
+      anti_VEGF +
+      focal_laser_flag +
+      PRP_flag +
+      glaucoma_bef_hitplus_cat +
+      otherretina_bef_hitplus_cat +
+      catsurg_before_hitplus_cat +
+      baseline_VA_logMAR")
+  )
+}
+
+# Progress reporting for Quarto notebooks
+# Shows progress in rendered output and during interactive execution
+report_progress <- function(current, total, message = "Processing", newline = TRUE) {
+  # Create progress message
+  pct <- round(100 * current / total)
+  progress_msg <- sprintf("%s: %d of %d (%d%%)", message, current, total, pct)
+  
+  # For interactive sessions, use cat with carriage return
+  if (interactive()) {
+    if (newline || current == total) {
+      cat("\r", progress_msg, "\n", sep = "")
+    } else {
+      cat("\r", progress_msg, sep = "")
+    }
+    flush.console()
+  }
+  
+  # Return the message for inline display in rendered documents
+  # This will be visible in the rendered HTML
+  invisible(progress_msg)
+}
+
+# Initialize progress tracking
+init_progress <- function(total, message = "Starting processing") {
+  progress_state <- list(
+    total = total,
+    current = 0,
+    message = message,
+    start_time = Sys.time()
+  )
+  
+  if (interactive()) {
+    cat(message, "\n")
+  }
+  
+  return(progress_state)
+}
+
+# Update progress with timing information
+update_progress <- function(progress_state, increment = 1) {
+  progress_state$current <- progress_state$current + increment
+  
+  # Calculate elapsed and estimated time
+  elapsed <- as.numeric(difftime(Sys.time(), progress_state$start_time, units = "secs"))
+  rate <- progress_state$current / elapsed
+  remaining <- (progress_state$total - progress_state$current) / rate
+  
+  # Create detailed message
+  if (progress_state$current < progress_state$total) {
+    time_msg <- sprintf(" (ETA: %.0f seconds)", remaining)
+  } else {
+    time_msg <- sprintf(" (completed in %.1f seconds)", elapsed)
+  }
+  
+  progress_msg <- report_progress(
+    progress_state$current, 
+    progress_state$total,
+    paste0(progress_state$message, time_msg),
+    newline = (progress_state$current == progress_state$total)
+  )
+  
+  return(progress_state)
+}
+
+# Variable lists for reanalysis
+get_reanalysis_variables <- function() {
+  list(
+    # Variables used in propensity score models
+    ps_model_vars = c(
+      "ever_lapse_binary",
+      "baseline_VA_logMAR",
+      "gender_cat",
+      "race_ethnic_cat", 
+      "insurance_cat",
+      "age_cat",
+      "CCI",
+      "DCSI",
+      "other_inject",
+      "anti_VEGF",
+      "focal_laser_flag",
+      "PRP_flag",
+      "glaucoma_bef_hitplus_cat",
+      "otherretina_bef_hitplus_cat",
+      "catsurg_before_hitplus_cat"
+    ),
+    
+    # Enhanced PS variables for reanalysis
+    ps_model_vars_enhanced = c(
+      "ever_lapse_binary",
+      "baseline_VA_logMAR",
+      "gender_cat",
+      "race_ethnic_cat", 
+      "insurance_cat",
+      "age_cat",
+      "CCI",
+      "DCSI",
+      "other_inject",
+      "anti_VEGF",
+      "focal_laser_flag",
+      "PRP_flag",
+      "glaucoma_bef_hitplus_cat",
+      "otherretina_bef_hitplus_cat",
+      "catsurg_before_hitplus_cat",
+      "dr_severity"
+    ),
+    
+    # Outcome variables
+    outcome_vars = c(
+      "outcome_VA_logMAR",
+      "outcome_va_vi_binary",
+      "person_ever_lapse",
+      "cohort_id"
+    ),
+    
+    # DR severity variables
+    dr_vars = c(
+      "No_DR",
+      "NPDR",
+      "PDR"
+    ),
+    
+    # Temporal VA variables
+    temporal_vars = c(
+      "cohort_id",
+      "baseline_VA_logMAR",
+      "intermediate_VA_logMAR",
+      "outcome_VA_logMAR"
+    )
   )
 }
 

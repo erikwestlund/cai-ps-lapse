@@ -11,6 +11,7 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
+source("functions.R")  # Load formula definitions and helper functions
 seed <- 2025
 setup_analysis(seed = seed)
 
