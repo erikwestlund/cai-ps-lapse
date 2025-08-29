@@ -102,11 +102,11 @@ baseline_chars <- df_original |>
     sd_age = sd(age, na.rm = TRUE),
     pct_male = round(100 * mean(gender == "Male", na.rm = TRUE), 1),
     
-    # Clinical characteristics
-    mean_CCI = mean(CCI, na.rm = TRUE),
-    sd_CCI = sd(CCI, na.rm = TRUE),
-    mean_DCSI = mean(DCSI, na.rm = TRUE),
-    sd_DCSI = sd(DCSI, na.rm = TRUE),
+    # Clinical characteristics - check if variables exist
+    mean_CCI = if("CCI" %in% names(df_original)) mean(CCI, na.rm = TRUE) else NA_real_,
+    sd_CCI = if("CCI" %in% names(df_original)) sd(CCI, na.rm = TRUE) else NA_real_,
+    mean_DCSI = if("DCSI" %in% names(df_original)) mean(DCSI, na.rm = TRUE) else NA_real_,
+    sd_DCSI = if("DCSI" %in% names(df_original)) sd(DCSI, na.rm = TRUE) else NA_real_,
     
     # Baseline vision
     mean_baseline_VA = mean(baseline_VA_logMAR, na.rm = TRUE),
@@ -485,71 +485,116 @@ print(p_direction)
 This section examines whether baseline characteristics (like CCI) predict the magnitude of change, which might explain differences between groups.
 
 ```{r baseline-predictors}
-# Merge baseline characteristics with change scores using row_id (already added earlier)
-analysis_df <- changes_df |>
-  left_join(df_original |> select(row_id, CCI, DCSI, age), 
-            by = "row_id")
+# Check what variables are available in the original data
+available_vars <- names(df_original)
+baseline_vars <- intersect(c("row_id", "CCI", "DCSI", "age"), available_vars)
 
-# Compare baseline predictors by imputation group
-predictor_summary <- analysis_df |>
-  group_by(imputation_group) |>
-  summarise(
-    n = n(),
-    # Correlation between CCI and change
-    cor_CCI_change = cor(CCI, change_baseline_to_outcome, use = "complete.obs"),
-    # Correlation between baseline VA and change  
-    cor_baseline_change = cor(baseline_VA_logMAR, change_baseline_to_outcome, use = "complete.obs"),
-    # Mean change by CCI tercile
-    mean_change_low_CCI = mean(change_baseline_to_outcome[CCI <= quantile(CCI, 0.33, na.rm = TRUE)], na.rm = TRUE),
-    mean_change_high_CCI = mean(change_baseline_to_outcome[CCI >= quantile(CCI, 0.67, na.rm = TRUE)], na.rm = TRUE),
-    .groups = "drop"
-  )
+# Merge baseline characteristics with change scores using row_id
+if (length(baseline_vars) > 1) {
+  analysis_df <- changes_df |>
+    left_join(df_original |> select(all_of(baseline_vars)), 
+              by = "row_id")
+} else {
+  # If baseline variables aren't available, create a simpler analysis
+  analysis_df <- changes_df
+  cat("Note: CCI, DCSI, or age not found in original data. Using simplified analysis.\n")
+}
 
-kable(predictor_summary |> mutate(across(where(is.numeric), ~round(., 3))),
-      caption = "Relationship between baseline characteristics and vision change")
+# Only do correlation analysis if CCI exists
+if ("CCI" %in% names(analysis_df)) {
+  # Compare baseline predictors by imputation group
+  predictor_summary <- analysis_df |>
+    group_by(imputation_group) |>
+    summarise(
+      n = n(),
+      # Correlation between CCI and change
+      cor_CCI_change = cor(CCI, change_baseline_to_outcome, use = "complete.obs"),
+      # Correlation between baseline VA and change  
+      cor_baseline_change = cor(baseline_VA_logMAR, change_baseline_to_outcome, use = "complete.obs"),
+      # Mean change by CCI tercile
+      mean_change_low_CCI = mean(change_baseline_to_outcome[CCI <= quantile(CCI, 0.33, na.rm = TRUE)], na.rm = TRUE),
+      mean_change_high_CCI = mean(change_baseline_to_outcome[CCI >= quantile(CCI, 0.67, na.rm = TRUE)], na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  kable(predictor_summary |> mutate(across(where(is.numeric), ~round(., 3))),
+        caption = "Relationship between baseline characteristics and vision change")
+} else {
+  # Simplified summary without CCI
+  predictor_summary <- analysis_df |>
+    group_by(imputation_group) |>
+    summarise(
+      n = n(),
+      mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
+      sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
+      cor_baseline_change = cor(baseline_VA_logMAR, change_baseline_to_outcome, use = "complete.obs"),
+      .groups = "drop"
+    )
+  
+  kable(predictor_summary |> mutate(across(where(is.numeric), ~round(., 3))),
+        caption = "Vision change by imputation group (CCI not available)")
+}
 
 # Regression model to check if group differences persist after adjustment
-adj_model <- lm(change_baseline_to_outcome ~ imputation_group + CCI + DCSI + age + baseline_VA_logMAR,
-                data = analysis_df)
-
-adj_summary <- summary(adj_model)
-adj_coef <- data.frame(
-  Variable = rownames(adj_summary$coefficients),
-  Estimate = adj_summary$coefficients[,1],
-  SE = adj_summary$coefficients[,2],
-  P_Value = adj_summary$coefficients[,4]
-) |>
-  filter(grepl("imputation_group", Variable))
-
-kable(adj_coef |> mutate(across(where(is.numeric), ~round(., 4))),
-      caption = "Group differences after adjusting for baseline characteristics")
-
-# Visualization: Change by CCI tertile and group
-analysis_df <- analysis_df |>
-  mutate(
-    CCI_tertile = cut(CCI, 
-                     breaks = quantile(CCI, c(0, 0.33, 0.67, 1), na.rm = TRUE),
-                     labels = c("Low", "Medium", "High"),
-                     include.lowest = TRUE)
-  )
-
-p_cci <- ggplot(analysis_df |> filter(!is.na(CCI_tertile)), 
-                aes(x = CCI_tertile, y = change_baseline_to_outcome, fill = imputation_group)) +
-  geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
-  facet_wrap(~ imputation_group, scales = "free_x") +
-  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
-  scale_fill_manual(values = c("Observed" = "#2E86AB", 
-                              "Imputed (with intermediate)" = "#A23B72",
-                              "Imputed (no intermediate)" = "#F18F01")) +
-  labs(
-    title = "Vision Change by CCI Tertile and Imputation Group",
-    x = "CCI Tertile",
-    y = "Change in logMAR"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-print(p_cci)
+if (all(c("CCI", "DCSI", "age") %in% names(analysis_df))) {
+  adj_model <- lm(change_baseline_to_outcome ~ imputation_group + CCI + DCSI + age + baseline_VA_logMAR,
+                  data = analysis_df)
+  
+  adj_summary <- summary(adj_model)
+  adj_coef <- data.frame(
+    Variable = rownames(adj_summary$coefficients),
+    Estimate = adj_summary$coefficients[,1],
+    SE = adj_summary$coefficients[,2],
+    P_Value = adj_summary$coefficients[,4]
+  ) |>
+    filter(grepl("imputation_group", Variable))
+  
+  kable(adj_coef |> mutate(across(where(is.numeric), ~round(., 4))),
+        caption = "Group differences after adjusting for baseline characteristics")
+  
+  # Visualization: Change by CCI tertile and group
+  analysis_df <- analysis_df |>
+    mutate(
+      CCI_tertile = cut(CCI, 
+                       breaks = quantile(CCI, c(0, 0.33, 0.67, 1), na.rm = TRUE),
+                       labels = c("Low", "Medium", "High"),
+                       include.lowest = TRUE)
+    )
+  
+  p_cci <- ggplot(analysis_df |> filter(!is.na(CCI_tertile)), 
+                  aes(x = CCI_tertile, y = change_baseline_to_outcome, fill = imputation_group)) +
+    geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+    facet_wrap(~ imputation_group, scales = "free_x") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    scale_fill_manual(values = c("Observed" = "#2E86AB", 
+                                "Imputed (with intermediate)" = "#A23B72",
+                                "Imputed (no intermediate)" = "#F18F01")) +
+    labs(
+      title = "Vision Change by CCI Tertile and Imputation Group",
+      x = "CCI Tertile",
+      y = "Change in logMAR"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  print(p_cci)
+} else {
+  # Simpler model without baseline covariates
+  adj_model <- lm(change_baseline_to_outcome ~ imputation_group + baseline_VA_logMAR,
+                  data = analysis_df)
+  
+  adj_summary <- summary(adj_model)
+  adj_coef <- data.frame(
+    Variable = rownames(adj_summary$coefficients),
+    Estimate = adj_summary$coefficients[,1],
+    SE = adj_summary$coefficients[,2],
+    P_Value = adj_summary$coefficients[,4]
+  ) |>
+    filter(grepl("imputation_group", Variable))
+  
+  kable(adj_coef |> mutate(across(where(is.numeric), ~round(., 4))),
+        caption = "Group differences after adjusting for baseline VA only")
+}
 ```
 
 ## Clinical Plausibility Checks
