@@ -304,16 +304,18 @@ custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor;
 custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor; see below.
 
 # Fellow eye variables should not be imputed (they are derived from existing data)
+# NOTE: fellow_outcome_VA may show collinearity warning with outcome_VA_logMAR
+# This is expected - they have identical missingness patterns (both NA for excluded cohort)
 custom_methods["fellow_outcome_VA"] <- ""
 custom_methods["fellow_baseline_VA"] <- ""
 custom_methods["fellow_intermediate_VA"] <- ""
-custom_methods["fellow_lapsed"] <- ""
+# custom_methods["fellow_lapsed"] <- ""  # REMOVED - collinear with lapse status
 custom_methods["fellow_dr"] <- ""
 custom_methods["n_eyes"] <- ""
-custom_methods["has_fellow"] <- ""
+# custom_methods["has_fellow"] <- ""  # REMOVED - collinear with n_eyes
 custom_methods["patient_worst_baseline"] <- ""
 custom_methods["patient_best_baseline"] <- ""
-custom_methods["patient_ever_lapsed"] <- ""
+# custom_methods["patient_ever_lapsed"] <- ""  # REMOVED - collinear with ever_lapse_binary
 
 # Variables that are complete (no missing data) - set method but won't actually be imputed
 # Setting methods ensures correct measurement level is used IF they had missing data
@@ -611,6 +613,14 @@ log_message(paste0("Number of observations: ", nrow(df_mice)))
 log_message(paste0("Variables with missing data: ", sum(colSums(is.na(df_mice)) > 0)))
 
 log_message("Starting MICE imputation process...")
+
+# Expected warnings about collinearity:
+# 1. e_mrn_deidentified: Constant (patient ID) - expected, not used as predictor
+# 2. outcome_VA_logMAR & fellow_outcome_VA: Identical missingness patterns (both NA for excluded cohort)
+#    This is expected and OK - they're measuring different eyes but missing for same reason
+# 3. Variables removed to avoid true collinearity: has_fellow, patient_ever_lapsed, fellow_lapsed
+#    These were redundant with other variables in the model
+
 imp_start <- Sys.time()
 
 mice_results <- mice(
