@@ -138,7 +138,7 @@ if (!"person_dr" %in% names(df_original)) {
   df_original[["person_dr"]] <- NA_integer_
 }
 df_mice <- df_original |>
-  select(all_of(all_vars), any_of(dr_cols)) |>
+  select(any_of(all_vars), any_of(dr_cols)) |>
   mutate(
     # Create person_dr from DR columns if needed
     person_dr = case_when(
@@ -156,7 +156,20 @@ df_mice <- df_original |>
     Otherretina_bef_hitplus = ifelse(Otherretina_bef_hitplus == "Present", 1, 0),
     # Clean factor levels (remove spaces for formula compatibility)
     across(where(is.character), ~ factor(gsub("[^[:alnum:]_]", "_", .x)))
-  )
+  ) |>
+  dplyr::group_by(e_mrn_deidentified) |>
+  dplyr::mutate(
+    n_eyes = dplyr::n(),
+    eye_index = dplyr::row_number(),
+    fellow_baseline_VA = dplyr::if_else(n_eyes == 2, baseline_VA_logMAR[3 - eye_index], as.numeric(NA)),
+    fellow_intermediate_VA = dplyr::if_else(n_eyes == 2, intermediate_VA_logMAR[3 - eye_index], as.numeric(NA)),
+    fellow_outcome_VA = dplyr::if_else(n_eyes == 2, outcome_VA_logMAR[3 - eye_index], as.numeric(NA)),
+    fellow_dr = dplyr::if_else(n_eyes == 2,
+                               person_dr[3 - eye_index],
+                               factor(NA, levels = levels(person_dr), ordered = TRUE))
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::select(-eye_index)
 
 # Check missing data pattern
 log_message("Missing data summary:")
@@ -220,6 +233,14 @@ for (var in c(vars_treatment, vars_comorbidity)) {
   }
 }
 
+# Fellow-eye variables: predictors only (do not impute)
+vars_fellow <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")
+for (var in vars_fellow) {
+  if (var %in% names(methods)) {
+    methods[var] <- ""
+  }
+}
+
 log_message("Imputation methods configured")
 ```
 
@@ -277,6 +298,26 @@ pred_matrix["outcome_VA_logMAR", "intermediate_VA_logMAR"] <- 1
 pred_matrix["baseline_VA_logMAR", "outcome_VA_logMAR"] <- 0
 pred_matrix["baseline_VA_logMAR", "intermediate_VA_logMAR"] <- 0
 pred_matrix["intermediate_VA_logMAR", "outcome_VA_logMAR"] <- 0
+
+# Fellow-eye predictors
+fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr")
+for (v in fellow_vars) {
+  if (v %in% rownames(pred_matrix)) {
+    pred_matrix[v, ] <- 0
+  }
+}
+if ("fellow_baseline_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
+}
+if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
+}
+if ("fellow_outcome_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
+}
+if ("fellow_dr" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) {
+  pred_matrix["person_dr", "fellow_dr"] <- 1
+}
 
 log_message("Predictor matrix configured with temporal constraints")
 ```
