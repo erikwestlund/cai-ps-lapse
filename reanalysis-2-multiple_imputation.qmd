@@ -207,13 +207,13 @@ imputation_vars <- c(
   "fellow_baseline_VA",
   "fellow_intermediate_VA",
   "fellow_outcome_VA",
-  "fellow_lapsed",
+  # "fellow_lapsed",  # REMOVED: Collinear with ever_lapse_binary
   "fellow_dr",
   "n_eyes",
-  "has_fellow",
+  # "has_fellow",  # REMOVED: Perfectly collinear with n_eyes (has_fellow = n_eyes == 2)
   "patient_worst_baseline",
-  "patient_best_baseline",
-  "patient_ever_lapsed"
+  "patient_best_baseline"
+  # "patient_ever_lapsed"  # REMOVED: Collinear with ever_lapse_binary
 )
 
 df_mice <- df_for_imputation |>
@@ -617,9 +617,11 @@ log_message("Starting MICE imputation process...")
 # Expected warnings about collinearity:
 # 1. e_mrn_deidentified: Constant (patient ID) - expected, not used as predictor
 # 2. outcome_VA_logMAR & fellow_outcome_VA: Identical missingness patterns (both NA for excluded cohort)
-#    This is expected and OK - they're measuring different eyes but missing for same reason
-# 3. Variables removed to avoid true collinearity: has_fellow, patient_ever_lapsed, fellow_lapsed
-#    These were redundant with other variables in the model
+#    This is EXPECTED and HARMLESS - they measure different eyes but are missing for same structural reason
+#    MICE will drop fellow_outcome_VA from the imputation model for outcome_VA_logMAR to avoid
+#    singularity, but it can still be used to predict other variables. This does NOT affect results.
+# 
+# Variables removed to avoid true collinearity: has_fellow, patient_ever_lapsed, fellow_lapsed
 
 imp_start <- Sys.time()
 
