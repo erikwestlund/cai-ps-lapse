@@ -28,7 +28,7 @@ library(lme4)
 log_file <- init_log("multiple_imputation_clean")
 
 # ANALYSIS MODE
-analysis_mode <- "test"  # "test" or "final"
+analysis_mode <- "final"  # "test" or "final"
 
 if (analysis_mode == "test") {
   n_imputations <- 2
