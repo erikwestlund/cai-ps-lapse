@@ -156,7 +156,7 @@ print(main_effects_formula)
 ```{r fit-models}
 # Check if models are already cached
 models_cache_file <- file.path(reanalysis_data_dir, "fitted_models_main_effects.rds")
-force_refit <- FALSE  # Set to TRUE if you want to force re-fitting
+force_refit <- TRUE  # Set to TRUE if you want to force re-fitting
 
 if (file.exists(models_cache_file) && !force_refit) {
   # Load cached models
