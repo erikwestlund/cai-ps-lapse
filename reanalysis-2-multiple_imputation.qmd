@@ -277,6 +277,31 @@ kable(method_table)
 # Customize imputation methods as needed
 custom_methods <- mice_dry$method
 
+# Debug: Check if any methods have invalid values
+invalid_methods <- custom_methods[!custom_methods %in% c("", "pmm", "logreg", "polyreg", "polr", "norm", "norm.boot", "norm.nob", "norm.predict", "sample", "cart", "rf", "2l.norm", "2l.lmer", "2l.pan", "2lonly.mean", "2lonly.norm", "2lonly.pmm")]
+if (length(invalid_methods) > 0) {
+  log_message(paste0("WARNING: Invalid imputation methods detected: ", paste(names(invalid_methods), "=", invalid_methods, collapse=", ")))
+  # Reset any invalid methods to appropriate defaults
+  for (var in names(invalid_methods)) {
+    if (var %in% names(custom_methods)) {
+      # Set to empty string to skip imputation for now
+      custom_methods[var] <- ""
+      log_message(paste0("Reset method for ", var, " to '' (no imputation)"))
+    }
+  }
+}
+
+# Ensure methods vector has proper names
+if (is.null(names(custom_methods))) {
+  log_message("ERROR: custom_methods has no names. Setting names from df_mice columns.")
+  names(custom_methods) <- colnames(df_mice)
+}
+
+# Print diagnostic info
+log_message(paste0("Number of variables in custom_methods: ", length(custom_methods)))
+log_message(paste0("First few method assignments: ", 
+                  paste(head(names(custom_methods)), "=", head(custom_methods), collapse=", ")))
+
 # Temporal VA variables
 custom_methods["baseline_VA_logMAR"] <- "pmm"  # Impute if missing
 custom_methods["intermediate_VA_logMAR"] <- "pmm"  # IMPUTE intermediate values
@@ -622,6 +647,12 @@ log_message(paste0("Number of observations: ", nrow(df_mice)))
 log_message(paste0("Variables with missing data: ", sum(colSums(is.na(df_mice)) > 0)))
 
 log_message("Starting MICE imputation process...")
+
+# Final check on methods before running MICE
+log_message("Final method check before imputation:")
+methods_with_values <- custom_methods[custom_methods != ""]
+log_message(paste0("Variables to be imputed: ", paste(names(methods_with_values), collapse=", ")))
+log_message(paste0("Methods to be used: ", paste(unique(methods_with_values), collapse=", ")))
 
 # Expected warnings about collinearity:
 # 1. e_mrn_deidentified: Constant (patient ID) - expected, not used as predictor
