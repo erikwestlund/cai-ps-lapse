@@ -395,33 +395,42 @@ if ("fellow_outcome_VA" %in% colnames(pred_matrix)) {
   }
   
   # Don't let fellow eye variables be predicted by anything
-  pred_matrix[c("fellow_outcome_VA", "fellow_baseline_VA", "fellow_intermediate_VA", 
-                "fellow_lapsed", "fellow_dr"), ] <- 0
+  # Only set for variables that actually exist in the matrix
+  fellow_vars_in_matrix <- c("fellow_outcome_VA", "fellow_baseline_VA", "fellow_intermediate_VA", "fellow_dr")
+  fellow_vars_in_matrix <- fellow_vars_in_matrix[fellow_vars_in_matrix %in% rownames(pred_matrix)]
+  if (length(fellow_vars_in_matrix) > 0) {
+    pred_matrix[fellow_vars_in_matrix, ] <- 0
+  }
   
   # Don't let fellow eye variables be their own predictors
-  pred_matrix["fellow_outcome_VA", "fellow_outcome_VA"] <- 0
-  pred_matrix["fellow_baseline_VA", "fellow_baseline_VA"] <- 0
-  pred_matrix["fellow_intermediate_VA", "fellow_intermediate_VA"] <- 0
+  if ("fellow_outcome_VA" %in% rownames(pred_matrix)) {
+    pred_matrix["fellow_outcome_VA", "fellow_outcome_VA"] <- 0
+  }
+  if ("fellow_baseline_VA" %in% rownames(pred_matrix)) {
+    pred_matrix["fellow_baseline_VA", "fellow_baseline_VA"] <- 0
+  }
+  if ("fellow_intermediate_VA" %in% rownames(pred_matrix)) {
+    pred_matrix["fellow_intermediate_VA", "fellow_intermediate_VA"] <- 0
+  }
 }
 
 # Patient-level variables can predict eye-level outcomes (but not strongly)
 if ("patient_worst_baseline" %in% colnames(pred_matrix)) {
   pred_matrix[, "patient_worst_baseline"] <- 1
   pred_matrix[, "patient_best_baseline"] <- 1
-  pred_matrix[, "patient_ever_lapsed"] <- 1
+  # pred_matrix[, "patient_ever_lapsed"] <- 1  # REMOVED - variable not in imputation
   
   # But don't predict these variables
   pred_matrix["patient_worst_baseline", ] <- 0
   pred_matrix["patient_best_baseline", ] <- 0
-  pred_matrix["patient_ever_lapsed", ] <- 0
+  # pred_matrix["patient_ever_lapsed", ] <- 0  # REMOVED - variable not in imputation
 }
 
-# n_eyes and has_fellow are just indicators, not predictors
+# n_eyes is just an indicator, not a predictor
 if ("n_eyes" %in% colnames(pred_matrix)) {
   pred_matrix[, "n_eyes"] <- 0
   pred_matrix["n_eyes", ] <- 0
-  pred_matrix[, "has_fellow"] <- 0
-  pred_matrix["has_fellow", ] <- 0
+  # has_fellow removed from imputation - was collinear with n_eyes
 }
 
 ```
