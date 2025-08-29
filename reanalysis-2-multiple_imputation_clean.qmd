@@ -83,14 +83,14 @@ vars_impute_continuous <- c(
 
 # Variables to impute - binary
 vars_impute_binary <- c(
-  "cataract_surgery_bef_hitplus"
+  "catsurg_before_hitplus_cat"
 )
 
 # Variables to impute - categorical
 vars_impute_categorical <- c(
-  "gender",
-  "race_ethnicity_gp",
-  "insurance_gp"
+  "gender_cat",
+  "race_ethnic_cat",
+  "insurance_cat"
 )
 
 # Variables to impute - ordinal
@@ -106,10 +106,10 @@ vars_treatment <- c(
   "PRP_flag"
 )
 
-# Comorbidity indicators (binary, recoded to 0/1)
+# Comorbidity indicators (binary factors from step 1)
 vars_comorbidity <- c(
-  "Glaucoma_bef_hitplus",
-  "Otherretina_bef_hitplus"
+  "glaucoma_bef_hitplus_cat",
+  "otherretina_bef_hitplus_cat"
 )
 
 # All variables for imputation dataset
@@ -129,31 +129,16 @@ all_vars <- c(
 ## Prepare Data for MICE
 
 ```{r prepare-data}
-# Select variables and clean up
-dr_cols <- c("PDR", "NPDR", "No_DR")
-for (col in setdiff(dr_cols, names(df_original))) {
-  df_original[[col]] <- NA_integer_
-}
-if (!"person_dr" %in% names(df_original)) {
-  df_original[["person_dr"]] <- NA_integer_
-}
+# Select variables and clean up (rely on step 1 outputs)
 df_mice <- df_original |>
-  select(any_of(all_vars), any_of(dr_cols)) |>
+  select(any_of(all_vars)) |>
   mutate(
-    # Create person_dr from DR columns if needed
-    person_dr = case_when(
-      !is.na(PDR) & PDR == 1 ~ 2L,
-      !is.na(NPDR) & NPDR == 1 ~ 1L,
-      !is.na(No_DR) & No_DR == 1 ~ 0L,
-      TRUE ~ person_dr
-    ),
-    # Convert to ordered factor
-    person_dr = factor(person_dr, levels = c(0L, 1L, 2L), 
-                      labels = c("No_DR", "NPDR", "PDR"),
-                      ordered = TRUE),
-    # Recode comorbidities to 0/1
-    Glaucoma_bef_hitplus = ifelse(Glaucoma_bef_hitplus == "Present", 1, 0),
-    Otherretina_bef_hitplus = ifelse(Otherretina_bef_hitplus == "Present", 1, 0),
+    # Ensure person_dr is ordered factor
+    person_dr = if (is.numeric(person_dr)) {
+      factor(person_dr, levels = c(0L, 1L, 2L), labels = c("No_DR", "NPDR", "PDR"), ordered = TRUE)
+    } else {
+      factor(person_dr, levels = c("No_DR", "NPDR", "PDR"), ordered = TRUE)
+    },
     # Clean factor levels (remove spaces for formula compatibility)
     across(where(is.character), ~ factor(gsub("[^[:alnum:]_]", "_", .x)))
   ) |>
@@ -257,7 +242,7 @@ vars_always_predict <- c(
   "baseline_VA_logMAR",     # Key outcome
   "outcome_VA_logMAR",      # Key outcome
   "age",                    # Demographics
-  "gender",
+  "gender_cat",
   "CCI", "DCSI",           # Comorbidities
   "anti_VEGF"              # Key treatment
 )
