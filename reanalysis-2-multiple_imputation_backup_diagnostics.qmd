@@ -308,10 +308,10 @@ custom_methods["intermediate_VA_logMAR"] <- "2l.pmm"  # 2-level PMM for clustere
 custom_methods["outcome_VA_logMAR"] <- "2l.pmm"  # 2-level PMM for clustered data
 custom_methods["cohort_id"] <- ""  # Never impute - data management indicator only
 
-# Other continuous variables - use PMM
-custom_methods["CCI"] <- "pmm"  # PMM
-custom_methods["DCSI"] <- "pmm"  # PMM
-custom_methods["age"] <- "pmm"  # PMM
+# Other continuous variables - use 2-level PMM for patient clustering
+custom_methods["CCI"] <- "2l.pmm"  # 2-level PMM for count data
+custom_methods["DCSI"] <- "2l.pmm"  # 2-level PMM for count data
+custom_methods["age"] <- "2l.pmm"  # Keep as regular PMM since age doesn't vary within patient
 
 # Use proportional odds model for ordinal person_dr (0/1/2)
 custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
@@ -686,6 +686,517 @@ plot(mice_results)
 dev.off()
 
 log_message("Convergence plot saved to mice_convergence.pdf")
+```
+
+## Extract Complete Datasets
+
+**Note:** In the stripplots below, the leftmost column (labeled 1) shows the **original observed data** with missing values. Columns 2 through `r n_imputations + 1` show the imputed datasets.
+
+```{r imputation-diagnostics}
+# Check imputed values for key variables
+# In mice stripplots: .imp = 1 is original data, .imp = 2+ are imputations
+
+# CCI - compare observed vs imputed
+if(sum(is.na(df_mice$CCI)) > 0) {
+  # Density plot: Blue = observed data, Red = imputed values
+  densityplot(mice_results, ~ CCI, 
+              main = "Charlson Comorbidity Index (CCI)") |> print()
+  
+  # Stripplot: Column 1 = original data, Columns 2+ = imputed datasets
+  stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "CCI Distribution: Original vs Imputed") |> print()
+}
+
+# DCSI - compare observed vs imputed  
+if(sum(is.na(df_mice$DCSI)) > 0) {
+  densityplot(mice_results, ~ DCSI,
+              main = "Diabetes Complications Severity Index (DCSI)") |> print()
+  
+  stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "DCSI Distribution: Original vs Imputed") |> print()
+}
+
+# Baseline VA - compare observed vs imputed
+if(sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ baseline_VA_logMAR,
+              main = "Baseline Visual Acuity (logMAR)") |> print()
+  
+  stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "Baseline VA Distribution: Original vs Imputed") |> print()
+}
+
+# Intermediate VA - compare observed vs imputed
+if(sum(is.na(df_mice$intermediate_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ intermediate_VA_logMAR,
+              main = "Intermediate Visual Acuity (logMAR)") |> print()
+  
+  stripplot(mice_results, intermediate_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "Intermediate VA Distribution: Original vs Imputed") |> print()
+}
+
+# Outcome VA - compare observed vs imputed
+if(sum(is.na(df_mice$outcome_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ outcome_VA_logMAR,
+              main = "Outcome Visual Acuity at 2 Years (logMAR)") |> print()
+  
+  stripplot(mice_results, outcome_VA_logMAR ~ .imp, pch = 20, cex = 1.2,
+            xlab = "Dataset (1=Original, 2+=Imputations)",
+            main = "2-Year Outcome VA Distribution: Original vs Imputed") |> print()
+}
+
+# Person DR - compare observed vs imputed (categorical)
+if(sum(is.na(df_mice$person_dr)) > 0) {
+  # For categorical variables, check proportions across imputations
+  # Extract each imputation and tabulate
+  dr_props <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    prop.table(table(imp_data$person_dr))
+  })
+  
+  # Create summary table
+  dr_summary <- data.frame(
+    Category = c("No_DR", "NPDR", "PDR"),
+    Mean_Proportion = c(round(mean(dr_props[1,]), 3), 
+                       round(mean(dr_props[2,]), 3),
+                       round(mean(dr_props[3,]), 3)),
+    SD = c(round(sd(dr_props[1,]), 3),
+           round(sd(dr_props[2,]), 3), 
+           round(sd(dr_props[3,]), 3))
+  )
+  kable(dr_summary, caption = "DR severity proportions across imputations")
+  
+  # Visual check if stripplot works with factors
+  tryCatch({
+    stripplot(mice_results, person_dr ~ .imp, pch = 20, cex = 1.2) |> print()
+  }, error = function(e) {
+    # Note: Stripplot not available for categorical person_dr
+  })
+}
+
+# Check imputation quality for categorical variables
+# Cataract surgery
+if(sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
+  # Extract proportions for each imputation
+  cat_props <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    prop.table(table(imp_data$catsurg_before_hitplus_cat))
+  })
+  
+  # Create summary table for cataract surgery proportions
+  if(is.matrix(cat_props)) {
+    cat_summary <- data.frame(
+      Level = rownames(cat_props),
+      Mean_Proportion = apply(cat_props, 1, mean) |> round(3),
+      SD = apply(cat_props, 1, sd) |> round(3)
+    )
+  } else {
+    cat_summary <- data.frame(
+      Level = "Cataract Surgery",
+      Mean_Proportion = round(mean(cat_props), 3),
+      SD = round(sd(cat_props), 3)
+    )
+  }
+  kable(cat_summary, caption = "Cataract surgery proportions across imputations")
+}
+
+# Fellow Eye Correlation Check
+# For patients with both eyes, check correlation between eyes
+if (sum(df_mice$n_eyes == 2, na.rm = TRUE) > 0) {
+  
+  # Extract first imputed dataset
+  imp_data_1 <- complete(mice_results, 1)
+  
+  # Get bilateral patients
+  bilateral_patients <- imp_data_1 |>
+    filter(n_eyes == 2) |>
+    arrange(e_mrn_deidentified)  # Sort by patient ID
+  
+  # Check correlation for baseline VA
+  # Use slice_head and slice_tail to get first and second eye for each patient
+  baseline_pairs <- bilateral_patients |>
+    group_by(e_mrn_deidentified) |>
+    summarise(
+      eye1_baseline = first(baseline_VA_logMAR),
+      eye2_baseline = last(baseline_VA_logMAR),
+      .groups = "drop"
+    ) |>
+    filter(!is.na(eye1_baseline) & !is.na(eye2_baseline))
+  
+  baseline_cor <- cor(baseline_pairs$eye1_baseline, baseline_pairs$eye2_baseline)
+  
+  # Check correlation for outcome VA 
+  outcome_pairs <- bilateral_patients |>
+    group_by(e_mrn_deidentified) |>
+    summarise(
+      eye1_outcome = first(outcome_VA_logMAR),
+      eye2_outcome = last(outcome_VA_logMAR),
+      .groups = "drop"
+    ) |>
+    filter(!is.na(eye1_outcome) & !is.na(eye2_outcome))
+  
+  outcome_cor <- cor(outcome_pairs$eye1_outcome, outcome_pairs$eye2_outcome)
+  
+  # Summary table
+  fellow_cor_summary <- data.frame(
+    Measure = c("Baseline VA", "Outcome VA"),
+    N_Pairs = c(nrow(baseline_pairs), nrow(outcome_pairs)),
+    Correlation = c(round(baseline_cor, 3), round(outcome_cor, 3)),
+    Expected_Range = c("0.7-0.9", "0.7-0.9"),
+    Status = c(
+      ifelse(baseline_cor >= 0.7 & baseline_cor <= 0.9, "✓ Within expected", "⚠ Outside expected"),
+      ifelse(outcome_cor >= 0.7 & outcome_cor <= 0.9, "✓ Within expected", "⚠ Outside expected")
+    )
+  )
+  
+  kable(fellow_cor_summary, caption = "Fellow eye correlation in imputed data")
+  
+  # Visual check - scatter plot
+  par(mfrow = c(1, 2))
+  
+  # Baseline VA correlation plot
+  plot(baseline_pairs$eye1_baseline, baseline_pairs$eye2_baseline,
+       xlab = "Eye 1 Baseline VA (logMAR)",
+       ylab = "Eye 2 Baseline VA (logMAR)",
+       main = paste0("Baseline VA Correlation (r = ", round(baseline_cor, 2), ")"),
+       pch = 19, col = rgb(0, 0, 0, 0.5))
+  abline(lm(eye2_baseline ~ eye1_baseline, data = baseline_pairs), col = "red", lwd = 2)
+  
+  # Outcome VA correlation plot
+  plot(outcome_pairs$eye1_outcome, outcome_pairs$eye2_outcome,
+       xlab = "Eye 1 Outcome VA (logMAR)",
+       ylab = "Eye 2 Outcome VA (logMAR)",
+       main = paste0("Outcome VA Correlation (r = ", round(outcome_cor, 2), ")"),
+       pch = 19, col = rgb(0, 0, 0, 0.5))
+  abline(lm(eye2_outcome ~ eye1_outcome, data = outcome_pairs), col = "red", lwd = 2)
+  
+  par(mfrow = c(1, 1))
+  
+  # Check correlation across all imputations
+  all_cors <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    bilateral <- imp_data |> filter(n_eyes == 2)
+    
+    # Baseline correlation
+    base_pairs <- bilateral |>
+      group_by(e_mrn_deidentified) |>
+      summarise(
+        eye1 = first(baseline_VA_logMAR),
+        eye2 = last(baseline_VA_logMAR),
+        .groups = "drop"
+      ) |>
+      filter(!is.na(eye1) & !is.na(eye2))
+    
+    base_cor <- if(nrow(base_pairs) > 0) cor(base_pairs$eye1, base_pairs$eye2) else NA
+    
+    # Outcome correlation
+    out_pairs <- bilateral |>
+      group_by(e_mrn_deidentified) |>
+      summarise(
+        eye1 = first(outcome_VA_logMAR),
+        eye2 = last(outcome_VA_logMAR),
+        .groups = "drop"
+      ) |>
+      filter(!is.na(eye1) & !is.na(eye2))
+    
+    out_cor <- if(nrow(out_pairs) > 0) cor(out_pairs$eye1, out_pairs$eye2) else NA
+    
+    c(baseline_cor = base_cor, outcome_cor = out_cor)
+  })
+  
+  # Summary of correlations across imputations
+  cor_summary_all <- data.frame(
+    Measure = c("Baseline VA", "Outcome VA"),
+    Mean_Correlation = c(
+      round(mean(all_cors["baseline_cor",], na.rm = TRUE), 3),
+      round(mean(all_cors["outcome_cor",], na.rm = TRUE), 3)
+    ),
+    SD_Correlation = c(
+      round(sd(all_cors["baseline_cor",], na.rm = TRUE), 3),
+      round(sd(all_cors["outcome_cor",], na.rm = TRUE), 3)
+    ),
+    Min = c(
+      round(min(all_cors["baseline_cor",], na.rm = TRUE), 3),
+      round(min(all_cors["outcome_cor",], na.rm = TRUE), 3)
+    ),
+    Max = c(
+      round(max(all_cors["baseline_cor",], na.rm = TRUE), 3),
+      round(max(all_cors["outcome_cor",], na.rm = TRUE), 3)
+    )
+  )
+  
+  kable(cor_summary_all, caption = "Fellow eye correlations across all imputations")
+}
+
+# Clinical Plausibility Check for Imputed Values
+log_message("Checking clinical plausibility of imputed values")
+
+# Extract observed and imputed ranges for each variable
+plausibility_checks <- list()
+
+# Visual Acuity measures (logMAR scale)
+# Clinical limits: -0.3 (exceptional vision) to 3.0 (hand motion/counting fingers)
+va_vars <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR")
+
+for (var in va_vars) {
+  if (sum(is.na(df_mice[[var]])) > 0) {
+    # Get observed range
+    obs_range <- range(df_mice[[var]], na.rm = TRUE)
+    
+    # Get imputed ranges across all imputations
+    imp_ranges <- sapply(1:n_imputations, function(i) {
+      imp_data <- complete(mice_results, i)
+      # Only look at previously missing values
+      was_missing <- is.na(df_mice[[var]])
+      if (sum(was_missing) > 0) {
+        range(imp_data[[var]][was_missing])
+      } else {
+        c(NA, NA)
+      }
+    })
+    
+    plausibility_checks[[var]] <- data.frame(
+      Variable = var,
+      Observed_Min = round(obs_range[1], 3),
+      Observed_Max = round(obs_range[2], 3),
+      Imputed_Min = round(min(imp_ranges[1,], na.rm = TRUE), 3),
+      Imputed_Max = round(max(imp_ranges[2,], na.rm = TRUE), 3),
+      Clinical_Min = -0.3,
+      Clinical_Max = 3.0,
+      stringsAsFactors = FALSE
+    )
+    
+    # Check if imputed values fall within observed range
+    plausibility_checks[[var]]$Within_Observed <- 
+      plausibility_checks[[var]]$Imputed_Min >= plausibility_checks[[var]]$Observed_Min &
+      plausibility_checks[[var]]$Imputed_Max <= plausibility_checks[[var]]$Observed_Max
+    
+    # Check if imputed values fall within clinical limits
+    plausibility_checks[[var]]$Within_Clinical <- 
+      plausibility_checks[[var]]$Imputed_Min >= plausibility_checks[[var]]$Clinical_Min &
+      plausibility_checks[[var]]$Imputed_Max <= plausibility_checks[[var]]$Clinical_Max
+  }
+}
+
+# Comorbidity indices (non-negative integers)
+comorbidity_vars <- c("CCI", "DCSI")
+
+for (var in comorbidity_vars) {
+  if (sum(is.na(df_mice[[var]])) > 0) {
+    obs_range <- range(df_mice[[var]], na.rm = TRUE)
+    
+    imp_ranges <- sapply(1:n_imputations, function(i) {
+      imp_data <- complete(mice_results, i)
+      was_missing <- is.na(df_mice[[var]])
+      if (sum(was_missing) > 0) {
+        range(imp_data[[var]][was_missing])
+      } else {
+        c(NA, NA)
+      }
+    })
+    
+    plausibility_checks[[var]] <- data.frame(
+      Variable = var,
+      Observed_Min = round(obs_range[1], 1),
+      Observed_Max = round(obs_range[2], 1),
+      Imputed_Min = round(min(imp_ranges[1,], na.rm = TRUE), 1),
+      Imputed_Max = round(max(imp_ranges[2,], na.rm = TRUE), 1),
+      Clinical_Min = 0,
+      Clinical_Max = ifelse(var == "CCI", 37, 13),  # CCI max 37, DCSI max 13
+      stringsAsFactors = FALSE
+    )
+    
+    plausibility_checks[[var]]$Within_Observed <- 
+      plausibility_checks[[var]]$Imputed_Min >= plausibility_checks[[var]]$Observed_Min &
+      plausibility_checks[[var]]$Imputed_Max <= plausibility_checks[[var]]$Observed_Max
+    
+    plausibility_checks[[var]]$Within_Clinical <- 
+      plausibility_checks[[var]]$Imputed_Min >= plausibility_checks[[var]]$Clinical_Min &
+      plausibility_checks[[var]]$Imputed_Max <= plausibility_checks[[var]]$Clinical_Max
+  }
+}
+
+# Combine all plausibility checks
+if (length(plausibility_checks) > 0) {
+  plausibility_summary <- do.call(rbind, plausibility_checks)
+  rownames(plausibility_summary) <- NULL
+  
+  # Add status column
+  plausibility_summary$Status <- ifelse(
+    plausibility_summary$Within_Observed,
+    "✓ Within observed range (PMM working correctly)",
+    ifelse(
+      plausibility_summary$Within_Clinical,
+      "⚠ Outside observed but within clinical limits",
+      "✗ Outside clinical limits"
+    )
+  )
+  
+  kable(plausibility_summary[, c("Variable", "Observed_Min", "Observed_Max", 
+                                 "Imputed_Min", "Imputed_Max", "Status")],
+        caption = "Clinical Plausibility of Imputed Values (PMM ensures values stay within observed range)")
+  
+  log_message(paste0("Plausibility check complete. All variables within observed range: ",
+                    all(plausibility_summary$Within_Observed)))
+}
+
+# Check between-imputation variance
+log_message("Checking between-imputation variance")
+
+# Calculate variance across imputations for key outcomes
+variance_checks <- sapply(va_vars, function(var) {
+  if (sum(is.na(df_mice[[var]])) > 0) {
+    # Get imputed values for each missing observation across all imputations
+    was_missing <- which(is.na(df_mice[[var]]))
+    
+    if (length(was_missing) > 0) {
+      imp_values <- sapply(1:n_imputations, function(i) {
+        imp_data <- complete(mice_results, i)
+        imp_data[[var]][was_missing]
+      })
+      
+      # Calculate mean variance across observations
+      if (is.matrix(imp_values)) {
+        obs_variances <- apply(imp_values, 1, var)
+        mean_var <- mean(obs_variances, na.rm = TRUE)
+        min_var <- min(obs_variances, na.rm = TRUE)
+        max_var <- max(obs_variances, na.rm = TRUE)
+      } else {
+        mean_var <- var(imp_values)
+        min_var <- mean_var
+        max_var <- mean_var
+      }
+      
+      c(Mean_Variance = mean_var, Min_Variance = min_var, Max_Variance = max_var)
+    } else {
+      c(Mean_Variance = NA, Min_Variance = NA, Max_Variance = NA)
+    }
+  } else {
+    c(Mean_Variance = NA, Min_Variance = NA, Max_Variance = NA)
+  }
+})
+
+if (ncol(variance_checks) > 0) {
+  variance_summary <- data.frame(
+    Variable = colnames(variance_checks),
+    Mean_Between_Imp_Variance = round(variance_checks["Mean_Variance",], 4),
+    Min_Between_Imp_Variance = round(variance_checks["Min_Variance",], 4),
+    Max_Between_Imp_Variance = round(variance_checks["Max_Variance",], 4),
+    Status = ifelse(
+      variance_checks["Mean_Variance",] > 0.001,
+      "✓ Adequate variance",
+      "⚠ Low variance - check predictor weights"
+    )
+  )
+  
+  kable(variance_summary, 
+        caption = "Between-Imputation Variance (ensures uncertainty is preserved)")
+  
+  log_message(paste0("Variance check complete. Adequate variance in all variables: ",
+                    all(variance_checks["Mean_Variance",] > 0.001, na.rm = TRUE)))
+}
+```
+
+## MNAR Sensitivity Analysis: Delta-Shift Method
+
+```{r mnar-sensitivity}
+# Delta-shift sensitivity analysis for MNAR
+# This shows how results would change if missing values were systematically different
+# We do NOT apply these shifts to the main imputation - just show diagnostics
+
+log_message("Performing MNAR sensitivity analysis (diagnostic only)")
+
+# Define small symmetric deltas for outcome VA (in logMAR units)
+# 0.1 logMAR = 1 line on eye chart
+deltas <- c(-0.2, -0.1, 0, 0.1, 0.2)
+
+# For each delta, show how the outcome distribution would shift
+delta_results <- list()
+
+for (delta in deltas) {
+  # Take first imputed dataset as example
+  imp_data_1 <- complete(mice_results, 1)
+  
+  # Identify which outcomes were imputed
+  was_imputed <- is.na(df_mice$outcome_VA_logMAR)
+  
+  if (sum(was_imputed) > 0) {
+    # Create shifted version (for diagnostic only)
+    shifted_data <- imp_data_1
+    shifted_data$outcome_VA_logMAR[was_imputed] <- 
+      shifted_data$outcome_VA_logMAR[was_imputed] + delta
+    
+    # Calculate outcome statistics
+    delta_results[[as.character(delta)]] <- data.frame(
+      Delta = delta,
+      Delta_Lines = round(delta / 0.1, 1),  # Convert to eye chart lines
+      Mean_Observed = round(mean(imp_data_1$outcome_VA_logMAR[!was_imputed], na.rm = TRUE), 3),
+      Mean_Imputed_Original = round(mean(imp_data_1$outcome_VA_logMAR[was_imputed], na.rm = TRUE), 3),
+      Mean_Imputed_Shifted = round(mean(shifted_data$outcome_VA_logMAR[was_imputed], na.rm = TRUE), 3),
+      Pct_VI_Observed = round(100 * mean(imp_data_1$outcome_VA_logMAR[!was_imputed] >= 1.0, na.rm = TRUE), 1),
+      Pct_VI_Imputed_Original = round(100 * mean(imp_data_1$outcome_VA_logMAR[was_imputed] >= 1.0, na.rm = TRUE), 1),
+      Pct_VI_Imputed_Shifted = round(100 * mean(shifted_data$outcome_VA_logMAR[was_imputed] >= 1.0, na.rm = TRUE), 1)
+    )
+  }
+}
+
+if (length(delta_results) > 0) {
+  sensitivity_summary <- do.call(rbind, delta_results)
+  rownames(sensitivity_summary) <- NULL
+  
+  # Add interpretation
+  sensitivity_summary$Interpretation <- c(
+    "Imputed have 2 lines better vision",
+    "Imputed have 1 line better vision",
+    "No systematic difference (MAR)",
+    "Imputed have 1 line worse vision",
+    "Imputed have 2 lines worse vision"
+  )
+  
+  kable(sensitivity_summary[, c("Delta", "Delta_Lines", "Interpretation",
+                                "Mean_Imputed_Original", "Mean_Imputed_Shifted",
+                                "Pct_VI_Imputed_Original", "Pct_VI_Imputed_Shifted")],
+        caption = "MNAR Sensitivity Analysis: Effect of systematic differences in missing outcomes",
+        col.names = c("Delta (logMAR)", "Lines on chart", "Interpretation",
+                     "Mean VA (Original)", "Mean VA (Shifted)",
+                     "% VI (Original)", "% VI (Shifted)"))
+  
+  # Create visualization
+  par(mfrow = c(1, 2))
+  
+  # Plot 1: Mean VA by delta
+  plot(sensitivity_summary$Delta, sensitivity_summary$Mean_Imputed_Shifted,
+       type = "b", pch = 19,
+       xlab = "Delta adjustment (logMAR)",
+       ylab = "Mean imputed outcome VA (logMAR)",
+       main = "Sensitivity to MNAR assumption",
+       ylim = range(c(sensitivity_summary$Mean_Observed,
+                     sensitivity_summary$Mean_Imputed_Shifted)))
+  abline(h = sensitivity_summary$Mean_Observed[1], col = "blue", lty = 2)
+  abline(v = 0, col = "gray", lty = 3)
+  legend("topleft", c("Shifted imputed", "Observed mean"), 
+         col = c("black", "blue"), lty = c(1, 2), pch = c(19, NA))
+  
+  # Plot 2: % VI by delta
+  plot(sensitivity_summary$Delta, sensitivity_summary$Pct_VI_Imputed_Shifted,
+       type = "b", pch = 19,
+       xlab = "Delta adjustment (logMAR)",
+       ylab = "% with vision impairment",
+       main = "VI prevalence under MNAR",
+       ylim = range(c(sensitivity_summary$Pct_VI_Observed,
+                     sensitivity_summary$Pct_VI_Imputed_Shifted)))
+  abline(h = sensitivity_summary$Pct_VI_Observed[1], col = "blue", lty = 2)
+  abline(v = 0, col = "gray", lty = 3)
+  legend("topleft", c("Shifted imputed", "Observed prevalence"), 
+         col = c("black", "blue"), lty = c(1, 2), pch = c(19, NA))
+  
+  par(mfrow = c(1, 1))
+  
+  log_message("MNAR sensitivity analysis complete (diagnostic only - main imputation unchanged)")
+}
 ```
 
 ## Create Complete Datasets and Derive Variables
