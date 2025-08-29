@@ -154,7 +154,11 @@ df_mice <- df_original |>
                                factor(NA, levels = levels(person_dr), ordered = TRUE))
   ) |>
   dplyr::ungroup() |>
-  dplyr::select(-eye_index)
+  dplyr::select(-eye_index) |>
+  dplyr::mutate(
+    # Convert cluster variable to integer for 2l methods
+    e_mrn_deidentified = as.integer(as.factor(e_mrn_deidentified))
+  )
 
 # Check missing data pattern
 log_message("Missing data summary:")
