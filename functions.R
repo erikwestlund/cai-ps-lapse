@@ -14,11 +14,16 @@ init_log <- function(analysis_name, log_dir = "logs") {
   log_file <- file.path(log_dir, paste0(analysis_name, "_", timestamp, ".log"))
   
   # Initialize log with header
-  cat(paste0("================================================================================\n",
-             "Analysis: ", analysis_name, "\n",
-             "Started: ", Sys.time(), "\n",
-             "================================================================================\n\n"),
-      file = log_file, append = FALSE)
+  header_msg <- paste0("================================================================================\n",
+                      "Analysis: ", analysis_name, "\n",
+                      "Started: ", Sys.time(), "\n",
+                      "================================================================================\n\n")
+  
+  # Write to log file
+  cat(header_msg, file = log_file, append = FALSE)
+  
+  # Also output to console
+  cat(header_msg)
   
   # Store in options for easy access
   options(current_log_file = log_file)
@@ -35,11 +40,18 @@ log_message <- function(msg, level = "INFO") {
   if (!is.null(log_file)) {
     timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
     formatted_msg <- paste0("[", timestamp, "] [", level, "] ", msg, "\n")
+    
+    # Write to log file
     cat(formatted_msg, file = log_file, append = TRUE)
     
-    # Also return the message for potential console output
+    # Also output to console for interactive use
+    cat(formatted_msg)
+    
+    # Return the message invisibly
     invisible(formatted_msg)
   } else {
+    # If no log file, just output to console
+    cat(paste0("[", level, "] ", msg, "\n"))
     warning("No log file initialized. Call init_log() first.")
   }
 }
@@ -92,13 +104,18 @@ finalize_log <- function(success = TRUE) {
     
     status <- ifelse(success, "COMPLETED SUCCESSFULLY", "FAILED")
     
-    cat(paste0("\n================================================================================\n",
-               "Analysis ", status, "\n",
-               "Ended: ", Sys.time(), "\n",
-               "Total time: ", round(total_time, 2), " minutes\n",
-               "Log file: ", log_file, "\n",
-               "================================================================================\n"),
-        file = log_file, append = TRUE)
+    summary_msg <- paste0("\n================================================================================\n",
+                         "Analysis ", status, "\n",
+                         "Ended: ", Sys.time(), "\n",
+                         "Total time: ", round(total_time, 2), " minutes\n",
+                         "Log file: ", log_file, "\n",
+                         "================================================================================\n")
+    
+    # Write to log file
+    cat(summary_msg, file = log_file, append = TRUE)
+    
+    # Also output to console
+    cat(summary_msg)
     
     # Clear options
     options(current_log_file = NULL)
