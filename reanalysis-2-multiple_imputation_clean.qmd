@@ -1,0 +1,369 @@
+---
+title: "Reanalysis Step 2: Multiple Imputation (Clean Version)"
+subtitle: "Simplified imputation using mice with clustering"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+seed <- 2025
+setup_analysis(seed = seed)
+
+library(mice)
+library(miceadds)
+library(VIM)
+library(naniar)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(lme4)
+
+# Initialize logging
+log_file <- init_log("multiple_imputation_clean")
+
+# ANALYSIS MODE
+analysis_mode <- "test"  # "test" or "final"
+
+if (analysis_mode == "test") {
+  n_imputations <- 2
+  n_iterations <- 3
+} else {
+  n_imputations <- 30
+  n_iterations <- 20
+}
+
+log_message(paste0("Analysis mode: ", analysis_mode))
+log_message(paste0("Imputations: ", n_imputations, ", Iterations: ", n_iterations))
+```
+
+## Load Data
+
+```{r load-data}
+# Load the prepared dataset
+df_original <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
+log_message(paste0("Loaded ", nrow(df_original), " observations"))
+
+# Get unique patient count
+n_patients <- n_distinct(df_original$e_mrn_deidentified)
+log_message(paste0("Number of unique patients: ", n_patients))
+```
+
+## Define Variables for Imputation
+
+```{r define-variables}
+# Variables that should NOT be imputed and should NOT be used as predictors
+vars_no_impute_no_predict <- c(
+  "row_id"  # Internal row identifier
+)
+
+# Variables that should NOT be imputed but CAN be used as predictors  
+vars_no_impute_yes_predict <- c(
+  "ever_lapse_binary",  # Exposure - complete
+  "cohort_id"          # Data indicator - complete
+)
+
+# Cluster variable (patient ID)
+cluster_var <- "e_mrn_deidentified"
+
+# Variables to impute - continuous (use PMM with clustering)
+vars_impute_continuous <- c(
+  "baseline_VA_logMAR",
+  "intermediate_VA_logMAR", 
+  "outcome_VA_logMAR",
+  "age",
+  "CCI",
+  "DCSI"
+)
+
+# Variables to impute - binary
+vars_impute_binary <- c(
+  "cataract_surgery_bef_hitplus"
+)
+
+# Variables to impute - categorical
+vars_impute_categorical <- c(
+  "gender",
+  "race_ethnicity_gp",
+  "insurance_gp"
+)
+
+# Variables to impute - ordinal
+vars_impute_ordinal <- c(
+  "person_dr"  # 0=No_DR, 1=NPDR, 2=PDR
+)
+
+# Treatment variables (binary, likely complete)
+vars_treatment <- c(
+  "other_inject",
+  "anti_VEGF",
+  "focal_laser_flag",
+  "PRP_flag"
+)
+
+# Comorbidity indicators (binary, recoded to 0/1)
+vars_comorbidity <- c(
+  "Glaucoma_bef_hitplus",
+  "Otherretina_bef_hitplus"
+)
+
+# All variables for imputation dataset
+all_vars <- c(
+  cluster_var,
+  vars_no_impute_no_predict,
+  vars_no_impute_yes_predict,
+  vars_impute_continuous,
+  vars_impute_binary,
+  vars_impute_categorical,
+  vars_impute_ordinal,
+  vars_treatment,
+  vars_comorbidity
+)
+```
+
+## Prepare Data for MICE
+
+```{r prepare-data}
+# Select variables and clean up
+dr_cols <- c("PDR", "NPDR", "No_DR")
+for (col in setdiff(dr_cols, names(df_original))) {
+  df_original[[col]] <- NA_integer_
+}
+if (!"person_dr" %in% names(df_original)) {
+  df_original[["person_dr"]] <- NA_integer_
+}
+df_mice <- df_original |>
+  select(all_of(all_vars), any_of(dr_cols)) |>
+  mutate(
+    # Create person_dr from DR columns if needed
+    person_dr = case_when(
+      !is.na(PDR) & PDR == 1 ~ 2L,
+      !is.na(NPDR) & NPDR == 1 ~ 1L,
+      !is.na(No_DR) & No_DR == 1 ~ 0L,
+      TRUE ~ person_dr
+    ),
+    # Convert to ordered factor
+    person_dr = factor(person_dr, levels = c(0L, 1L, 2L), 
+                      labels = c("No_DR", "NPDR", "PDR"),
+                      ordered = TRUE),
+    # Recode comorbidities to 0/1
+    Glaucoma_bef_hitplus = ifelse(Glaucoma_bef_hitplus == "Present", 1, 0),
+    Otherretina_bef_hitplus = ifelse(Otherretina_bef_hitplus == "Present", 1, 0),
+    # Clean factor levels (remove spaces for formula compatibility)
+    across(where(is.character), ~ factor(gsub("[^[:alnum:]_]", "_", .x)))
+  )
+
+# Check missing data pattern
+log_message("Missing data summary:")
+missing_summary <- df_mice |>
+  summarise(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  filter(n_missing > 0) |>
+  arrange(desc(n_missing))
+
+print(missing_summary)
+```
+
+## Setup Imputation Methods
+
+```{r setup-methods}
+# Initialize mice to get default setup
+ini <- mice(df_mice, maxit = 0, printFlag = FALSE)
+
+# Set up methods vector
+methods <- ini$method
+
+# No imputation for these
+methods[intersect(vars_no_impute_no_predict, names(methods))] <- ""
+methods[intersect(vars_no_impute_yes_predict, names(methods))] <- ""
+if (cluster_var %in% names(methods)) {
+  methods[cluster_var] <- ""
+}
+
+# Continuous variables - use 2l.pmm for clustering
+for (var in vars_impute_continuous) {
+  if (var %in% names(methods)) {
+    methods[var] <- "2l.pmm"
+  }
+}
+
+# Binary variables
+for (var in vars_impute_binary) {
+  if (var %in% names(methods)) {
+    methods[var] <- "logreg"
+  }
+}
+
+# Categorical variables  
+for (var in vars_impute_categorical) {
+  if (var %in% names(methods)) {
+    methods[var] <- "polyreg"
+  }
+}
+
+# Ordinal variables
+for (var in vars_impute_ordinal) {
+  if (var %in% names(methods)) {
+    methods[var] <- "polr"
+  }
+}
+
+# Treatment and comorbidity variables (likely complete, but set methods just in case)
+for (var in c(vars_treatment, vars_comorbidity)) {
+  if (var %in% names(methods)) {
+    methods[var] <- "logreg"
+  }
+}
+
+log_message("Imputation methods configured")
+```
+
+## Setup Predictor Matrix
+
+```{r setup-predictors}
+# Use quickpred to get smart predictor selection
+# This selects predictors with correlation >= 0.10 (R^2 >= 0.01)
+# As recommended in Van Buuren's MICE documentation
+
+# Variables that should always be included as predictors (key variables)
+vars_always_predict <- c(
+  "ever_lapse_binary",      # Exposure
+  "baseline_VA_logMAR",     # Key outcome
+  "outcome_VA_logMAR",      # Key outcome
+  "age",                    # Demographics
+  "gender",
+  "CCI", "DCSI",           # Comorbidities
+  "anti_VEGF"              # Key treatment
+)
+
+# Variables that should never be predictors
+vars_never_predict <- c(
+  vars_no_impute_no_predict
+)
+
+# Generate predictor matrix using quickpred
+pred_matrix <- quickpred(
+  df_mice, 
+  exclude = vars_never_predict,
+  include = vars_always_predict,
+  mincor = 0.10,  # Minimum correlation for inclusion
+  method = "pearson"
+)
+
+# Mark cluster variable for 2-level imputation
+# -2 indicates this is the cluster ID
+pred_matrix[cluster_var, ] <- 0  # Don't predict the cluster ID
+
+# For 2l.pmm variables, ensure cluster is marked
+vars_2l <- names(methods)[methods == "2l.pmm"]
+for (var in vars_2l) {
+  pred_matrix[var, cluster_var] <- -2
+}
+
+# Ensure temporal ordering for VA variables
+# Baseline can predict intermediate and outcome
+pred_matrix["intermediate_VA_logMAR", "baseline_VA_logMAR"] <- 1
+pred_matrix["outcome_VA_logMAR", "baseline_VA_logMAR"] <- 1
+
+# Intermediate can predict outcome  
+pred_matrix["outcome_VA_logMAR", "intermediate_VA_logMAR"] <- 1
+
+# Prevent reverse-time prediction
+pred_matrix["baseline_VA_logMAR", "outcome_VA_logMAR"] <- 0
+pred_matrix["baseline_VA_logMAR", "intermediate_VA_logMAR"] <- 0
+pred_matrix["intermediate_VA_logMAR", "outcome_VA_logMAR"] <- 0
+
+log_message("Predictor matrix configured with temporal constraints")
+```
+
+## Run Imputation
+
+```{r run-imputation}
+log_message("Starting MICE imputation...")
+
+# Run the imputation
+imp <- mice(
+  df_mice, 
+  m = n_imputations,
+  method = methods,
+  predictorMatrix = pred_matrix,
+  maxit = n_iterations,
+  seed = seed,
+  printFlag = TRUE
+)
+
+log_message("MICE imputation completed")
+
+# Check for logged events
+if (!is.null(imp$loggedEvents)) {
+  log_message("Logged events during imputation:")
+  print(imp$loggedEvents)
+}
+
+# Save convergence plot
+pdf(file.path(reanalysis_data_dir, "mice_convergence_clean.pdf"))
+plot(imp)
+dev.off()
+```
+
+## Extract and Save Results
+
+```{r save-results}
+# Extract all imputed datasets
+imputed_list <- complete(imp, action = "all")
+
+# Apply any derived variables needed
+imputed_list <- lapply(imputed_list, function(data) {
+  data |>
+    mutate(
+      # Create binary outcome from logMAR
+      outcome_va_vi_binary = ifelse(outcome_VA_logMAR >= 1.0, 1, 0)
+    )
+})
+
+# Save the mice object
+saveRDS(imp, file.path(reanalysis_data_dir, "mice_results_clean.rds"))
+log_message(paste0("Saved MICE object to: mice_results_clean.rds"))
+
+# Save the list of complete datasets
+saveRDS(imputed_list, file.path(reanalysis_data_dir, "imputed_datasets_clean.rds"))
+log_message(paste0("Saved ", length(imputed_list), " imputed datasets"))
+
+# Create summary
+summary_stats <- data.frame(
+  Metric = c(
+    "Original observations",
+    "Unique patients",
+    "Variables in imputation", 
+    "Number of imputations",
+    "Iterations per imputation",
+    "Variables with missing data",
+    "Total missing values"
+  ),
+  Value = c(
+    nrow(df_mice),
+    n_patients,
+    ncol(df_mice),
+    n_imputations,
+    n_iterations,
+    sum(colSums(is.na(df_mice)) > 0),
+    sum(is.na(df_mice))
+  )
+)
+
+kable(summary_stats, caption = "Imputation Summary")
+
+# Finalize logging
+final_log <- finalize_log(success = TRUE)
+```
+
+**Analysis complete. Log file:** `r final_log`
+
+## Next Steps
+
+Run `reanalysis-3-imputation_diagnostics.qmd` to assess imputation quality.
