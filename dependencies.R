@@ -36,6 +36,7 @@ install_dependencies <- function() {
     
     # Multiple imputation
     "mice",
+    "miceadds",  # For multilevel imputation methods (2l.pmm)
     "VIM",
     "Hmisc",
     "naniar",
@@ -111,6 +112,7 @@ load_required_libraries <- function() {
     "rpart",
     "gam",
     "mice",
+    "miceadds",
     "VIM",
     "Hmisc",
     "naniar",

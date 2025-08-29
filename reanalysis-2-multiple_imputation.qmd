@@ -233,6 +233,18 @@ df_mice <- df_for_imputation |>
     gender_cat = factor(gender_cat),
     race_ethnic_cat = factor(race_ethnic_cat),
     insurance_cat = factor(insurance_cat)
+  ) |>
+  mutate(
+    # Clean factor levels to remove spaces and special characters for 2l.pmm compatibility
+    # Spaces in factor levels cause formula parsing errors in lmer
+    # Replace spaces and special characters with underscores
+    across(where(is.factor), ~ {
+      if (is.factor(.x)) {
+        factor(.x, labels = gsub("[^[:alnum:]_]", "_", levels(.x)))
+      } else {
+        .x
+      }
+    })
   )
 ```
 
@@ -313,6 +325,7 @@ log_message(paste0("First few method assignments: ",
 # Temporal VA variables - use 2-level PMM for clustered data
 # 2l.pmm from miceadds: Multilevel PMM using linear mixed models
 # This properly accounts for correlation between eyes from same patient
+# NOTE: 2l.pmm requires clean variable names (no spaces) in factor levels
 custom_methods["baseline_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
 custom_methods["intermediate_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
 custom_methods["outcome_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
