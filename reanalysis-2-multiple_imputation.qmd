@@ -319,6 +319,35 @@ for (v1 in treatment_vars) {
   }
 }
 
+# Ensure demographics predict VA timepoints and DR severity
+va_vars <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")
+for (va in va_vars) {
+  for (demo in demographic_vars) {
+    if (va %in% rownames(pred_matrix) && demo %in% colnames(pred_matrix)) {
+      pred_matrix[va, demo] <- 1
+    }
+  }
+}
+
+# Ensure ocular comorbidities and cataract surgery predict VA and DR severity
+ocular_vars <- c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", "catsurg_before_hitplus_cat")
+for (va in va_vars) {
+  for (ov in ocular_vars) {
+    if (va %in% rownames(pred_matrix) && ov %in% colnames(pred_matrix)) {
+      pred_matrix[va, ov] <- 1
+    }
+  }
+}
+
+# Ensure treatments predict intermediate and outcome VA
+for (va in c("intermediate_VA_logMAR", "outcome_VA_logMAR")) {
+  for (tr in treatment_vars) {
+    if (va %in% rownames(pred_matrix) && tr %in% colnames(pred_matrix)) {
+      pred_matrix[va, tr] <- 1
+    }
+  }
+}
+
 # Fellow-eye predictors with weight=2 for stronger influence
 fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr")
 for (v in fellow_vars) {
@@ -327,16 +356,16 @@ for (v in fellow_vars) {
   }
 }
 if ("fellow_baseline_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 2  # Weight=2
+  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
 }
 if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 2  # Weight=2
+  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
 }
 if ("fellow_outcome_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 2  # Weight=2
+  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
 }
 if ("fellow_dr" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) {
-  pred_matrix["person_dr", "fellow_dr"] <- 2  # Weight=2
+  pred_matrix["person_dr", "fellow_dr"] <- 1
 }
 
 log_message("Predictor matrix configured with temporal constraints")
