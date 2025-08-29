@@ -325,16 +325,14 @@ log_message(paste0("First few method assignments: ",
 # Temporal VA variables - use 2-level PMM for clustered data
 # 2l.pmm from miceadds: Multilevel PMM using linear mixed models
 # This properly accounts for correlation between eyes from same patient
-# NOTE: 2l.pmm requires clean variable names (no spaces) in factor levels
 custom_methods["baseline_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
-custom_methods["intermediate_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
+custom_methods["intermediate_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients  
 custom_methods["outcome_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
 custom_methods["cohort_id"] <- ""  # Never impute - data management indicator only
 
-# Other continuous variables
-# CCI and DCSI could potentially vary by eye visit, so use 2-level
-custom_methods["CCI"] <- "2l.pmm"  # Multilevel PMM for clustered data
-custom_methods["DCSI"] <- "2l.pmm"  # Multilevel PMM for clustered data
+# Other continuous variables - use 2l.pmm for clustered data
+custom_methods["CCI"] <- "2l.pmm"  # Multilevel PMM
+custom_methods["DCSI"] <- "2l.pmm"  # Multilevel PMM
 custom_methods["age"] <- "pmm"  # Regular PMM (patient-level, doesn't vary by eye)
 
 # Use proportional odds model for ordinal person_dr (0/1/2)
@@ -421,7 +419,43 @@ pred_matrix[, "cohort_id"] <- 0  # Not a predictor
 # Don't use variables as their own predictors
 diag(pred_matrix) <- 0
 
-# Ensure exposure is used as predictor for outcomes
+# For 2l.pmm variables, use a selective set of predictors to avoid formula length issues
+# Identify which variables will use 2l.pmm
+vars_2l_pmm <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "CCI", "DCSI")
+
+# Define core predictors for 2l.pmm models (keep it focused)
+core_predictors_2l <- c(
+  "ever_lapse_binary",  # Exposure
+  "age",                # Key demographic
+  "gender_cat",         # Gender
+  "baseline_VA_logMAR", # Baseline VA (for temporal)
+  "intermediate_VA_logMAR", # Intermediate (for outcome)
+  "person_dr",          # DR severity
+  "anti_VEGF",          # Key treatment
+  "CCI", "DCSI",       # Comorbidities
+  "fellow_baseline_VA", # Fellow eye for correlation
+  "fellow_outcome_VA"   # Fellow eye outcome
+)
+
+# For 2l.pmm variables, limit predictors to core set
+log_message("Configuring predictor matrix for 2l.pmm variables with limited predictors")
+for (var in vars_2l_pmm) {
+  if (var %in% rownames(pred_matrix)) {
+    # First set all to 0
+    pred_matrix[var, ] <- 0
+    # Then selectively enable core predictors
+    n_predictors <- 0
+    for (pred in core_predictors_2l) {
+      if (pred %in% colnames(pred_matrix) && pred != var) {
+        pred_matrix[var, pred] <- 1
+        n_predictors <- n_predictors + 1
+      }
+    }
+    log_message(paste0("  ", var, ": ", n_predictors, " predictors"))
+  }
+}
+
+# Ensure exposure is used as predictor for all outcomes
 pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 
