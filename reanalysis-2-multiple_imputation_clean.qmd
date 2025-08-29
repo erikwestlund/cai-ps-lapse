@@ -187,10 +187,10 @@ if (cluster_var %in% names(methods)) {
   methods[cluster_var] <- ""
 }
 
-# Continuous variables - use 2l.pmm for clustering
+# Continuous variables - use standard PMM (no multilevel)
 for (var in vars_impute_continuous) {
   if (var %in% names(methods)) {
-    methods[var] <- "2l.pmm"
+    methods[var] <- "pmm"
   }
 }
 
@@ -265,15 +265,11 @@ pred_matrix <- quickpred(
   method = "pearson"
 )
 
-# Mark cluster variable for 2-level imputation
-# -2 indicates this is the cluster ID
-pred_matrix[cluster_var, ] <- 0  # Don't predict the cluster ID
+# No multilevel imputation: ensure cluster ID is not used as predictor
+pred_matrix[, cluster_var] <- 0
+pred_matrix[cluster_var, ] <- 0
 
-# For 2l.pmm variables, ensure cluster is marked
-vars_2l <- names(methods)[methods == "2l.pmm"]
-for (var in vars_2l) {
-  pred_matrix[var, cluster_var] <- -2
-}
+
 
 # Ensure temporal ordering for VA variables
 # Baseline can predict intermediate and outcome
