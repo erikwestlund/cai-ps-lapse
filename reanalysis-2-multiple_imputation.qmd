@@ -17,6 +17,7 @@ setup_analysis(seed = seed)
 
 # Additional packages for imputation
 library(mice)
+library(miceadds)  # For additional 2-level imputation methods
 library(VIM)
 library(naniar)
 
@@ -278,7 +279,14 @@ kable(method_table)
 custom_methods <- mice_dry$method
 
 # Debug: Check if any methods have invalid values
-invalid_methods <- custom_methods[!custom_methods %in% c("", "pmm", "logreg", "polyreg", "polr", "norm", "norm.boot", "norm.nob", "norm.predict", "sample", "cart", "rf", "2l.norm", "2l.lmer", "2l.pan", "2lonly.mean", "2lonly.norm", "2lonly.pmm")]
+# Include all standard MICE methods plus 2-level methods from mice and miceadds
+valid_methods <- c("", "pmm", "logreg", "polyreg", "polr", "norm", "norm.boot", "norm.nob", 
+                   "norm.predict", "sample", "cart", "rf", 
+                   # 2-level methods
+                   "2l.norm", "2l.lmer", "2l.pan", "2lonly.mean", "2lonly.norm", "2lonly.pmm",
+                   # miceadds methods
+                   "2l.pmm", "2l.2stage.norm", "2l.2stage.pmm", "ml.lmer")
+invalid_methods <- custom_methods[!custom_methods %in% valid_methods]
 if (length(invalid_methods) > 0) {
   log_message(paste0("WARNING: Invalid imputation methods detected: ", paste(names(invalid_methods), "=", invalid_methods, collapse=", ")))
   # Reset any invalid methods to appropriate defaults
@@ -302,16 +310,19 @@ log_message(paste0("Number of variables in custom_methods: ", length(custom_meth
 log_message(paste0("First few method assignments: ", 
                   paste(head(names(custom_methods)), "=", head(custom_methods), collapse=", ")))
 
-# Temporal VA variables - use 2-level PMM to account for patient clustering
-custom_methods["baseline_VA_logMAR"] <- "2l.pmm"  # 2-level PMM for clustered data
-custom_methods["intermediate_VA_logMAR"] <- "2l.pmm"  # 2-level PMM for clustered data
-custom_methods["outcome_VA_logMAR"] <- "2l.pmm"  # 2-level PMM for clustered data
+# Temporal VA variables - use 2-level PMM for clustered data
+# 2l.pmm from miceadds: Multilevel PMM using linear mixed models
+# This properly accounts for correlation between eyes from same patient
+custom_methods["baseline_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
+custom_methods["intermediate_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
+custom_methods["outcome_VA_logMAR"] <- "2l.pmm"  # Multilevel PMM for eyes within patients
 custom_methods["cohort_id"] <- ""  # Never impute - data management indicator only
 
-# Other continuous variables - use PMM
-custom_methods["CCI"] <- "pmm"  # PMM
-custom_methods["DCSI"] <- "pmm"  # PMM
-custom_methods["age"] <- "pmm"  # PMM
+# Other continuous variables
+# CCI and DCSI could potentially vary by eye visit, so use 2-level
+custom_methods["CCI"] <- "2l.pmm"  # Multilevel PMM for clustered data
+custom_methods["DCSI"] <- "2l.pmm"  # Multilevel PMM for clustered data
+custom_methods["age"] <- "pmm"  # Regular PMM (patient-level, doesn't vary by eye)
 
 # Use proportional odds model for ordinal person_dr (0/1/2)
 custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
@@ -359,8 +370,14 @@ custom_methods["PRP_flag"] <- "logreg"  # Binary - likely complete
 # Check predictor matrix (which variables predict which)
 pred_matrix <- mice_dry$predictorMatrix
 
-# Mark e_mrn_deidentified as cluster variable for 2-level imputation
-# -2 indicates this is the cluster ID (patient ID)
+# Mark e_mrn_deidentified as cluster variable
+# -2 indicates this is the cluster ID (patient ID) for 2-level imputation
+# This is REQUIRED for 2l.pmm to work properly
+# The 2l.pmm method from miceadds:
+# - Uses linear mixed models (lmer) to model the multilevel structure
+# - Preserves within-patient correlation between eyes
+# - Obtains PMM donors across all clusters by default
+# - Properly accounts for the hierarchical data structure
 pred_matrix[, "e_mrn_deidentified"] <- -2
 pred_matrix["e_mrn_deidentified", ] <- 0  # Don't predict the cluster ID itself
 pred_matrix[, "row_id"] <- 0
