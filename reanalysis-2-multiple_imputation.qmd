@@ -253,7 +253,11 @@ vars_always_predict <- c(
   "person_dr",              # DR severity - key clinical variable
   "anti_VEGF",              # Key treatment
   "focal_laser_flag",       # Treatment
-  "PRP_flag"                # Treatment
+  "PRP_flag",               # Treatment
+  "glaucoma_bef_hitplus_cat",  # Ocular comorbidity
+  "otherretina_bef_hitplus_cat", # Ocular comorbidity
+  "catsurg_before_hitplus_cat",  # Cataract surgery
+  "fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr" # Fellow-eye predictors
 )
 
 # Variables that should never be predictors
@@ -307,6 +311,9 @@ if ("person_dr" %in% rownames(pred_matrix)) {
   if ("CCI" %in% colnames(pred_matrix)) pred_matrix["person_dr", "CCI"] <- 1
   if ("DCSI" %in% colnames(pred_matrix)) pred_matrix["person_dr", "DCSI"] <- 1
   if ("glaucoma_bef_hitplus_cat" %in% colnames(pred_matrix)) pred_matrix["person_dr", "glaucoma_bef_hitplus_cat"] <- 1
+  if ("otherretina_bef_hitplus_cat" %in% colnames(pred_matrix)) pred_matrix["person_dr", "otherretina_bef_hitplus_cat"] <- 1
+  if ("catsurg_before_hitplus_cat" %in% colnames(pred_matrix)) pred_matrix["person_dr", "catsurg_before_hitplus_cat"] <- 1
+  if ("fellow_dr" %in% colnames(pred_matrix)) pred_matrix["person_dr", "fellow_dr"] <- 1
 }
 
 # Treatment variables should predict each other (treatment patterns)
@@ -348,24 +355,28 @@ for (va in c("intermediate_VA_logMAR", "outcome_VA_logMAR")) {
   }
 }
 
-# Fellow-eye predictors with weight=2 for stronger influence
+# Fellow-eye predictors: allow them to predict VA and DR
 fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr")
 for (v in fellow_vars) {
   if (v %in% rownames(pred_matrix)) {
     pred_matrix[v, ] <- 0
   }
 }
-if ("fellow_baseline_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
+if ("fellow_baseline_VA" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
+if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
+if ("fellow_outcome_VA" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
+if ("fellow_dr" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) pred_matrix["person_dr", "fellow_dr"] <- 1
+
+# Ocular comorbidities and cataract surgery predict VA timepoints
+for (va in c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR")) {
+  for (ov in c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", "catsurg_before_hitplus_cat")) {
+    if (va %in% rownames(pred_matrix) && ov %in% colnames(pred_matrix)) pred_matrix[va, ov] <- 1
+  }
 }
-if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
-}
-if ("fellow_outcome_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
-}
-if ("fellow_dr" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) {
-  pred_matrix["person_dr", "fellow_dr"] <- 1
+
+# Exposure predicts VA timepoints (lapse history)
+for (va in c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR")) {
+  if (va %in% rownames(pred_matrix) && "ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix[va, "ever_lapse_binary"] <- 1
 }
 
 log_message("Predictor matrix configured with temporal constraints")
