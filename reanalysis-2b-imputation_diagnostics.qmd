@@ -116,8 +116,12 @@ baseline_chars <- df_original |>
     pct_anti_VEGF = round(100 * mean(anti_VEGF == 1, na.rm = TRUE), 1),
     pct_PRP = round(100 * mean(PRP_flag == 1, na.rm = TRUE), 1),
     
-    # Lapse status
-    pct_lapsed = round(100 * mean(ever_lapse_binary == 1, na.rm = TRUE), 1),
+    # Lapse status - distinguish between observed and missing
+    n_lapse_observed = sum(!is.na(person_ever_lapse)),
+    n_lapse_missing = sum(is.na(person_ever_lapse)),
+    pct_lapse_missing = round(100 * n_lapse_missing / n(), 1),
+    # Among those with observed lapse status
+    pct_lapsed_observed = round(100 * mean(ever_lapse_binary == 1, na.rm = TRUE), 1),
     
     .groups = "drop"
   )
@@ -125,6 +129,75 @@ baseline_chars <- df_original |>
 kable(baseline_chars |> 
         mutate(across(where(is.numeric), ~round(., 2))),
       caption = "Baseline characteristics by imputation group")
+```
+
+## Lapse Status Missingness Analysis
+
+```{r lapse-missingness}
+# Detailed analysis of lapse status by group
+lapse_analysis <- df_original |>
+  group_by(imputation_group) |>
+  summarise(
+    n_total = n(),
+    
+    # Lapse status availability
+    n_lapse_known = sum(!is.na(person_ever_lapse)),
+    n_lapse_missing = sum(is.na(person_ever_lapse)),
+    pct_lapse_missing = round(100 * n_lapse_missing / n_total, 1),
+    
+    # Among those with known lapse status
+    n_lapsed_if_known = sum(person_ever_lapse == TRUE, na.rm = TRUE),
+    n_not_lapsed_if_known = sum(person_ever_lapse == FALSE, na.rm = TRUE),
+    pct_lapsed_if_known = round(100 * n_lapsed_if_known / n_lapse_known, 1),
+    
+    # Overall lapse rate (including imputed - ever_lapse_binary should be complete)
+    pct_lapsed_overall = round(100 * mean(ever_lapse_binary == 1), 1),
+    
+    .groups = "drop"
+  )
+
+kable(lapse_analysis,
+      col.names = c("Group", "N Total", "N Lapse Known", "N Lapse Missing", 
+                    "% Lapse Missing", "N Lapsed (if known)", "N Not Lapsed (if known)",
+                    "% Lapsed (if known)", "% Lapsed (overall)"),
+      caption = "Lapse status availability and rates by imputation group")
+
+# Cross-tabulation of outcome availability vs lapse status
+outcome_by_lapse <- df_original |>
+  mutate(
+    has_outcome = !is.na(outcome_VA_logMAR),
+    lapse_known = !is.na(person_ever_lapse)
+  ) |>
+  group_by(lapse_known, has_outcome) |>
+  summarise(
+    n = n(),
+    pct_of_total = round(100 * n / nrow(df_original), 1),
+    # Among those with known lapse status
+    pct_lapsed = round(100 * mean(ever_lapse_binary == 1, na.rm = TRUE), 1),
+    .groups = "drop"
+  )
+
+kable(outcome_by_lapse,
+      caption = "Relationship between outcome availability and lapse status knowledge")
+
+# Key insight: Check if missing outcomes correlate with lapse
+missing_outcome_lapse <- df_original |>
+  filter(!is.na(person_ever_lapse)) |>  # Only those with known lapse status
+  group_by(ever_lapse_binary) |>
+  summarise(
+    n = n(),
+    n_missing_outcome = sum(is.na(outcome_VA_logMAR)),
+    pct_missing_outcome = round(100 * n_missing_outcome / n, 1),
+    .groups = "drop"
+  ) |>
+  mutate(
+    lapse_status = ifelse(ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
+  ) |>
+  select(lapse_status, n, n_missing_outcome, pct_missing_outcome)
+
+kable(missing_outcome_lapse,
+      col.names = c("Lapse Status", "N", "N Missing Outcome", "% Missing Outcome"),
+      caption = "Outcome missingness by known lapse status")
 ```
 
 ## Calculate Change Scores
@@ -386,6 +459,102 @@ grid.arrange(p1_detailed, p2_detailed, ncol = 2)
 
 # Then show additional comparisons
 grid.arrange(p3, p4, ncol = 2)
+```
+
+## Clinical Trajectory by Lapse Status
+
+```{r trajectory-by-lapse}
+# Analyze vision changes by lapse status (across all imputation groups)
+trajectory_by_lapse <- changes_df |>
+  filter(!is.na(change_baseline_to_outcome)) |>
+  group_by(ever_lapse_binary, imputation_group) |>
+  summarise(
+    n = n(),
+    mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
+    sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
+    median_change = median(change_baseline_to_outcome, na.rm = TRUE),
+    pct_improved = round(100 * mean(outcome_direction == "Improved", na.rm = TRUE), 1),
+    pct_stable = round(100 * mean(outcome_direction == "Stable", na.rm = TRUE), 1),
+    pct_worsened = round(100 * mean(outcome_direction == "Worsened", na.rm = TRUE), 1),
+    .groups = "drop"
+  ) |>
+  mutate(
+    lapse_status = ifelse(ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
+  ) |>
+  select(-ever_lapse_binary) |>
+  arrange(imputation_group, lapse_status)
+
+kable(trajectory_by_lapse |>
+        mutate(across(where(is.numeric) & !n, ~round(., 3))),
+      caption = "Vision trajectories by lapse status and imputation group")
+
+# Overall comparison (pooled across groups)
+overall_by_lapse <- changes_df |>
+  filter(!is.na(change_baseline_to_outcome)) |>
+  group_by(ever_lapse_binary) |>
+  summarise(
+    n = n(),
+    mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
+    median_change = median(change_baseline_to_outcome, na.rm = TRUE),
+    pct_improved = round(100 * mean(outcome_direction == "Improved", na.rm = TRUE), 1),
+    pct_worsened = round(100 * mean(outcome_direction == "Worsened", na.rm = TRUE), 1),
+    .groups = "drop"
+  ) |>
+  mutate(
+    lapse_status = ifelse(ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
+  ) |>
+  select(lapse_status, everything(), -ever_lapse_binary)
+
+kable(overall_by_lapse |>
+        mutate(across(where(is.numeric) & !n, ~round(., 3))),
+      caption = "Overall vision trajectories by lapse status (pooled across all groups)")
+
+# Statistical test
+lapse_test <- t.test(change_baseline_to_outcome ~ ever_lapse_binary, data = changes_df)
+
+cat("T-test comparing vision changes between lapsed and not lapsed patients:\n")
+cat(sprintf("Mean difference: %.3f logMAR units\n", diff(lapse_test$estimate)))
+cat(sprintf("95%% CI: [%.3f, %.3f]\n", lapse_test$conf.int[1], lapse_test$conf.int[2]))
+cat(sprintf("p-value: %.4f\n", lapse_test$p.value))
+
+# Visualization
+p_lapse <- ggplot(changes_df |> filter(!is.na(change_baseline_to_outcome)),
+                  aes(x = factor(ever_lapse_binary, labels = c("Not Lapsed", "Lapsed")),
+                      y = change_baseline_to_outcome,
+                      fill = factor(ever_lapse_binary))) +
+  geom_boxplot(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  facet_wrap(~imputation_group) +
+  scale_fill_manual(values = c("0" = "#2E86AB", "1" = "#A23B72")) +
+  labs(
+    title = "Vision Changes by Lapse Status Across Imputation Groups",
+    subtitle = "Positive values indicate vision worsening",
+    x = "Lapse Status",
+    y = "Change in logMAR"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_lapse)
+
+# Check if lapsed patients have paradoxically better outcomes
+paradox_check <- trajectory_by_lapse |>
+  group_by(imputation_group) |>
+  summarise(
+    lapsed_mean = mean_change[lapse_status == "Lapsed"],
+    not_lapsed_mean = mean_change[lapse_status == "Not Lapsed"],
+    difference = lapsed_mean - not_lapsed_mean,
+    paradoxical = difference < 0,  # Negative means lapsed have better outcomes
+    interpretation = ifelse(
+      difference < -0.05, "Lapsed have notably better vision",
+      ifelse(difference > 0.05, "Lapsed have worse vision (expected)",
+             "Similar outcomes")
+    ),
+    .groups = "drop"
+  )
+
+kable(paradox_check,
+      caption = "Clinical plausibility check: Do lapsed patients have worse vision outcomes?")
 ```
 
 ## Directional Change Analysis
@@ -811,6 +980,57 @@ for (finding in key_findings) {
 }
 ```
 
+### Key Insights on Lapse Status and Outcomes
+
+```{r lapse-insights}
+# Summarize key findings about lapse status
+cat("#### Lapse Status Missingness:\n\n")
+
+# Check if lapse status is mostly observed
+lapse_missing_overall <- sum(is.na(df_original$person_ever_lapse)) / nrow(df_original) * 100
+if (lapse_missing_overall < 5) {
+  cat(sprintf("- Lapse status is well-documented (only %.1f%% missing)\n", lapse_missing_overall))
+} else {
+  cat(sprintf("- ⚠ Lapse status has %.1f%% missing values\n", lapse_missing_overall))
+}
+
+# Report on high lapse rates in imputed groups
+cat("\n#### Lapse Rates by Group:\n\n")
+for (i in 1:nrow(lapse_analysis)) {
+  group <- lapse_analysis$imputation_group[i]
+  lapse_rate <- lapse_analysis$pct_lapsed_overall[i]
+  cat(sprintf("- %s: %.1f%% lapsed\n", group, lapse_rate))
+}
+
+cat("\n#### Clinical Trajectory Plausibility:\n\n")
+# Check the paradox
+for (i in 1:nrow(paradox_check)) {
+  group <- paradox_check$imputation_group[i]
+  interp <- paradox_check$interpretation[i]
+  diff <- paradox_check$difference[i]
+  cat(sprintf("- %s: %s (difference = %.3f logMAR)\n", group, interp, diff))
+}
+
+cat("\n#### Interpretation:\n\n")
+# High lapse rate interpretation
+if (any(lapse_analysis$pct_lapsed_overall[lapse_analysis$imputation_group != "Observed"] > 95)) {
+  cat("The extremely high lapse rates (>95%) in some imputed groups may actually be accurate:\n")
+  cat("- These patients lack 2-year outcomes precisely BECAUSE they lapsed from care\n")
+  cat("- The missingness mechanism is directly related to the lapse status\n")
+  cat("- This is a form of 'Missing Not At Random' (MNAR) where missingness itself is informative\n\n")
+}
+
+# Clinical trajectory interpretation
+if (any(paradox_check$paradoxical)) {
+  cat("⚠ CONCERN: Lapsed patients show better vision outcomes in some groups:\n")
+  cat("- This violates clinical expectations (lapsed patients typically have worse outcomes)\n")
+  cat("- Possible explanations:\n")
+  cat("  1. Selection bias: Healthier patients may be more likely to skip appointments\n")
+  cat("  2. Imputation artifact: The model may not properly account for the lapse-outcome relationship\n")
+  cat("  3. Data issue: Lapse definition or timing may not align with clinical deterioration\n\n")
+}
+```
+
 ### Potential Concerns
 
 ```{r concerns}
@@ -837,6 +1057,18 @@ if (mean(trajectory_summary$pct_reversals[trajectory_summary$outcome_was_imputed
     "Many imputed trajectories show reversals, which may be clinically implausible.")
 }
 
+# Add new concern about lapse-outcome paradox
+if (any(paradox_check$paradoxical)) {
+  concerns <- c(concerns,
+    "Lapsed patients show better vision outcomes than non-lapsed patients in some groups, which is clinically implausible.")
+}
+
+# Add concern about extreme lapse rates
+if (any(lapse_analysis$pct_lapsed_overall[lapse_analysis$imputation_group != "Observed"] > 95)) {
+  concerns <- c(concerns,
+    "Extremely high lapse rates (>95%) in imputed groups suggest the imputation may be conflating missingness with lapse status.")
+}
+
 if (length(concerns) > 0) {
   cat("\n### Concerns Identified:\n\n")
   for (i in 1:length(concerns)) {
@@ -844,11 +1076,19 @@ if (length(concerns) > 0) {
   }
   
   cat("\n### Recommendations:\n\n")
-  cat("Consider alternative imputation approaches that:\n")
-  cat("1. Incorporate temporal constraints (e.g., monotone imputation)\n")
-  cat("2. Respect clinical boundaries on plausible changes\n")
-  cat("3. Use the intermediate values more directly when available\n")
-  cat("4. Consider parametric models that can incorporate domain knowledge about vision progression\n")
+  cat("Consider the following approaches:\n\n")
+  cat("1. **Sensitivity Analysis**: Compare results using:\n")
+  cat("   - Complete case analysis only\n")
+  cat("   - Imputation restricted to those with intermediate values\n")
+  cat("   - Different assumptions about lapsed patient outcomes\n\n")
+  cat("2. **Alternative Imputation Methods**:\n")
+  cat("   - Use pattern mixture models that explicitly model different trajectories for lapsed vs non-lapsed\n")
+  cat("   - Implement bounded imputation that restricts vision changes to clinically plausible ranges\n")
+  cat("   - Consider worst-case imputation for lapsed patients (assume deterioration)\n\n")
+  cat("3. **Reframe the Analysis**:\n")
+  cat("   - Treat missing outcomes as a competing risk rather than missing data\n")
+  cat("   - Focus on the population that remained in care (per-protocol analysis)\n")
+  cat("   - Use inverse probability weighting to account for differential dropout\n\n")
 } else {
   cat("\n### Conclusion:\n")
   cat("The imputation procedure appears to be producing clinically plausible values that are similar to observed outcomes.\n")
