@@ -130,10 +130,15 @@ kable(baseline_chars |>
 ## Calculate Change Scores
 
 ```{r calculate-changes}
+# Add row identifier to original data for proper merging
+df_original <- df_original |>
+  mutate(row_id = row_number())
+
 # Function to calculate change scores for a single imputed dataset
 calculate_change_scores <- function(imp_data, original_data) {
   imp_data |>
     mutate(
+      row_id = row_number(),
       # Add imputation status from original data
       outcome_was_imputed = original_data$outcome_was_imputed,
       had_intermediate = original_data$had_intermediate,
@@ -480,10 +485,10 @@ print(p_direction)
 This section examines whether baseline characteristics (like CCI) predict the magnitude of change, which might explain differences between groups.
 
 ```{r baseline-predictors}
-# Merge baseline characteristics with change scores
+# Merge baseline characteristics with change scores using row_id (already added earlier)
 analysis_df <- changes_df |>
-  left_join(df_original |> select(CCI, DCSI, age, baseline_VA_logMAR), 
-            by = c("baseline_VA_logMAR"))
+  left_join(df_original |> select(row_id, CCI, DCSI, age), 
+            by = "row_id")
 
 # Compare baseline predictors by imputation group
 predictor_summary <- analysis_df |>
