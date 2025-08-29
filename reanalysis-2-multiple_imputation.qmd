@@ -247,8 +247,13 @@ vars_always_predict <- c(
   "outcome_VA_logMAR",      # Key outcome
   "age",                    # Demographics
   "gender_cat",
+  "race_ethnic_cat",        # Demographics
+  "insurance_cat",          # Demographics/SES
   "CCI", "DCSI",           # Comorbidities
-  "anti_VEGF"              # Key treatment
+  "person_dr",              # DR severity - key clinical variable
+  "anti_VEGF",              # Key treatment
+  "focal_laser_flag",       # Treatment
+  "PRP_flag"                # Treatment
 )
 
 # Variables that should never be predictors
@@ -257,11 +262,13 @@ vars_never_predict <- c(
 )
 
 # Generate predictor matrix using quickpred
+# Lower threshold to 0.05 to capture more predictive relationships
+# This includes variables with correlations >= 0.05 (R^2 >= 0.0025)
 pred_matrix <- quickpred(
   df_mice, 
   exclude = vars_never_predict,
   include = vars_always_predict,
-  mincor = 0.10,  # Minimum correlation for inclusion
+  mincor = 0.05,  # Lowered from 0.10 to include more predictors
   method = "pearson"
 )
 
@@ -284,7 +291,35 @@ pred_matrix["baseline_VA_logMAR", "outcome_VA_logMAR"] <- 0
 pred_matrix["baseline_VA_logMAR", "intermediate_VA_logMAR"] <- 0
 pred_matrix["intermediate_VA_logMAR", "outcome_VA_logMAR"] <- 0
 
-# Fellow-eye predictors
+# Add theoretically important relationships even if correlation is low
+# Demographics should predict each other
+demographic_vars <- c("age", "gender_cat", "race_ethnic_cat", "insurance_cat")
+for (v1 in demographic_vars) {
+  for (v2 in demographic_vars) {
+    if (v1 != v2 && v1 %in% rownames(pred_matrix) && v2 %in% colnames(pred_matrix)) {
+      pred_matrix[v1, v2] <- 1
+    }
+  }
+}
+
+# Comorbidities should predict DR severity and vice versa
+if ("person_dr" %in% rownames(pred_matrix)) {
+  if ("CCI" %in% colnames(pred_matrix)) pred_matrix["person_dr", "CCI"] <- 1
+  if ("DCSI" %in% colnames(pred_matrix)) pred_matrix["person_dr", "DCSI"] <- 1
+  if ("glaucoma_bef_hitplus_cat" %in% colnames(pred_matrix)) pred_matrix["person_dr", "glaucoma_bef_hitplus_cat"] <- 1
+}
+
+# Treatment variables should predict each other (treatment patterns)
+treatment_vars <- c("anti_VEGF", "focal_laser_flag", "PRP_flag", "other_inject")
+for (v1 in treatment_vars) {
+  for (v2 in treatment_vars) {
+    if (v1 != v2 && v1 %in% rownames(pred_matrix) && v2 %in% colnames(pred_matrix)) {
+      pred_matrix[v1, v2] <- 1
+    }
+  }
+}
+
+# Fellow-eye predictors with weight=2 for stronger influence
 fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr")
 for (v in fellow_vars) {
   if (v %in% rownames(pred_matrix)) {
@@ -292,19 +327,30 @@ for (v in fellow_vars) {
   }
 }
 if ("fellow_baseline_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
+  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 2  # Weight=2
 }
 if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
+  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 2  # Weight=2
 }
 if ("fellow_outcome_VA" %in% colnames(pred_matrix)) {
-  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
+  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 2  # Weight=2
 }
 if ("fellow_dr" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) {
-  pred_matrix["person_dr", "fellow_dr"] <- 1
+  pred_matrix["person_dr", "fellow_dr"] <- 2  # Weight=2
 }
 
 log_message("Predictor matrix configured with temporal constraints")
+
+# Print summary of predictor counts for each variable
+pred_counts <- data.frame(
+  Variable = rownames(pred_matrix),
+  N_Predictors = rowSums(pred_matrix > 0),
+  N_Predicting = colSums(pred_matrix > 0)[rownames(pred_matrix)]
+)
+pred_counts <- pred_counts[order(-pred_counts$N_Predictors), ]
+
+log_message("\nTop variables by number of predictors:")
+print(head(pred_counts, 15))
 ```
 
 ## Run Imputation
