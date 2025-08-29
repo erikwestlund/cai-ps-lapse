@@ -59,27 +59,72 @@ log_message(paste0("Total observations: ", nrow(df_original)))
 # "submitted" = has true 2-year outcome
 # "excluded" = lacks true 2-year outcome (these were imputed)
 
-# Create indicator for which outcomes were imputed
+# Create more nuanced grouping
 df_original <- df_original |>
   mutate(
     outcome_was_imputed = cohort_id == "excluded",
-    had_intermediate = !is.na(intermediate_VA_logMAR)
+    had_intermediate = !is.na(intermediate_VA_logMAR),
+    
+    # Create detailed imputation groups
+    imputation_group = case_when(
+      !outcome_was_imputed ~ "Observed",
+      outcome_was_imputed & had_intermediate ~ "Imputed (with intermediate)",
+      outcome_was_imputed & !had_intermediate ~ "Imputed (no intermediate)",
+      TRUE ~ "Unknown"
+    ),
+    imputation_group = factor(imputation_group, 
+                             levels = c("Observed", 
+                                       "Imputed (with intermediate)", 
+                                       "Imputed (no intermediate)"))
   )
 
 # Summary of imputation status
 imputation_summary <- df_original |>
-  group_by(outcome_was_imputed) |>
+  group_by(imputation_group) |>
   summarise(
     n = n(),
     pct = round(100 * n / nrow(df_original), 1),
     had_baseline = sum(!is.na(baseline_VA_logMAR)),
-    had_intermediate = sum(had_intermediate),
+    pct_baseline = round(100 * had_baseline / n, 1),
     .groups = "drop"
   )
 
 kable(imputation_summary,
-      col.names = c("Outcome Imputed", "N", "%", "Has Baseline", "Has Intermediate"),
-      caption = "Summary of imputation status for outcome VA")
+      col.names = c("Group", "N", "%", "Has Baseline", "% Baseline"),
+      caption = "Detailed breakdown of imputation groups")
+
+# Baseline characteristics by group
+baseline_chars <- df_original |>
+  group_by(imputation_group) |>
+  summarise(
+    # Demographics
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    pct_male = round(100 * mean(gender == "Male", na.rm = TRUE), 1),
+    
+    # Clinical characteristics
+    mean_CCI = mean(CCI, na.rm = TRUE),
+    sd_CCI = sd(CCI, na.rm = TRUE),
+    mean_DCSI = mean(DCSI, na.rm = TRUE),
+    sd_DCSI = sd(DCSI, na.rm = TRUE),
+    
+    # Baseline vision
+    mean_baseline_VA = mean(baseline_VA_logMAR, na.rm = TRUE),
+    sd_baseline_VA = sd(baseline_VA_logMAR, na.rm = TRUE),
+    
+    # Treatment indicators
+    pct_anti_VEGF = round(100 * mean(anti_VEGF == 1, na.rm = TRUE), 1),
+    pct_PRP = round(100 * mean(PRP_flag == 1, na.rm = TRUE), 1),
+    
+    # Lapse status
+    pct_lapsed = round(100 * mean(ever_lapse_binary == 1, na.rm = TRUE), 1),
+    
+    .groups = "drop"
+  )
+
+kable(baseline_chars |> 
+        mutate(across(where(is.numeric), ~round(., 2))),
+      caption = "Baseline characteristics by imputation group")
 ```
 
 ## Calculate Change Scores
@@ -92,6 +137,7 @@ calculate_change_scores <- function(imp_data, original_data) {
       # Add imputation status from original data
       outcome_was_imputed = original_data$outcome_was_imputed,
       had_intermediate = original_data$had_intermediate,
+      imputation_group = original_data$imputation_group,
       
       # Calculate changes
       change_baseline_to_outcome = outcome_VA_logMAR - baseline_VA_logMAR,
@@ -134,7 +180,31 @@ changes_df <- all_changes[[1]]
 ### Summary Statistics
 
 ```{r summary-stats}
-# Compare change scores between imputed and observed
+# Compare change scores across all three groups
+change_summary_detailed <- changes_df |>
+  group_by(imputation_group) |>
+  summarise(
+    n = n(),
+    mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
+    sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
+    median_change = median(change_baseline_to_outcome, na.rm = TRUE),
+    q25_change = quantile(change_baseline_to_outcome, 0.25, na.rm = TRUE),
+    q75_change = quantile(change_baseline_to_outcome, 0.75, na.rm = TRUE),
+    min_change = min(change_baseline_to_outcome, na.rm = TRUE),
+    max_change = max(change_baseline_to_outcome, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    iqr_change = q75_change - q25_change
+  )
+
+kable(change_summary_detailed |> 
+        select(imputation_group, n, mean_change, sd_change, median_change, iqr_change, min_change, max_change),
+      digits = 3,
+      col.names = c("Group", "N", "Mean", "SD", "Median", "IQR", "Min", "Max"),
+      caption = "Distribution of vision changes (outcome - baseline) by detailed imputation group")
+
+# Also keep simplified version for compatibility
 change_summary <- changes_df |>
   group_by(outcome_was_imputed) |>
   summarise(
@@ -153,30 +223,47 @@ change_summary <- changes_df |>
     group = ifelse(outcome_was_imputed, "Imputed", "Observed")
   )
 
-kable(change_summary |> 
-        select(group, n, mean_change, sd_change, median_change, iqr_change, min_change, max_change),
-      digits = 3,
-      col.names = c("Group", "N", "Mean", "SD", "Median", "IQR", "Min", "Max"),
-      caption = "Distribution of vision changes (outcome - baseline) in logMAR units")
+# Statistical tests across three groups
+anova_test <- aov(change_baseline_to_outcome ~ imputation_group, data = changes_df)
+anova_summary <- summary(anova_test)
 
-# Statistical test for difference in distributions
+# Pairwise comparisons
+pairwise_tests <- pairwise.t.test(changes_df$change_baseline_to_outcome, 
+                                  changes_df$imputation_group,
+                                  p.adjust.method = "bonferroni")
+
+# Format ANOVA results
+anova_results <- data.frame(
+  Test = "One-way ANOVA",
+  F_Statistic = anova_summary[[1]]$`F value`[1],
+  df1 = anova_summary[[1]]$Df[1],
+  df2 = anova_summary[[1]]$Df[2],
+  P_Value = anova_summary[[1]]$`Pr(>F)`[1],
+  Interpretation = ifelse(anova_summary[[1]]$`Pr(>F)`[1] < 0.05, 
+                         "Groups differ significantly", "No significant difference")
+)
+
+kable(anova_results, digits = 4, caption = "ANOVA comparing change distributions across three groups")
+
+# Format pairwise results
+pairwise_matrix <- pairwise_tests$p.value
+pairwise_df <- data.frame(
+  Comparison = c("Imputed (with intermediate) vs Observed",
+                "Imputed (no intermediate) vs Observed",
+                "Imputed (no intermediate) vs Imputed (with intermediate)"),
+  P_Value = c(pairwise_matrix[1,1], pairwise_matrix[2,1], pairwise_matrix[2,2]),
+  Significant = ifelse(c(pairwise_matrix[1,1], pairwise_matrix[2,1], pairwise_matrix[2,2]) < 0.05,
+                      "Yes", "No")
+)
+
+kable(pairwise_df, digits = 4, caption = "Pairwise comparisons (Bonferroni adjusted)")
+
+# Also do simplified tests for backward compatibility
 t_test <- t.test(change_baseline_to_outcome ~ outcome_was_imputed, data = changes_df)
 ks_test <- ks.test(
   changes_df$change_baseline_to_outcome[changes_df$outcome_was_imputed],
   changes_df$change_baseline_to_outcome[!changes_df$outcome_was_imputed]
 )
-
-test_results <- data.frame(
-  Test = c("Welch's t-test", "Kolmogorov-Smirnov"),
-  Statistic = c(t_test$statistic, ks_test$statistic),
-  P_Value = c(t_test$p.value, ks_test$p.value),
-  Interpretation = c(
-    ifelse(t_test$p.value < 0.05, "Means differ significantly", "Means similar"),
-    ifelse(ks_test$p.value < 0.05, "Distributions differ significantly", "Distributions similar")
-  )
-)
-
-kable(test_results, digits = 4, caption = "Statistical tests comparing change distributions")
 ```
 
 ### Visualization of Change Distributions
@@ -185,7 +272,11 @@ kable(test_results, digits = 4, caption = "Statistical tests comparing change di
 #| fig-height: 8
 #| fig-width: 12
 
-# Prepare data for plotting
+# Prepare data for plotting - using detailed groups
+plot_data_detailed <- changes_df |>
+  filter(!is.na(change_baseline_to_outcome))
+
+# Also prepare simplified version for some plots
 plot_data <- changes_df |>
   mutate(
     Group = ifelse(outcome_was_imputed, "Imputed", "Observed"),
@@ -193,7 +284,29 @@ plot_data <- changes_df |>
   ) |>
   filter(!is.na(change_baseline_to_outcome))
 
-# 1. Density plots
+# 1. Density plots - detailed groups
+p1_detailed <- ggplot(plot_data_detailed, aes(x = change_baseline_to_outcome, fill = imputation_group)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  geom_vline(data = change_summary_detailed, 
+             aes(xintercept = mean_change, color = imputation_group),
+             linetype = "solid", size = 1) +
+  scale_fill_manual(values = c("Observed" = "#2E86AB", 
+                              "Imputed (with intermediate)" = "#A23B72",
+                              "Imputed (no intermediate)" = "#F18F01")) +
+  scale_color_manual(values = c("Observed" = "#2E86AB", 
+                               "Imputed (with intermediate)" = "#A23B72",
+                               "Imputed (no intermediate)" = "#F18F01")) +
+  labs(
+    title = "Distribution of Vision Changes by Detailed Group",
+    subtitle = "Vertical lines show group means",
+    x = "Change in logMAR (positive = worsening)",
+    y = "Density"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# 1b. Simplified density plot (for comparison)
 p1 <- ggplot(plot_data, aes(x = change_baseline_to_outcome, fill = Group)) +
   geom_density(alpha = 0.5) +
   geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
@@ -203,7 +316,7 @@ p1 <- ggplot(plot_data, aes(x = change_baseline_to_outcome, fill = Group)) +
   scale_fill_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
   scale_color_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
   labs(
-    title = "Distribution of Vision Changes",
+    title = "Distribution of Vision Changes (Simplified)",
     subtitle = "Vertical lines show group means",
     x = "Change in logMAR (positive = worsening)",
     y = "Density"
@@ -211,19 +324,22 @@ p1 <- ggplot(plot_data, aes(x = change_baseline_to_outcome, fill = Group)) +
   theme_minimal() +
   theme(legend.position = "bottom")
 
-# 2. Boxplots
-p2 <- ggplot(plot_data, aes(x = Group, y = change_baseline_to_outcome, fill = Group)) +
+# 2. Boxplots - detailed groups
+p2_detailed <- ggplot(plot_data_detailed, aes(x = imputation_group, y = change_baseline_to_outcome, fill = imputation_group)) +
   geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
-  scale_fill_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
+  scale_fill_manual(values = c("Observed" = "#2E86AB", 
+                              "Imputed (with intermediate)" = "#A23B72",
+                              "Imputed (no intermediate)" = "#F18F01")) +
   labs(
-    title = "Vision Changes by Group",
+    title = "Vision Changes by Detailed Group",
     subtitle = "Box shows IQR, whiskers extend to 1.5*IQR",
     y = "Change in logMAR (positive = worsening)",
     x = ""
   ) +
   theme_minimal() +
-  theme(legend.position = "none")
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
 
 # 3. Q-Q plot
 observed_changes <- plot_data$change_baseline_to_outcome[plot_data$Group == "Observed"]
@@ -260,14 +376,40 @@ p4 <- ggplot(plot_data, aes(x = change_baseline_to_outcome, color = Group)) +
   theme_minimal() +
   theme(legend.position = "bottom")
 
-# Arrange plots
-grid.arrange(p1, p2, p3, p4, ncol = 2)
+# Arrange plots - show detailed version first
+grid.arrange(p1_detailed, p2_detailed, ncol = 2)
+
+# Then show additional comparisons
+grid.arrange(p3, p4, ncol = 2)
 ```
 
 ## Directional Change Analysis
 
 ```{r directional-changes}
-# Compare proportions of improvement/stable/worsening
+# Compare proportions across detailed groups
+direction_summary_detailed <- changes_df |>
+  filter(!is.na(outcome_direction)) |>
+  group_by(imputation_group, outcome_direction) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(imputation_group) |>
+  mutate(
+    total = sum(n),
+    pct = round(100 * n / total, 1)
+  )
+
+# Reshape for display
+direction_wide_detailed <- direction_summary_detailed |>
+  select(imputation_group, outcome_direction, n, pct) |>
+  pivot_wider(
+    names_from = outcome_direction,
+    values_from = c(n, pct),
+    values_fill = list(n = 0, pct = 0)
+  )
+
+kable(direction_wide_detailed,
+      caption = "Direction of vision change by detailed imputation group")
+
+# Also create simplified version for backward compatibility
 direction_summary <- changes_df |>
   filter(!is.na(outcome_direction)) |>
   group_by(outcome_was_imputed, outcome_direction) |>
@@ -331,6 +473,78 @@ p_direction <- ggplot(direction_plot_data,
   theme(legend.position = "bottom")
 
 print(p_direction)
+```
+
+## Baseline Predictors of Change
+
+This section examines whether baseline characteristics (like CCI) predict the magnitude of change, which might explain differences between groups.
+
+```{r baseline-predictors}
+# Merge baseline characteristics with change scores
+analysis_df <- changes_df |>
+  left_join(df_original |> select(CCI, DCSI, age, baseline_VA_logMAR), 
+            by = c("baseline_VA_logMAR"))
+
+# Compare baseline predictors by imputation group
+predictor_summary <- analysis_df |>
+  group_by(imputation_group) |>
+  summarise(
+    n = n(),
+    # Correlation between CCI and change
+    cor_CCI_change = cor(CCI, change_baseline_to_outcome, use = "complete.obs"),
+    # Correlation between baseline VA and change  
+    cor_baseline_change = cor(baseline_VA_logMAR, change_baseline_to_outcome, use = "complete.obs"),
+    # Mean change by CCI tercile
+    mean_change_low_CCI = mean(change_baseline_to_outcome[CCI <= quantile(CCI, 0.33, na.rm = TRUE)], na.rm = TRUE),
+    mean_change_high_CCI = mean(change_baseline_to_outcome[CCI >= quantile(CCI, 0.67, na.rm = TRUE)], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+kable(predictor_summary |> mutate(across(where(is.numeric), ~round(., 3))),
+      caption = "Relationship between baseline characteristics and vision change")
+
+# Regression model to check if group differences persist after adjustment
+adj_model <- lm(change_baseline_to_outcome ~ imputation_group + CCI + DCSI + age + baseline_VA_logMAR,
+                data = analysis_df)
+
+adj_summary <- summary(adj_model)
+adj_coef <- data.frame(
+  Variable = rownames(adj_summary$coefficients),
+  Estimate = adj_summary$coefficients[,1],
+  SE = adj_summary$coefficients[,2],
+  P_Value = adj_summary$coefficients[,4]
+) |>
+  filter(grepl("imputation_group", Variable))
+
+kable(adj_coef |> mutate(across(where(is.numeric), ~round(., 4))),
+      caption = "Group differences after adjusting for baseline characteristics")
+
+# Visualization: Change by CCI tertile and group
+analysis_df <- analysis_df |>
+  mutate(
+    CCI_tertile = cut(CCI, 
+                     breaks = quantile(CCI, c(0, 0.33, 0.67, 1), na.rm = TRUE),
+                     labels = c("Low", "Medium", "High"),
+                     include.lowest = TRUE)
+  )
+
+p_cci <- ggplot(analysis_df |> filter(!is.na(CCI_tertile)), 
+                aes(x = CCI_tertile, y = change_baseline_to_outcome, fill = imputation_group)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+  facet_wrap(~ imputation_group, scales = "free_x") +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_fill_manual(values = c("Observed" = "#2E86AB", 
+                              "Imputed (with intermediate)" = "#A23B72",
+                              "Imputed (no intermediate)" = "#F18F01")) +
+  labs(
+    title = "Vision Change by CCI Tertile and Imputation Group",
+    x = "CCI Tertile",
+    y = "Change in logMAR"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_cci)
 ```
 
 ## Clinical Plausibility Checks
