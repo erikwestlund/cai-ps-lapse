@@ -1,0 +1,598 @@
+---
+title: "Reanalysis Step 2b: Multiple Imputation Outcome Diagnostics"
+subtitle: "Assessing plausibility of imputed visual acuity outcomes"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    fig-width: 10
+    fig-height: 6
+---
+
+## Overview
+
+This notebook examines whether our multiple imputation procedure for visual acuity outcomes is producing clinically plausible values. We're particularly concerned about:
+
+1. **Temporal consistency**: Do imputed 2-year outcomes respect the trajectory from baseline through intermediate timepoints?
+2. **Clinical plausibility**: Are changes in vision realistic given what we know about disease progression?
+3. **Distribution similarity**: Do imputed values have similar distributions to observed values?
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+setup_analysis(seed = 2025)
+
+library(mice)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+# Initialize logging
+log_file <- init_log("imputation_diagnostics")
+```
+
+## Load Data
+
+```{r load-data}
+# Load the original data to identify which values were imputed
+df_original <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
+
+# Load the imputed datasets
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_imputations <- length(imputed_datasets)
+
+log_message(paste0("Loaded ", n_imputations, " imputed datasets"))
+log_message(paste0("Total observations: ", nrow(df_original)))
+```
+
+## Identify Imputed vs Observed Outcomes
+
+```{r identify-imputed}
+# In the original data, cohort_id tells us who had observed outcomes
+# "submitted" = has true 2-year outcome
+# "excluded" = lacks true 2-year outcome (these were imputed)
+
+# Create indicator for which outcomes were imputed
+df_original <- df_original |>
+  mutate(
+    outcome_was_imputed = cohort_id == "excluded",
+    had_intermediate = !is.na(intermediate_VA_logMAR)
+  )
+
+# Summary of imputation status
+imputation_summary <- df_original |>
+  group_by(outcome_was_imputed) |>
+  summarise(
+    n = n(),
+    pct = round(100 * n / nrow(df_original), 1),
+    had_baseline = sum(!is.na(baseline_VA_logMAR)),
+    had_intermediate = sum(had_intermediate),
+    .groups = "drop"
+  )
+
+kable(imputation_summary,
+      col.names = c("Outcome Imputed", "N", "%", "Has Baseline", "Has Intermediate"),
+      caption = "Summary of imputation status for outcome VA")
+```
+
+## Calculate Change Scores
+
+```{r calculate-changes}
+# Function to calculate change scores for a single imputed dataset
+calculate_change_scores <- function(imp_data, original_data) {
+  imp_data |>
+    mutate(
+      # Add imputation status from original data
+      outcome_was_imputed = original_data$outcome_was_imputed,
+      had_intermediate = original_data$had_intermediate,
+      
+      # Calculate changes
+      change_baseline_to_outcome = outcome_VA_logMAR - baseline_VA_logMAR,
+      change_baseline_to_intermediate = intermediate_VA_logMAR - baseline_VA_logMAR,
+      change_intermediate_to_outcome = outcome_VA_logMAR - intermediate_VA_logMAR,
+      
+      # Categorize changes (negative = improvement, positive = worsening)
+      # Using 0.1 logMAR as clinically meaningful change (approximately 1 line on eye chart)
+      outcome_direction = case_when(
+        change_baseline_to_outcome < -0.1 ~ "Improved",
+        change_baseline_to_outcome > 0.1 ~ "Worsened",
+        TRUE ~ "Stable"
+      ),
+      
+      # Flag extreme changes (clinically implausible)
+      extreme_improvement = change_baseline_to_outcome < -1.0,  # >10 lines improvement
+      extreme_worsening = change_baseline_to_outcome > 1.5,      # >15 lines worsening
+      
+      # For those with intermediate values, check trajectory consistency
+      trajectory_reversal = case_when(
+        !is.na(change_baseline_to_intermediate) & !is.na(change_intermediate_to_outcome) ~
+          sign(change_baseline_to_intermediate) != sign(change_intermediate_to_outcome),
+        TRUE ~ FALSE
+      )
+    )
+}
+
+# Calculate for all imputed datasets
+all_changes <- list()
+for (i in 1:n_imputations) {
+  all_changes[[i]] <- calculate_change_scores(imputed_datasets[[i]], df_original)
+}
+
+# For summary statistics, use the first imputation as representative
+changes_df <- all_changes[[1]]
+```
+
+## Compare Change Distributions
+
+### Summary Statistics
+
+```{r summary-stats}
+# Compare change scores between imputed and observed
+change_summary <- changes_df |>
+  group_by(outcome_was_imputed) |>
+  summarise(
+    n = n(),
+    mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
+    sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
+    median_change = median(change_baseline_to_outcome, na.rm = TRUE),
+    q25_change = quantile(change_baseline_to_outcome, 0.25, na.rm = TRUE),
+    q75_change = quantile(change_baseline_to_outcome, 0.75, na.rm = TRUE),
+    min_change = min(change_baseline_to_outcome, na.rm = TRUE),
+    max_change = max(change_baseline_to_outcome, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    iqr_change = q75_change - q25_change,
+    group = ifelse(outcome_was_imputed, "Imputed", "Observed")
+  )
+
+kable(change_summary |> 
+        select(group, n, mean_change, sd_change, median_change, iqr_change, min_change, max_change),
+      digits = 3,
+      col.names = c("Group", "N", "Mean", "SD", "Median", "IQR", "Min", "Max"),
+      caption = "Distribution of vision changes (outcome - baseline) in logMAR units")
+
+# Statistical test for difference in distributions
+t_test <- t.test(change_baseline_to_outcome ~ outcome_was_imputed, data = changes_df)
+ks_test <- ks.test(
+  changes_df$change_baseline_to_outcome[changes_df$outcome_was_imputed],
+  changes_df$change_baseline_to_outcome[!changes_df$outcome_was_imputed]
+)
+
+test_results <- data.frame(
+  Test = c("Welch's t-test", "Kolmogorov-Smirnov"),
+  Statistic = c(t_test$statistic, ks_test$statistic),
+  P_Value = c(t_test$p.value, ks_test$p.value),
+  Interpretation = c(
+    ifelse(t_test$p.value < 0.05, "Means differ significantly", "Means similar"),
+    ifelse(ks_test$p.value < 0.05, "Distributions differ significantly", "Distributions similar")
+  )
+)
+
+kable(test_results, digits = 4, caption = "Statistical tests comparing change distributions")
+```
+
+### Visualization of Change Distributions
+
+```{r change-distributions}
+#| fig-height: 8
+#| fig-width: 12
+
+# Prepare data for plotting
+plot_data <- changes_df |>
+  mutate(
+    Group = ifelse(outcome_was_imputed, "Imputed", "Observed"),
+    Group = factor(Group, levels = c("Observed", "Imputed"))
+  ) |>
+  filter(!is.na(change_baseline_to_outcome))
+
+# 1. Density plots
+p1 <- ggplot(plot_data, aes(x = change_baseline_to_outcome, fill = Group)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  geom_vline(data = change_summary, 
+             aes(xintercept = mean_change, color = group),
+             linetype = "solid", size = 1) +
+  scale_fill_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
+  scale_color_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
+  labs(
+    title = "Distribution of Vision Changes",
+    subtitle = "Vertical lines show group means",
+    x = "Change in logMAR (positive = worsening)",
+    y = "Density"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# 2. Boxplots
+p2 <- ggplot(plot_data, aes(x = Group, y = change_baseline_to_outcome, fill = Group)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_fill_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
+  labs(
+    title = "Vision Changes by Group",
+    subtitle = "Box shows IQR, whiskers extend to 1.5*IQR",
+    y = "Change in logMAR (positive = worsening)",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# 3. Q-Q plot
+observed_changes <- plot_data$change_baseline_to_outcome[plot_data$Group == "Observed"]
+imputed_changes <- plot_data$change_baseline_to_outcome[plot_data$Group == "Imputed"]
+
+# Sample to same size for Q-Q plot
+n_min <- min(length(observed_changes), length(imputed_changes))
+qq_data <- data.frame(
+  observed = sort(sample(observed_changes, n_min)),
+  imputed = sort(sample(imputed_changes, n_min))
+)
+
+p3 <- ggplot(qq_data, aes(x = observed, y = imputed)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(
+    title = "Q-Q Plot: Imputed vs Observed Changes",
+    subtitle = "Points should follow red line if distributions are similar",
+    x = "Observed Change Quantiles",
+    y = "Imputed Change Quantiles"
+  ) +
+  theme_minimal()
+
+# 4. Cumulative distribution
+p4 <- ggplot(plot_data, aes(x = change_baseline_to_outcome, color = Group)) +
+  stat_ecdf(size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_color_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
+  labs(
+    title = "Cumulative Distribution of Changes",
+    x = "Change in logMAR",
+    y = "Cumulative Probability"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# Arrange plots
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+## Directional Change Analysis
+
+```{r directional-changes}
+# Compare proportions of improvement/stable/worsening
+direction_summary <- changes_df |>
+  filter(!is.na(outcome_direction)) |>
+  group_by(outcome_was_imputed, outcome_direction) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(outcome_was_imputed) |>
+  mutate(
+    total = sum(n),
+    pct = round(100 * n / total, 1),
+    Group = ifelse(outcome_was_imputed, "Imputed", "Observed")
+  )
+
+# Reshape for display
+direction_wide <- direction_summary |>
+  select(Group, outcome_direction, n, pct) |>
+  pivot_wider(
+    names_from = outcome_direction,
+    values_from = c(n, pct),
+    values_fill = list(n = 0, pct = 0)
+  )
+
+kable(direction_wide,
+      caption = "Direction of vision change by imputation status")
+
+# Chi-square test for independence
+direction_table <- table(changes_df$outcome_was_imputed, changes_df$outcome_direction)
+chi_test <- chisq.test(direction_table)
+
+chi_result <- data.frame(
+  Test = "Chi-square test of independence",
+  Chi_Square = chi_test$statistic,
+  df = chi_test$parameter,
+  P_Value = chi_test$p.value,
+  Interpretation = ifelse(chi_test$p.value < 0.05, 
+                         "Proportions differ between groups",
+                         "Proportions similar between groups")
+)
+
+kable(chi_result, digits = 4)
+
+# Visualization
+direction_plot_data <- direction_summary |>
+  mutate(outcome_direction = factor(outcome_direction, 
+                                   levels = c("Improved", "Stable", "Worsened")))
+
+p_direction <- ggplot(direction_plot_data, 
+                     aes(x = Group, y = pct, fill = outcome_direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = paste0(pct, "%")), 
+           position = position_dodge(width = 0.9),
+           vjust = -0.5) +
+  scale_fill_manual(values = c("Improved" = "#2ca02c", 
+                              "Stable" = "#ff7f0e", 
+                              "Worsened" = "#d62728")) +
+  labs(
+    title = "Direction of Vision Change by Group",
+    y = "Percentage",
+    x = "",
+    fill = "Change Direction"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(p_direction)
+```
+
+## Clinical Plausibility Checks
+
+```{r plausibility}
+# Check for extreme changes
+extreme_summary <- changes_df |>
+  group_by(outcome_was_imputed) |>
+  summarise(
+    n_extreme_improvement = sum(extreme_improvement, na.rm = TRUE),
+    pct_extreme_improvement = round(100 * mean(extreme_improvement, na.rm = TRUE), 2),
+    n_extreme_worsening = sum(extreme_worsening, na.rm = TRUE),
+    pct_extreme_worsening = round(100 * mean(extreme_worsening, na.rm = TRUE), 2),
+    n_any_extreme = sum(extreme_improvement | extreme_worsening, na.rm = TRUE),
+    pct_any_extreme = round(100 * mean(extreme_improvement | extreme_worsening, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) |>
+  mutate(Group = ifelse(outcome_was_imputed, "Imputed", "Observed"))
+
+kable(extreme_summary |> select(Group, everything(), -outcome_was_imputed),
+      caption = "Frequency of clinically extreme changes (>1.0 logMAR improvement or >1.5 worsening)")
+
+# List specific extreme cases
+if (sum(changes_df$extreme_improvement | changes_df$extreme_worsening, na.rm = TRUE) > 0) {
+  extreme_cases <- changes_df |>
+    filter(extreme_improvement | extreme_worsening) |>
+    select(baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR, 
+           change_baseline_to_outcome, outcome_was_imputed) |>
+    mutate(
+      Type = ifelse(change_baseline_to_outcome < -1.0, "Extreme Improvement", "Extreme Worsening"),
+      Imputed = ifelse(outcome_was_imputed, "Yes", "No")
+    ) |>
+    arrange(change_baseline_to_outcome)
+  
+  if (nrow(extreme_cases) <= 20) {
+    kable(extreme_cases |> head(20),
+          digits = 3,
+          caption = "Examples of extreme changes")
+  }
+}
+```
+
+## Trajectory Analysis
+
+For patients with intermediate values, we check if the imputed outcomes respect the temporal trajectory.
+
+```{r trajectory}
+# Focus on those with intermediate values
+trajectory_data <- changes_df |>
+  filter(had_intermediate) |>
+  select(baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR,
+         change_baseline_to_intermediate, change_intermediate_to_outcome,
+         trajectory_reversal, outcome_was_imputed)
+
+# Summary of trajectory consistency
+trajectory_summary <- trajectory_data |>
+  group_by(outcome_was_imputed) |>
+  summarise(
+    n = n(),
+    n_reversals = sum(trajectory_reversal, na.rm = TRUE),
+    pct_reversals = round(100 * mean(trajectory_reversal, na.rm = TRUE), 1),
+    mean_slope_1 = mean(change_baseline_to_intermediate, na.rm = TRUE),
+    mean_slope_2 = mean(change_intermediate_to_outcome, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(Group = ifelse(outcome_was_imputed, "Imputed", "Observed"))
+
+kable(trajectory_summary |> select(Group, everything(), -outcome_was_imputed),
+      digits = 3,
+      caption = "Trajectory analysis for patients with intermediate values")
+
+# Visualization of trajectories
+# Sample some trajectories for visualization
+set.seed(2025)
+n_sample <- min(100, nrow(trajectory_data))
+trajectory_sample <- trajectory_data |>
+  sample_n(n_sample) |>
+  mutate(
+    patient_id = row_number(),
+    Group = ifelse(outcome_was_imputed, "Imputed", "Observed")
+  )
+
+# Reshape for plotting
+trajectory_long <- trajectory_sample |>
+  select(patient_id, Group, baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR) |>
+  pivot_longer(
+    cols = c(baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR),
+    names_to = "timepoint",
+    values_to = "VA_logMAR"
+  ) |>
+  mutate(
+    timepoint = factor(timepoint, 
+                      levels = c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR"),
+                      labels = c("Baseline", "Intermediate", "2 Years"))
+  )
+
+p_trajectory <- ggplot(trajectory_long, aes(x = timepoint, y = VA_logMAR, 
+                                           group = patient_id, color = Group)) +
+  geom_line(alpha = 0.3) +
+  geom_point(alpha = 0.3, size = 0.5) +
+  facet_wrap(~ Group) +
+  scale_color_manual(values = c("Observed" = "#2E86AB", "Imputed" = "#A23B72")) +
+  labs(
+    title = paste0("Sample Trajectories (n=", n_sample, " patients with intermediate values)"),
+    subtitle = "Lines show individual patient trajectories",
+    x = "Timepoint",
+    y = "Visual Acuity (logMAR)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_trajectory)
+```
+
+## Multiple Imputation Variability
+
+Check consistency across multiple imputations.
+
+```{r mi-variability}
+# Calculate change scores for all imputations
+all_change_summaries <- list()
+for (i in 1:n_imputations) {
+  change_data <- all_changes[[i]]
+  
+  summary_i <- change_data |>
+    group_by(outcome_was_imputed) |>
+    summarise(
+      mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
+      sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(imputation = i)
+  
+  all_change_summaries[[i]] <- summary_i
+}
+
+mi_summary <- bind_rows(all_change_summaries)
+
+# Calculate between-imputation variability
+mi_variability <- mi_summary |>
+  group_by(outcome_was_imputed) |>
+  summarise(
+    mean_of_means = mean(mean_change),
+    sd_of_means = sd(mean_change),
+    mean_of_sds = mean(sd_change),
+    sd_of_sds = sd(sd_change),
+    .groups = "drop"
+  ) |>
+  mutate(Group = ifelse(outcome_was_imputed, "Imputed", "Observed"))
+
+kable(mi_variability |> select(Group, everything(), -outcome_was_imputed),
+      digits = 4,
+      caption = "Between-imputation variability in change scores")
+
+# Plot variability across imputations
+p_mi_var <- ggplot(mi_summary, aes(x = imputation, y = mean_change, 
+                                   color = factor(outcome_was_imputed))) +
+  geom_point() +
+  geom_line() +
+  scale_color_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72"),
+                    labels = c("Observed", "Imputed")) +
+  labs(
+    title = "Mean Change Across Imputations",
+    x = "Imputation Number",
+    y = "Mean Change (logMAR)",
+    color = "Group"
+  ) +
+  theme_minimal()
+
+print(p_mi_var)
+```
+
+## Summary and Recommendations
+
+```{r summary}
+# Key findings
+key_findings <- list()
+
+# 1. Check if distributions are similar
+if (ks_test$p.value > 0.05) {
+  key_findings$distribution <- "✓ Change distributions are statistically similar between imputed and observed groups"
+} else {
+  key_findings$distribution <- "⚠ Change distributions differ significantly between groups"
+}
+
+# 2. Check mean differences
+mean_diff <- abs(change_summary$mean_change[2] - change_summary$mean_change[1])
+if (mean_diff < 0.05) {  # Less than 0.5 lines difference
+  key_findings$means <- paste0("✓ Mean changes are similar (difference = ", round(mean_diff, 3), " logMAR)")
+} else {
+  key_findings$means <- paste0("⚠ Mean changes differ by ", round(mean_diff, 3), " logMAR")
+}
+
+# 3. Check variability
+sd_ratio <- change_summary$sd_change[2] / change_summary$sd_change[1]
+if (sd_ratio > 0.8 && sd_ratio < 1.25) {
+  key_findings$variability <- paste0("✓ Similar variability (SD ratio = ", round(sd_ratio, 2), ")")
+} else {
+  key_findings$variability <- paste0("⚠ Different variability (SD ratio = ", round(sd_ratio, 2), ")")
+}
+
+# 4. Check extreme values
+if (max(extreme_summary$pct_any_extreme) < 5) {
+  key_findings$extremes <- "✓ Few extreme values (<5% in both groups)"
+} else {
+  key_findings$extremes <- paste0("⚠ Notable extreme values (", 
+                                  max(extreme_summary$pct_any_extreme), "% in one group)")
+}
+
+# Print findings
+cat("### Key Findings:\n\n")
+for (finding in key_findings) {
+  cat("- ", finding, "\n")
+}
+```
+
+### Potential Concerns
+
+```{r concerns}
+concerns <- character()
+
+# Check for specific issues
+if (ks_test$p.value < 0.05) {
+  concerns <- c(concerns, 
+    "The distribution of changes differs between imputed and observed groups, suggesting the imputation may not be capturing the true distribution.")
+}
+
+if (mean_diff > 0.1) {
+  concerns <- c(concerns,
+    "The mean change differs by more than 1 line on the eye chart, which may be clinically meaningful.")
+}
+
+if (sd_ratio > 1.5 || sd_ratio < 0.67) {
+  concerns <- c(concerns,
+    "The variability in imputed values is substantially different from observed values.")
+}
+
+if (mean(trajectory_summary$pct_reversals[trajectory_summary$outcome_was_imputed]) > 30) {
+  concerns <- c(concerns,
+    "Many imputed trajectories show reversals, which may be clinically implausible.")
+}
+
+if (length(concerns) > 0) {
+  cat("\n### Concerns Identified:\n\n")
+  for (i in 1:length(concerns)) {
+    cat(i, ". ", concerns[i], "\n\n")
+  }
+  
+  cat("\n### Recommendations:\n\n")
+  cat("Consider alternative imputation approaches that:\n")
+  cat("1. Incorporate temporal constraints (e.g., monotone imputation)\n")
+  cat("2. Respect clinical boundaries on plausible changes\n")
+  cat("3. Use the intermediate values more directly when available\n")
+  cat("4. Consider parametric models that can incorporate domain knowledge about vision progression\n")
+} else {
+  cat("\n### Conclusion:\n")
+  cat("The imputation procedure appears to be producing clinically plausible values that are similar to observed outcomes.\n")
+}
+
+# Finalize logging
+log_message("Imputation diagnostics completed")
+final_log <- finalize_log(success = TRUE)
+```
+
+**Log file:** `r final_log`
