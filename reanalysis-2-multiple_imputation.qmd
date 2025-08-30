@@ -61,6 +61,152 @@ log_message(paste0("Loaded ", nrow(df_for_imputation), " observations"))
 log_message(paste0("Unique patients: ", n_distinct(df_for_imputation$e_mrn_deidentified)))
 ```
 
+## Create Fellow Eye Variables
+
+```{r create-fellow-eye-vars}
+# Create fellow eye variables by pairing eyes within patients
+# This leverages correlation between eyes to improve imputation
+
+# First, check data structure and create pairing
+df_with_fellow <- df_for_imputation |>
+  group_by(e_mrn_deidentified) |>
+  mutate(
+    n_eyes = n(),
+    eye_index = row_number(),
+    
+    # Verify no patient has >2 eyes
+    max_eyes_check = max(n_eyes)
+  ) |>
+  ungroup()
+
+# Data check: Ensure no patient has >2 eyes
+if (max(df_with_fellow$max_eyes_check) > 2) {
+  stop("Found patients with >2 eyes. Check data quality.")
+}
+log_message(paste0("Maximum eyes per patient: ", max(df_with_fellow$max_eyes_check)))
+
+# Create fellow variables
+df_with_fellow <- df_with_fellow |>
+  group_by(e_mrn_deidentified) |>
+  mutate(
+    # Fellow eye values (NA for single-eye patients)
+    # Use [3 - eye_index] trick: eye 1 gets eye 2, eye 2 gets eye 1
+    fellow_baseline_VA = if_else(n_eyes == 2, 
+                                 baseline_VA_logMAR[3 - eye_index], 
+                                 NA_real_),
+    fellow_intermediate_VA = if_else(n_eyes == 2,
+                                    intermediate_VA_logMAR[3 - eye_index],
+                                    NA_real_),
+    fellow_outcome_VA = if_else(n_eyes == 2,
+                               outcome_VA_logMAR[3 - eye_index],
+                               NA_real_)
+    # Note: fellow_dr not needed since person_dr is already consistent within patients
+  ) |>
+  ungroup() |>
+  select(-max_eyes_check, -eye_index)
+
+# Patient distribution summary
+patient_summary <- df_with_fellow |>
+  group_by(e_mrn_deidentified) |>
+  slice(1) |>  # One row per patient
+  ungroup() |>
+  summarise(
+    total_patients = n(),
+    single_eye_patients = sum(n_eyes == 1),
+    bilateral_patients = sum(n_eyes == 2)
+  )
+
+log_message(paste0("Patient distribution - Total: ", patient_summary$total_patients,
+                  ", Single eye: ", patient_summary$single_eye_patients,
+                  ", Bilateral: ", patient_summary$bilateral_patients))
+
+# Fellow data availability by cohort
+fellow_check <- df_with_fellow |>
+  filter(n_eyes == 2) |>
+  group_by(cohort_id) |>
+  summarise(
+    n = n(),
+    has_fellow_baseline = sum(!is.na(fellow_baseline_VA)),
+    has_fellow_intermediate = sum(!is.na(fellow_intermediate_VA)),
+    has_fellow_outcome = sum(!is.na(fellow_outcome_VA)),
+    pct_fellow_baseline = round(100 * has_fellow_baseline / n, 1),
+    pct_fellow_intermediate = round(100 * has_fellow_intermediate / n, 1),
+    pct_fellow_outcome = round(100 * has_fellow_outcome / n, 1),
+    .groups = 'drop'
+  )
+
+log_message("Fellow eye data availability by cohort:")
+for(i in 1:nrow(fellow_check)) {
+  log_message(paste0("  ", fellow_check$cohort_id[i], 
+                    " - Baseline: ", fellow_check$pct_fellow_baseline[i], "%",
+                    ", Intermediate: ", fellow_check$pct_fellow_intermediate[i], "%",
+                    ", Outcome: ", fellow_check$pct_fellow_outcome[i], "%"))
+}
+
+# Eye correlation check (should be 0.5-0.9 typically)
+correlation_check <- df_with_fellow |>
+  filter(n_eyes == 2) |>
+  summarise(
+    cor_baseline = cor(baseline_VA_logMAR, fellow_baseline_VA, use = "complete.obs"),
+    cor_intermediate = cor(intermediate_VA_logMAR, fellow_intermediate_VA, use = "complete.obs"),
+    n_pairs_baseline = sum(!is.na(baseline_VA_logMAR) & !is.na(fellow_baseline_VA)),
+    n_pairs_intermediate = sum(!is.na(intermediate_VA_logMAR) & !is.na(fellow_intermediate_VA))
+  )
+
+log_message(paste0("Fellow eye correlations - Baseline: ", round(correlation_check$cor_baseline, 3),
+                  " (n=", correlation_check$n_pairs_baseline, " pairs)",
+                  ", Intermediate: ", round(correlation_check$cor_intermediate, 3),
+                  " (n=", correlation_check$n_pairs_intermediate, " pairs)"))
+
+# Verification: Check fellow pairing worked correctly
+pairing_check <- df_with_fellow |>
+  filter(n_eyes == 2) |>
+  group_by(e_mrn_deidentified) |>
+  summarise(
+    # Each eye should have the other eye's value as fellow
+    check_baseline = baseline_VA_logMAR[1] == fellow_baseline_VA[2] & 
+                    baseline_VA_logMAR[2] == fellow_baseline_VA[1],
+    check_intermediate = (is.na(intermediate_VA_logMAR[1]) & is.na(fellow_intermediate_VA[2]) |
+                         intermediate_VA_logMAR[1] == fellow_intermediate_VA[2]) &
+                        (is.na(intermediate_VA_logMAR[2]) & is.na(fellow_intermediate_VA[1]) |
+                         intermediate_VA_logMAR[2] == fellow_intermediate_VA[1]),
+    .groups = 'drop'
+  )
+
+pairing_errors <- sum(!pairing_check$check_baseline | !pairing_check$check_intermediate, na.rm = TRUE)
+if (pairing_errors > 0) {
+  warning(paste0("Fellow eye pairing errors detected: ", pairing_errors, " patients"))
+} else {
+  log_message("Fellow eye pairing verification: PASSED")
+}
+
+# Use this enhanced dataset for imputation
+df_for_imputation <- df_with_fellow
+```
+
+### Fellow Eye Data Summary
+
+```{r fellow-summary-table}
+# Display patient distribution
+kable(patient_summary, caption = "Patient/Eye Distribution")
+
+# Display fellow data availability
+kable(fellow_check, 
+      caption = "Fellow Eye Data Availability by Cohort (Bilateral Patients Only)",
+      col.names = c("Cohort", "N Eyes", "Has Fellow Baseline", "Has Fellow Intermediate", 
+                   "Has Fellow Outcome", "% Baseline", "% Intermediate", "% Outcome"))
+
+# Display correlation summary
+correlation_summary <- data.frame(
+  Timepoint = c("Baseline", "Intermediate"),
+  Correlation = c(correlation_check$cor_baseline, correlation_check$cor_intermediate),
+  N_Pairs = c(correlation_check$n_pairs_baseline, correlation_check$n_pairs_intermediate)
+)
+kable(correlation_summary, 
+      caption = "Inter-eye Correlations (Bilateral Patients)",
+      digits = 3)
+```
+
 ## Define Variables for Imputation
 
 ```{r define-imputation-vars}
@@ -104,8 +250,14 @@ imputation_vars <- c(
   "catsurg_before_hitplus_cat",
   
   # DR severity - use person_dr (created from No_DR/NPDR/PDR)
-  "person_dr"  # Numeric 0/1/2
+  "person_dr",  # Numeric 0/1/2
   # NOT dr_severity or person_dr_severity - derived from person_dr
+  
+  # Fellow eye variables (for bilateral patients)
+  "fellow_baseline_VA",
+  "fellow_intermediate_VA",
+  "fellow_outcome_VA",
+  "n_eyes"  # Number of eyes per patient (1 or 2)
 )
 
 # First, create person-level DR severity (maximum observed per patient)
@@ -231,6 +383,12 @@ custom_methods["insurance_cat"] <- "polyreg"
 custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor; see below.
 custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor; see below.
 
+# Fellow eye variables - don't impute (they're derived from existing data)
+custom_methods["fellow_baseline_VA"] <- ""
+custom_methods["fellow_intermediate_VA"] <- ""
+custom_methods["fellow_outcome_VA"] <- ""
+custom_methods["n_eyes"] <- ""  # Complete variable
+
 # Variables that are complete (no missing data) - leave method empty
 # mice will automatically skip variables with no missing data
 # Only set methods for variables that actually have missing data to avoid type mismatches
@@ -284,6 +442,55 @@ pred_matrix["baseline_VA_logMAR", "person_dr_max"] <- 0  # Don't use to predict 
 pred_matrix["row_id", "person_dr_max"] <- 0  # Don't use for IDs
 pred_matrix["e_mrn_deidentified", "person_dr_max"] <- 0  # Don't use for IDs
 pred_matrix["cohort_id", "person_dr_max"] <- 0  # Don't use for cohort_id
+
+# FELLOW EYE PREDICTORS WITH TEMPORAL CONSTRAINTS
+# Fellow baseline can predict all timepoints
+if ("fellow_baseline_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
+  pred_matrix["intermediate_VA_logMAR", "fellow_baseline_VA"] <- 1
+  pred_matrix["outcome_VA_logMAR", "fellow_baseline_VA"] <- 1
+}
+
+# Fellow intermediate can predict intermediate and outcome (NOT baseline)
+if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
+  pred_matrix["outcome_VA_logMAR", "fellow_intermediate_VA"] <- 1
+  # CRITICAL: Prevent reverse-time prediction
+  pred_matrix["baseline_VA_logMAR", "fellow_intermediate_VA"] <- 0
+}
+
+# Fellow outcome can predict outcome only (NOT earlier timepoints)
+if ("fellow_outcome_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
+  # CRITICAL: Prevent reverse-time prediction
+  pred_matrix["baseline_VA_logMAR", "fellow_outcome_VA"] <- 0
+  pred_matrix["intermediate_VA_logMAR", "fellow_outcome_VA"] <- 0
+}
+
+# Fellow variables are NEVER predicted (they're derived, not imputed)
+fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA")
+for (fvar in fellow_vars) {
+  if (fvar %in% rownames(pred_matrix)) {
+    pred_matrix[fvar, ] <- 0  # Not predicted by anything
+  }
+}
+
+# n_eyes can be predictor but not predicted
+if ("n_eyes" %in% rownames(pred_matrix)) {
+  pred_matrix["n_eyes", ] <- 0  # Not predicted
+  # n_eyes can help predict missingness patterns
+  # Leave default (1) for using as predictor
+}
+
+# Log fellow predictor configuration
+fellow_predictors_count <- c(
+  baseline = sum(pred_matrix["baseline_VA_logMAR", grep("fellow", colnames(pred_matrix))]),
+  intermediate = sum(pred_matrix["intermediate_VA_logMAR", grep("fellow", colnames(pred_matrix))]),
+  outcome = sum(pred_matrix["outcome_VA_logMAR", grep("fellow", colnames(pred_matrix))])
+)
+log_message(paste0("Fellow predictors configured - Baseline: ", fellow_predictors_count["baseline"],
+                  ", Intermediate: ", fellow_predictors_count["intermediate"],
+                  ", Outcome: ", fellow_predictors_count["outcome"]))
 
 # Save the predictor matrix to CSV for inspection
 pred_matrix_df <- as.data.frame(pred_matrix)
@@ -661,6 +868,68 @@ log_message(paste0("Patient-level consistency - person_dr: ",
 kable(consistency_df, 
       col.names = c("Dataset", "Patients", "DR %", "CCI %", "DCSI %", "All %"),
       caption = "Percentage of patients with consistent values across eyes")
+```
+
+### Fellow Eye Correlation After Imputation
+
+```{r fellow-correlation-check}
+# Check that fellow eye correlations remain realistic after imputation
+fellow_correlation_check <- lapply(1:n_imputations, function(i) {
+  imp_data <- imputed_datasets[[i]]
+  
+  # Calculate correlations for bilateral patients
+  cor_check <- imp_data |>
+    filter(!is.na(n_eyes) & n_eyes == 2) |>
+    summarise(
+      cor_baseline = cor(baseline_VA_logMAR, fellow_baseline_VA, use = "complete.obs"),
+      cor_intermediate = cor(intermediate_VA_logMAR, fellow_intermediate_VA, use = "complete.obs"),
+      cor_outcome = cor(outcome_VA_logMAR, fellow_outcome_VA, use = "complete.obs"),
+      n_baseline = sum(!is.na(baseline_VA_logMAR) & !is.na(fellow_baseline_VA)),
+      n_intermediate = sum(!is.na(intermediate_VA_logMAR) & !is.na(fellow_intermediate_VA)),
+      n_outcome = sum(!is.na(outcome_VA_logMAR) & !is.na(fellow_outcome_VA))
+    )
+  
+  return(list(
+    dataset = i,
+    cor_baseline = round(cor_check$cor_baseline, 3),
+    cor_intermediate = round(cor_check$cor_intermediate, 3),
+    cor_outcome = round(cor_check$cor_outcome, 3),
+    n_baseline = cor_check$n_baseline,
+    n_intermediate = cor_check$n_intermediate,
+    n_outcome = cor_check$n_outcome
+  ))
+})
+
+# Display results
+fellow_cor_df <- bind_rows(fellow_correlation_check)
+log_message(paste0("Post-imputation fellow eye correlations - Outcome: ",
+                  min(fellow_cor_df$cor_outcome, na.rm = TRUE), " to ",
+                  max(fellow_cor_df$cor_outcome, na.rm = TRUE)))
+
+# Check if correlations are in reasonable range (0.5-0.9 typically)
+cor_warnings <- fellow_cor_df |>
+  mutate(
+    baseline_ok = cor_baseline >= 0.5 & cor_baseline <= 0.95,
+    intermediate_ok = cor_intermediate >= 0.5 & cor_intermediate <= 0.95,
+    outcome_ok = cor_outcome >= 0.5 & cor_outcome <= 0.95
+  )
+
+if (any(!cor_warnings$outcome_ok, na.rm = TRUE)) {
+  warning("Some imputed datasets have fellow eye outcome correlations outside expected range (0.5-0.95)")
+}
+```
+
+**Fellow eye correlations after imputation:**
+```{r fellow-correlation-table}
+kable(fellow_cor_df |> select(-starts_with("n_")), 
+      col.names = c("Dataset", "Baseline", "Intermediate", "Outcome"),
+      caption = "Inter-eye Correlations After Imputation (Bilateral Patients)",
+      digits = 3)
+
+# Also show the sample sizes
+kable(fellow_cor_df |> select(dataset, starts_with("n_")), 
+      col.names = c("Dataset", "N Baseline", "N Intermediate", "N Outcome"),
+      caption = "Number of Paired Observations Used for Correlations")
 ```
 
 ## Save Imputed Datasets
