@@ -61,119 +61,6 @@ log_message(paste0("Loaded ", nrow(df_for_imputation), " observations"))
 log_message(paste0("Unique patients: ", n_distinct(df_for_imputation$e_mrn_deidentified)))
 ```
 
-## Create Patient-Level Summary Variables
-
-```{r create-patient-summaries}
-# Create patient-level summary variables that capture severity without collinearity
-# These aggregates across eyes provide information about patient-level disease burden
-
-df_with_patient_summaries <- df_for_imputation |>
-  group_by(e_mrn_deidentified) |>
-  mutate(
-    n_eyes = n(),
-    
-    # Patient-level baseline summaries
-    patient_worst_baseline = max(baseline_VA_logMAR, na.rm = TRUE),
-    patient_best_baseline = min(baseline_VA_logMAR, na.rm = TRUE),
-    patient_mean_baseline = mean(baseline_VA_logMAR, na.rm = TRUE),
-    
-    # Patient-level intermediate summaries  
-    patient_worst_intermediate = max(intermediate_VA_logMAR, na.rm = TRUE),
-    patient_best_intermediate = min(intermediate_VA_logMAR, na.rm = TRUE),
-    patient_mean_intermediate = mean(intermediate_VA_logMAR, na.rm = TRUE),
-    
-    # Asymmetry measures (for bilateral patients)
-    baseline_asymmetry = if_else(n_eyes == 2,
-                                 abs(baseline_VA_logMAR[1] - baseline_VA_logMAR[2]),
-                                 NA_real_),
-    intermediate_asymmetry = if_else(n_eyes == 2,
-                                    abs(intermediate_VA_logMAR[1] - intermediate_VA_logMAR[2]),
-                                    NA_real_)
-  ) |>
-  ungroup() |>
-  mutate(
-    # Handle Inf values from all-NA groups
-    across(starts_with("patient_worst"), ~if_else(is.infinite(.), NA_real_, .)),
-    across(starts_with("patient_best"), ~if_else(is.infinite(.), NA_real_, .)),
-    across(starts_with("patient_mean"), ~if_else(is.nan(.), NA_real_, .))
-  )
-
-# Log summary statistics
-patient_summary_stats <- df_with_patient_summaries |>
-  summarise(
-    total_patients = n_distinct(e_mrn_deidentified),
-    total_eyes = n(),
-    bilateral_patients = sum(n_eyes == 2) / 2,
-    single_eye_patients = sum(n_eyes == 1),
-    
-    # Check data availability
-    has_patient_worst_baseline = sum(!is.na(patient_worst_baseline)),
-    has_patient_best_baseline = sum(!is.na(patient_best_baseline)),
-    has_baseline_asymmetry = sum(!is.na(baseline_asymmetry)),
-    
-    # Average asymmetry for bilateral patients
-    mean_baseline_asymmetry = mean(baseline_asymmetry, na.rm = TRUE),
-    mean_intermediate_asymmetry = mean(intermediate_asymmetry, na.rm = TRUE)
-  )
-
-log_message(paste0("Patient-level summaries created:"))
-log_message(paste0("  Total patients: ", patient_summary_stats$total_patients))
-log_message(paste0("  Bilateral patients: ", patient_summary_stats$bilateral_patients))
-log_message(paste0("  Mean baseline asymmetry (bilateral): ", 
-                  round(patient_summary_stats$mean_baseline_asymmetry, 3)))
-
-# Check correlations between patient summaries and individual eyes
-correlation_check <- df_with_patient_summaries |>
-  summarise(
-    # These should be high but not perfect (avoiding collinearity)
-    cor_baseline_worst = cor(baseline_VA_logMAR, patient_worst_baseline, use = "complete.obs"),
-    cor_baseline_best = cor(baseline_VA_logMAR, patient_best_baseline, use = "complete.obs"),
-    cor_baseline_mean = cor(baseline_VA_logMAR, patient_mean_baseline, use = "complete.obs")
-  )
-
-log_message(paste0("Correlations with patient summaries - Worst: ", 
-                  round(correlation_check$cor_baseline_worst, 3),
-                  ", Best: ", round(correlation_check$cor_baseline_best, 3),
-                  ", Mean: ", round(correlation_check$cor_baseline_mean, 3)))
-
-# Use this enhanced dataset for imputation
-df_for_imputation <- df_with_patient_summaries
-```
-
-### Patient-Level Summary Statistics
-
-```{r patient-summary-table}
-# Display patient distribution
-patient_dist <- data.frame(
-  Category = c("Total patients", "Total eyes", "Bilateral patients", "Single eye patients"),
-  N = c(patient_summary_stats$total_patients, 
-        patient_summary_stats$total_eyes,
-        patient_summary_stats$bilateral_patients,
-        patient_summary_stats$single_eye_patients)
-)
-kable(patient_dist, caption = "Patient/Eye Distribution")
-
-# Display summary variable availability
-summary_availability <- data.frame(
-  Variable = c("Patient worst baseline", "Patient best baseline", "Baseline asymmetry"),
-  N_Available = c(patient_summary_stats$has_patient_worst_baseline,
-                 patient_summary_stats$has_patient_best_baseline,
-                 patient_summary_stats$has_baseline_asymmetry),
-  Percent = round(100 * c(patient_summary_stats$has_patient_worst_baseline,
-                          patient_summary_stats$has_patient_best_baseline,
-                          patient_summary_stats$has_baseline_asymmetry) / 
-                 patient_summary_stats$total_eyes, 1)
-)
-kable(summary_availability, caption = "Patient Summary Variable Availability")
-
-# Display asymmetry statistics for bilateral patients
-asymmetry_stats <- data.frame(
-  Measure = c("Mean baseline asymmetry", "Mean intermediate asymmetry"),
-  Value = round(c(patient_summary_stats$mean_baseline_asymmetry,
-                  patient_summary_stats$mean_intermediate_asymmetry), 3)
-)
-kable(asymmetry_stats, caption = "Visual Acuity Asymmetry (Bilateral Patients)")
-```
 
 ## Define Variables for Imputation
 
@@ -218,16 +105,8 @@ imputation_vars <- c(
   "catsurg_before_hitplus_cat",
   
   # DR severity - use person_dr (created from No_DR/NPDR/PDR)
-  "person_dr",  # Numeric 0/1/2
+  "person_dr"  # Numeric 0/1/2
   # NOT dr_severity or person_dr_severity - derived from person_dr
-  
-  # Patient-level summary variables (capture severity without collinearity)
-  "n_eyes",  # Number of eyes per patient
-  "patient_worst_baseline",  # Max baseline VA across eyes
-  "patient_best_baseline",   # Min baseline VA across eyes
-  "patient_worst_intermediate",  # Max intermediate VA across eyes
-  "patient_best_intermediate"   # Min intermediate VA across eyes
-  # Note: asymmetry variables excluded as they're only for bilateral patients
 )
 
 # First, create person-level DR severity (maximum observed per patient)
@@ -353,13 +232,6 @@ custom_methods["insurance_cat"] <- "polyreg"
 custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor; see below.
 custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor; see below.
 
-# Patient-level summary variables - don't impute (they're derived)
-custom_methods["n_eyes"] <- ""
-custom_methods["patient_worst_baseline"] <- ""
-custom_methods["patient_best_baseline"] <- ""
-custom_methods["patient_worst_intermediate"] <- ""
-custom_methods["patient_best_intermediate"] <- ""
-
 # Variables that are complete (no missing data) - leave method empty
 # mice will automatically skip variables with no missing data
 # Only set methods for variables that actually have missing data to avoid type mismatches
@@ -414,54 +286,32 @@ pred_matrix["row_id", "person_dr_max"] <- 0  # Don't use for IDs
 pred_matrix["e_mrn_deidentified", "person_dr_max"] <- 0  # Don't use for IDs
 pred_matrix["cohort_id", "person_dr_max"] <- 0  # Don't use for cohort_id
 
-# PATIENT-LEVEL SUMMARY PREDICTORS
-# These capture patient-level severity without causing collinearity
-
-# Patient summaries should not be predicted (they're derived)
-if ("patient_worst_baseline" %in% rownames(pred_matrix)) {
-  pred_matrix["patient_worst_baseline", ] <- 0
-  pred_matrix["patient_best_baseline", ] <- 0
-  pred_matrix["patient_worst_intermediate", ] <- 0
-  pred_matrix["patient_best_intermediate", ] <- 0
-  pred_matrix["n_eyes", ] <- 0
-}
-
-# Patient baseline summaries can predict intermediate and outcome
-# But NOT baseline itself (would be circular)
-if ("patient_worst_baseline" %in% colnames(pred_matrix)) {
-  pred_matrix["baseline_VA_logMAR", "patient_worst_baseline"] <- 0  # Don't use to predict baseline
-  pred_matrix["intermediate_VA_logMAR", "patient_worst_baseline"] <- 1
-  pred_matrix["outcome_VA_logMAR", "patient_worst_baseline"] <- 1
-  
-  pred_matrix["baseline_VA_logMAR", "patient_best_baseline"] <- 0  # Don't use to predict baseline
-  pred_matrix["intermediate_VA_logMAR", "patient_best_baseline"] <- 1
-  pred_matrix["outcome_VA_logMAR", "patient_best_baseline"] <- 1
-}
-
-# Patient intermediate summaries can predict outcome only
-# NOT baseline or intermediate (temporal constraint)
-if ("patient_worst_intermediate" %in% colnames(pred_matrix)) {
-  pred_matrix["baseline_VA_logMAR", "patient_worst_intermediate"] <- 0
-  pred_matrix["intermediate_VA_logMAR", "patient_worst_intermediate"] <- 0  # Don't predict intermediate
-  pred_matrix["outcome_VA_logMAR", "patient_worst_intermediate"] <- 1
-  
-  pred_matrix["baseline_VA_logMAR", "patient_best_intermediate"] <- 0
-  pred_matrix["intermediate_VA_logMAR", "patient_best_intermediate"] <- 0
-  pred_matrix["outcome_VA_logMAR", "patient_best_intermediate"] <- 1
-}
-
-# n_eyes can be informative for missingness patterns but shouldn't predict values directly
-if ("n_eyes" %in% colnames(pred_matrix)) {
-  pred_matrix[, "n_eyes"] <- 0  # Don't use as predictor to avoid collinearity
-}
-
-log_message("Patient-level summary predictors configured")
 
 # Save the predictor matrix to CSV for inspection
 pred_matrix_df <- as.data.frame(pred_matrix)
 pred_matrix_df <- cbind(Variable = rownames(pred_matrix_df), pred_matrix_df)
 write.csv(pred_matrix_df, file.path(reanalysis_data_dir, "predictor_matrix.csv"), row.names = FALSE)
 log_message(paste0("Saved predictor matrix to: ", file.path(reanalysis_data_dir, "predictor_matrix.csv")))
+
+# Check for perfect collinearity between intermediate and outcome for submitted cohort
+collinearity_check <- df_mice |>
+  filter(cohort_id == "submitted") |>
+  summarise(
+    n = n(),
+    n_with_both = sum(!is.na(intermediate_VA_logMAR) & !is.na(outcome_VA_logMAR)),
+    cor_intermediate_outcome = cor(intermediate_VA_logMAR, outcome_VA_logMAR, use = "complete.obs"),
+    are_identical = all(intermediate_VA_logMAR == outcome_VA_logMAR, na.rm = TRUE)
+  )
+
+log_message(paste0("Submitted cohort - Correlation between intermediate and outcome: ",
+                  round(collinearity_check$cor_intermediate_outcome, 3)))
+log_message(paste0("Submitted cohort - Are intermediate and outcome identical? ",
+                  collinearity_check$are_identical))
+
+# Log which predictors are set for outcome_VA_logMAR
+outcome_predictors <- names(which(pred_matrix["outcome_VA_logMAR", ] == 1))
+log_message(paste0("Predictors for outcome_VA_logMAR (", length(outcome_predictors), "): ",
+                  paste(outcome_predictors, collapse = ", ")))
 
 ```
 
@@ -506,11 +356,8 @@ final_methods <- final_methods |>
   dplyr::arrange(Role == "ID (excluded)", N_Missing == 0, Variable)
 
 # Variables that will ACTUALLY be imputed (have missing data AND a method)
-# Exclude patient summary variables even if they have missing data
 vars_to_impute <- final_methods |>
   filter(Will_Be_Imputed) |>
-  filter(!Variable %in% c("n_eyes", "patient_worst_baseline", "patient_best_baseline",
-                          "patient_worst_intermediate", "patient_best_intermediate")) |>
   pull(Variable)
 ```
 
