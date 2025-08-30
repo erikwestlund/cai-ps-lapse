@@ -148,12 +148,18 @@ bilateral_imp <- imputed_datasets[[1]] |>
   filter(e_mrn_deidentified %in% bilateral_ids) |>
   group_by(e_mrn_deidentified) |>
   arrange(row_number()) |>
-  mutate(eye = paste0("eye", row_number())) |>
+  mutate(eye = row_number()) |>
   ungroup() |>
   select(e_mrn_deidentified, eye, outcome_VA_logMAR) |>
-  pivot_wider(names_from = eye, values_from = outcome_VA_logMAR)
+  pivot_wider(names_from = eye, values_from = outcome_VA_logMAR, names_prefix = "outcome_eye")
 
-cor_outcome_imp <- cor(bilateral_imp$outcome_VA_logMAR_eye1, bilateral_imp$outcome_VA_logMAR_eye2, use = "complete.obs")
+# Check column names exist and calculate correlation
+if ("outcome_eye1" %in% names(bilateral_imp) && "outcome_eye2" %in% names(bilateral_imp)) {
+  cor_outcome_imp <- cor(bilateral_imp$outcome_eye1, bilateral_imp$outcome_eye2, use = "complete.obs")
+} else {
+  cor_outcome_imp <- NA
+  warning("Expected columns not found in bilateral_imp")
+}
 
 # Summary table
 intra_patient_cors <- data.frame(
@@ -177,19 +183,23 @@ kable(intra_patient_cors,
       caption = paste0("Intra-patient (between-eye) correlations (", length(bilateral_ids), " bilateral patients)")) |>
   kable_styling(full_width = FALSE)
 
-# Visualization
-p_bilateral <- ggplot(bilateral_imp, aes(x = outcome_VA_logMAR_eye1, y = outcome_VA_logMAR_eye2)) +
-  geom_point(alpha = 0.4, color = "#2E86AB") +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", alpha = 0.5) +
-  geom_smooth(method = "lm", se = TRUE, color = "red") +
-  labs(
-    title = sprintf("Between-Eye Correlation After 2l.pan Imputation (r = %.3f)", cor_outcome_imp),
-    x = "Eye 1 Outcome VA (logMAR)",
-    y = "Eye 2 Outcome VA (logMAR)"
-  ) +
-  theme_minimal()
-
-print(p_bilateral)
+# Visualization (only if correlation was calculated)
+if (!is.na(cor_outcome_imp)) {
+  p_bilateral <- ggplot(bilateral_imp, aes(x = outcome_eye1, y = outcome_eye2)) +
+    geom_point(alpha = 0.4, color = "#2E86AB") +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", alpha = 0.5) +
+    geom_smooth(method = "lm", se = TRUE, color = "red") +
+    labs(
+      title = sprintf("Between-Eye Correlation After 2l.pan Imputation (r = %.3f)", cor_outcome_imp),
+      x = "Eye 1 Outcome VA (logMAR)",
+      y = "Eye 2 Outcome VA (logMAR)"
+    ) +
+    theme_minimal()
+  
+  print(p_bilateral)
+} else {
+  cat("Between-eye correlation plot could not be generated.\n")
+}
 ```
 
 ## 3. Distribution Comparison: Observed vs Imputed
