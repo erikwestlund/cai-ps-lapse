@@ -480,6 +480,12 @@ for (v1 in treatment_vars) {
 
 log_message("Predictor matrix configured with strict temporal constraints")
 
+# Save the predictor matrix to CSV for inspection
+pred_matrix_df <- as.data.frame(pred_matrix)
+pred_matrix_df <- cbind(Variable = rownames(pred_matrix_df), pred_matrix_df)
+write.csv(pred_matrix_df, file.path(reanalysis_data_dir, "predictor_matrix.csv"), row.names = FALSE)
+log_message(paste0("Saved predictor matrix to: ", file.path(reanalysis_data_dir, "predictor_matrix.csv")))
+
 # Verification: Print predictor counts for key variables
 pred_counts <- data.frame(
   Variable = rownames(pred_matrix),
