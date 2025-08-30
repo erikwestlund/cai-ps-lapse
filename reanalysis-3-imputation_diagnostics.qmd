@@ -341,7 +341,94 @@ p_lapse <- ggplot(changes_df,
 print(p_lapse)
 ```
 
-## 5. Temporal Consistency
+## 5. Direction of Change by Missingness Pattern
+
+```{r change-direction-analysis}
+# Create detailed groups based on what data was available
+direction_df <- imputed_datasets[[1]] |>
+  mutate(
+    change_baseline_outcome = outcome_VA_logMAR - baseline_VA_logMAR,
+    
+    # Define groups based on original missingness
+    imputation_group = case_when(
+      cohort_id == "submitted" ~ "Complete (Observed)",
+      cohort_id == "excluded" & !is.na(df_original$intermediate_VA_logMAR[row_number()]) ~ "Imputed (had intermediate)",
+      cohort_id == "excluded" & is.na(df_original$intermediate_VA_logMAR[row_number()]) ~ "Imputed (no intermediate)",
+      TRUE ~ "Other"
+    ),
+    
+    # Categorize changes
+    change_direction = case_when(
+      change_baseline_outcome < -0.1 ~ "Improved",
+      change_baseline_outcome > 0.1 ~ "Worsened",
+      TRUE ~ "Stable"
+    )
+  ) |>
+  filter(!is.na(change_baseline_outcome))
+
+# Calculate proportions by group
+direction_summary <- direction_df |>
+  group_by(imputation_group, change_direction) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(imputation_group) |>
+  mutate(
+    total = sum(n),
+    pct = round(100 * n / total, 1)
+  ) |>
+  ungroup()
+
+# Create table
+direction_table <- direction_summary |>
+  select(imputation_group, change_direction, n, pct) |>
+  pivot_wider(
+    names_from = change_direction,
+    values_from = c(n, pct),
+    values_fill = list(n = 0, pct = 0)
+  )
+
+kable(direction_table,
+      caption = "Direction of vision change by data availability group") |>
+  kable_styling(full_width = FALSE)
+
+# Visualization - stacked bar chart
+p_direction <- ggplot(direction_summary, 
+                     aes(x = imputation_group, y = pct, fill = factor(change_direction,
+                                                                      levels = c("Improved", "Stable", "Worsened")))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = paste0(pct, "%")), 
+           position = position_dodge(width = 0.9),
+           vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Improved" = "#2ca02c", 
+                              "Stable" = "#ff7f0e", 
+                              "Worsened" = "#d62728"),
+                    name = "Vision Change") +
+  labs(
+    title = "Direction of Vision Change by Data Availability",
+    subtitle = "Comparing complete vs imputed groups",
+    y = "Percentage (%)",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom") +
+  ylim(0, max(direction_summary$pct) * 1.15)  # Add space for labels
+
+print(p_direction)
+
+# Chi-square test for independence
+chi_table <- table(direction_df$imputation_group, direction_df$change_direction)
+chi_test <- chisq.test(chi_table)
+
+cat(sprintf("\nChi-square test: χ² = %.2f, p = %.4f\n", 
+            chi_test$statistic, chi_test$p.value))
+if(chi_test$p.value < 0.05) {
+  cat("The proportions of improved/stable/worsened differ significantly across groups.\n")
+} else {
+  cat("The proportions are similar across groups.\n")
+}
+```
+
+## 6. Temporal Consistency
 
 ```{r temporal-consistency}
 # For patients with intermediate values, check trajectory consistency
@@ -407,7 +494,7 @@ p_traj <- ggplot(trajectory_plot_data,
 print(p_traj)
 ```
 
-## 6. Multiple Imputation Variance
+## 7. Multiple Imputation Variance
 
 ```{r mi-variance}
 # Calculate summary statistics across all imputations
@@ -469,7 +556,7 @@ p_mi <- ggplot(mi_combined, aes(x = imputation, y = mean_outcome, color = cohort
 print(p_mi)
 ```
 
-## 7. Summary Assessment
+## 8. Summary Assessment
 
 ```{r summary-assessment}
 cat("### Key Findings:\n\n")
