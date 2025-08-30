@@ -26,7 +26,7 @@ log_file <- init_log("multiple_imputation")
 # ANALYSIS MODE: "test" or "final"
 # test = 2 imputations, 2 iterations (fast)
 # final = 50 imputations, 20 iterations (slow but thorough)
-analysis_mode <- "test"  # Change to "final" for production run
+analysis_mode <- "final"  # Change to "final" for production run
 log_message(paste0("Analysis mode: ", analysis_mode))
 
 # Set parameters based on mode
