@@ -475,11 +475,11 @@ for (fvar in fellow_vars) {
   }
 }
 
-# n_eyes can be predictor but not predicted
+# n_eyes should not be used as predictor OR predicted
+# It's perfectly correlated with fellow variable missingness patterns
 if ("n_eyes" %in% rownames(pred_matrix)) {
   pred_matrix["n_eyes", ] <- 0  # Not predicted
-  # n_eyes can help predict missingness patterns
-  # Leave default (1) for using as predictor
+  pred_matrix[, "n_eyes"] <- 0  # Not a predictor (causes collinearity)
 }
 
 # Log fellow predictor configuration
@@ -541,8 +541,11 @@ final_methods <- final_methods |>
   dplyr::arrange(Role == "ID (excluded)", N_Missing == 0, Variable)
 
 # Variables that will ACTUALLY be imputed (have missing data AND a method)
+# Exclude fellow variables and n_eyes even if they have missing data
 vars_to_impute <- final_methods |>
   filter(Will_Be_Imputed) |>
+  filter(!Variable %in% c("fellow_baseline_VA", "fellow_intermediate_VA", 
+                          "fellow_outcome_VA", "n_eyes")) |>
   pull(Variable)
 ```
 
@@ -790,9 +793,16 @@ imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
   patient_level_vars <- imp_data |>
     group_by(e_mrn_deidentified) |>
     summarise(
-      person_dr_consistent = max(person_dr, na.rm = TRUE),
-      CCI_consistent = max(CCI, na.rm = TRUE),
-      DCSI_consistent = max(DCSI, na.rm = TRUE),
+      # Handle case where all values are NA (max returns -Inf)
+      person_dr_consistent = ifelse(all(is.na(person_dr)), 
+                                   NA_real_, 
+                                   max(person_dr, na.rm = TRUE)),
+      CCI_consistent = ifelse(all(is.na(CCI)), 
+                             NA_real_, 
+                             max(CCI, na.rm = TRUE)),
+      DCSI_consistent = ifelse(all(is.na(DCSI)), 
+                              NA_real_, 
+                              max(DCSI, na.rm = TRUE)),
       .groups = 'drop'
     )
   
