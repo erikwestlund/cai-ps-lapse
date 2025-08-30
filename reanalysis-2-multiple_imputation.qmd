@@ -509,22 +509,6 @@ imputed_datasets <- complete(mice_results, action = "all")
 imputed_datasets <- lapply(1:n_imputations, function(i) {
   imp_data <- imputed_datasets[[i]]
   
-  # Copy person_dr_max back to person_dr for each eye
-  # This ensures DR severity is consistent within patients
-  # Handle the factor conversion correctly
-  imp_data <- imp_data |>
-    mutate(
-      # person_dr_max is an ordered factor with levels "No_DR", "NPDR", "PDR"
-      # Convert to numeric 0, 1, 2
-      person_dr = case_when(
-        person_dr_max == "No_DR" ~ 0,
-        person_dr_max == "NPDR" ~ 1,
-        person_dr_max == "PDR" ~ 2,
-        TRUE ~ NA_real_
-      )
-    ) |>
-    select(-person_dr_max)  # Remove person_dr_max after using it
-  
   # Apply transformation functions to recreate all derived variables
   imp_data <- imp_data |>
     create_outcome_variables() |>  # Creates outcome_va_vi_binary from logMAR
@@ -591,6 +575,28 @@ if(length(vars_to_add) > 0) {
     return(imp_data)
   })
 }
+
+# FINAL STEP: Enforce person_dr consistency across all datasets
+# Take the maximum person_dr value per patient to ensure consistency
+imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
+  # Calculate max person_dr per patient
+  person_dr_max_lookup <- imp_data |>
+    group_by(e_mrn_deidentified) |>
+    summarise(
+      person_dr_max_value = max(person_dr, na.rm = TRUE),
+      .groups = 'drop'
+    )
+  
+  # Replace person_dr with the consistent max value
+  imp_data <- imp_data |>
+    left_join(person_dr_max_lookup, by = "e_mrn_deidentified") |>
+    mutate(person_dr = person_dr_max_value) |>
+    select(-person_dr_max_value)
+  
+  return(imp_data)
+})
+
+log_message("Enforced person_dr consistency by taking max value per patient")
 
 completeness_check <- lapply(imputed_datasets, function(d) {
   sum(!complete.cases(d[, ps_model_vars]))
