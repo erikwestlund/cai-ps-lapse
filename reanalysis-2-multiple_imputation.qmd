@@ -108,14 +108,32 @@ imputation_vars <- c(
   # NOT dr_severity or person_dr_severity - derived from person_dr
 )
 
+# First, create person-level DR severity (maximum observed per patient)
+df_person_dr <- df_for_imputation |>
+  group_by(e_mrn_deidentified) |>
+  summarise(
+    # Take the maximum observed person_dr for each patient
+    # This ensures consistency within patients
+    person_dr_max = max(person_dr, na.rm = TRUE),
+    # If all values are NA for a patient, max returns -Inf, so handle that
+    person_dr_max = ifelse(is.infinite(person_dr_max), NA_real_, person_dr_max)
+  ) |>
+  ungroup()
+
 df_mice <- df_for_imputation |>
   mutate(
     # Create a unique row identifier to preserve exact row matching
     row_id = row_number()
   ) |>
-  dplyr::select(row_id, dplyr::all_of(imputation_vars)) |>
+  # Join the person-level DR severity
+  left_join(df_person_dr, by = "e_mrn_deidentified") |>
+  dplyr::select(row_id, dplyr::all_of(imputation_vars), person_dr_max) |>
   mutate(
-    # Convert person_dr to ordered factor for polr imputation method
+    # Convert person_dr_max to ordered factor for polr imputation method
+    person_dr_max = factor(person_dr_max, levels = c(0, 1, 2), 
+                          labels = c("No_DR", "NPDR", "PDR"),
+                          ordered = TRUE),
+    # Convert original person_dr to factor (keep for comparison but won't impute)
     person_dr = factor(person_dr, levels = c(0, 1, 2), 
                       labels = c("No_DR", "NPDR", "PDR"),
                       ordered = TRUE),
@@ -136,6 +154,10 @@ df_mice <- df_for_imputation |>
     focal_laser_flag = factor(focal_laser_flag, levels = c(0, 1)),
     PRP_flag = factor(PRP_flag, levels = c(0, 1))
   )
+
+log_message(paste0("Created person_dr_max: ", 
+                  sum(!is.na(df_mice$person_dr_max)), " non-missing, ",
+                  sum(is.na(df_mice$person_dr_max)), " missing"))
 ```
 
 ## Setup Imputation Model
@@ -191,8 +213,11 @@ custom_methods["CCI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["DCSI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["age"] <- "pmm"
 
-# Use proportional odds model for ordinal person_dr (0/1/2)
-custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
+# Use proportional odds model for ordinal person_dr_max (0/1/2)
+# person_dr_max is the person-level DR severity (consistent within patients)
+custom_methods["person_dr_max"] <- "polr"  # Ordinal logistic regression
+# Don't impute the original eye-level person_dr - it's replaced by person_dr_max
+custom_methods["person_dr"] <- ""  # Don't impute eye-level DR
 
 # Use logistic regression for binary variables
 custom_methods["catsurg_before_hitplus_cat"] <- "logreg"
@@ -245,6 +270,20 @@ diag(pred_matrix) <- 0
 # Ensure exposure is used as predictor for outcomes
 pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
+
+# Handle person_dr and person_dr_max
+# person_dr (eye-level) should not be used as predictor or predicted
+pred_matrix["person_dr", ] <- 0  # Not predicted
+pred_matrix[, "person_dr"] <- 0  # Not a predictor
+
+# person_dr_max (person-level) should be used as predictor but only for appropriate variables
+# It can predict outcomes but not baseline variables
+pred_matrix[, "person_dr_max"] <- 1  # Use as predictor for most variables
+pred_matrix["person_dr_max", "person_dr_max"] <- 0  # Not its own predictor
+pred_matrix["baseline_VA_logMAR", "person_dr_max"] <- 0  # Don't use to predict baseline VA
+pred_matrix["row_id", "person_dr_max"] <- 0  # Don't use for IDs
+pred_matrix["e_mrn_deidentified", "person_dr_max"] <- 0  # Don't use for IDs
+pred_matrix["cohort_id", "person_dr_max"] <- 0  # Don't use for cohort_id
 
 # Save the predictor matrix to CSV for inspection
 pred_matrix_df <- as.data.frame(pred_matrix)
@@ -449,6 +488,12 @@ mice_results <- mice(
 imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
 log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
 
+# Log person_dr_max imputation status
+if ("person_dr_max" %in% names(mice_results$imp)) {
+  n_imputed_dr <- sum(mice_results$nmis["person_dr_max"])
+  log_message(paste0("person_dr_max imputed for ", n_imputed_dr, " observations"))
+}
+
 # Check convergence
 plot(mice_results)
 ```
@@ -463,6 +508,15 @@ imputed_datasets <- complete(mice_results, action = "all")
 
 imputed_datasets <- lapply(1:n_imputations, function(i) {
   imp_data <- imputed_datasets[[i]]
+  
+  # Copy person_dr_max back to person_dr for each eye
+  # This ensures DR severity is consistent within patients
+  imp_data <- imp_data |>
+    mutate(
+      # Convert person_dr_max back to numeric for person_dr
+      person_dr = as.numeric(as.character(factor(person_dr_max, 
+                                                 labels = c("0", "1", "2"))))
+    )
   
   # Apply transformation functions to recreate all derived variables
   imp_data <- imp_data |>
@@ -528,6 +582,44 @@ completeness_check <- lapply(imputed_datasets, function(d) {
 **Number of incomplete cases in PS model variables per imputed dataset:**
 ```{r completeness-results}
 print(unlist(completeness_check))
+```
+
+### Person-Level DR Consistency Check
+
+```{r dr-consistency-check}
+# Check that person_dr is consistent within patients after imputation
+dr_consistency_check <- lapply(1:n_imputations, function(i) {
+  imp_data <- imputed_datasets[[i]]
+  
+  # Check consistency of person_dr within patients
+  dr_check <- imp_data |>
+    group_by(e_mrn_deidentified) |>
+    summarise(
+      n_eyes = n(),
+      unique_dr_values = n_distinct(person_dr, na.rm = TRUE),
+      is_consistent = unique_dr_values <= 1  # Should be 1 unique value per patient
+    )
+  
+  n_inconsistent <- sum(!dr_check$is_consistent)
+  return(list(
+    dataset = i,
+    n_patients_checked = nrow(dr_check),
+    n_inconsistent_patients = n_inconsistent,
+    pct_consistent = round((1 - n_inconsistent/nrow(dr_check)) * 100, 2)
+  ))
+})
+
+# Display results
+dr_consistency_df <- bind_rows(dr_consistency_check)
+log_message(paste0("DR consistency check: ", 
+                  min(dr_consistency_df$pct_consistent), "% to ",
+                  max(dr_consistency_df$pct_consistent), "% consistent across datasets"))
+```
+
+**Person-level DR consistency after imputation:**
+```{r dr-consistency-table}
+kable(dr_consistency_df, 
+      col.names = c("Dataset", "Patients", "Inconsistent", "% Consistent"))
 ```
 
 ## Save Imputed Datasets
