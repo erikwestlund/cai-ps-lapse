@@ -155,8 +155,26 @@ miss_vars <- data.frame(
   dplyr::filter(N_Missing > 0) |>
   dplyr::arrange(dplyr::desc(N_Missing))
 
+log_message("Variables with missing data:")
+print(miss_vars)
+
+# Check that key variables are in the dataset
+log_message("\nChecking for key variables in df_mice:")
+key_vars_present <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")
+for (v in key_vars_present) {
+  if (v %in% names(df_mice)) {
+    n_miss <- sum(is.na(df_mice[[v]]))
+    log_message(paste0(v, ": Present (", n_miss, " missing)"))
+  } else {
+    log_message(paste0(v, ": NOT PRESENT IN DATA"))
+  }
+}
+
 # Configure methods explicitly
 custom_methods <- mice_dry$method
+
+log_message("\nDefault methods from mice:")
+print(custom_methods)
 
 # Temporal VA variables
 custom_methods["baseline_VA_logMAR"] <- "pmm"
@@ -193,6 +211,22 @@ custom_methods["e_mrn_deidentified"] <- ""
 for (fv in c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")) {
   if (fv %in% names(custom_methods)) custom_methods[fv] <- ""
 }
+
+# DIAGNOSTIC: Verify methods are set correctly
+log_message("\nMethods for variables with missing data:")
+for (v in miss_vars$Variable) {
+  if (v %in% names(custom_methods)) {
+    log_message(paste0(v, ": ", custom_methods[v]))
+  } else {
+    log_message(paste0(v, ": NOT IN METHODS VECTOR"))
+  }
+}
+
+# DIAGNOSTIC: Check which variables will actually be imputed
+vars_to_impute_check <- names(custom_methods)[custom_methods != "" & mice_dry$nmis > 0]
+log_message(paste0("\nVariables that SHOULD be imputed (method != '' and has missing): ", 
+                   length(vars_to_impute_check)))
+print(vars_to_impute_check)
 ```
 
 ### Initial Imputation Model Summary
@@ -408,6 +442,46 @@ kable(imp_params)
 
 ```{r mice-run}
 log_message("Starting MICE imputation process...")
+
+# DIAGNOSTIC: Final check before imputation
+log_message("\nFinal pre-imputation checks:")
+log_message(paste0("Number of rows in df_mice: ", nrow(df_mice)))
+log_message(paste0("Number of columns in df_mice: ", ncol(df_mice)))
+log_message(paste0("Dimensions of predictor matrix: ", nrow(pred_matrix), " x ", ncol(pred_matrix)))
+log_message(paste0("Length of methods vector: ", length(custom_methods)))
+log_message(paste0("Length of visit sequence: ", length(visit_sequence)))
+
+# Check alignment
+if (ncol(df_mice) != length(custom_methods)) {
+  log_message("WARNING: Number of columns doesn't match length of methods vector!")
+}
+if (ncol(df_mice) != nrow(pred_matrix) || ncol(df_mice) != ncol(pred_matrix)) {
+  log_message("WARNING: Predictor matrix dimensions don't match data dimensions!")
+}
+
+# Show what will be imputed
+log_message("\nVariables in visit sequence:")
+print(visit_sequence)
+
+# CRITICAL CHECK: Verify outcome_VA_logMAR setup
+if ("outcome_VA_logMAR" %in% names(df_mice)) {
+  n_miss_outcome <- sum(is.na(df_mice$outcome_VA_logMAR))
+  method_outcome <- custom_methods["outcome_VA_logMAR"]
+  n_preds_outcome <- sum(pred_matrix["outcome_VA_logMAR", ] > 0)
+  
+  log_message("\nCRITICAL: outcome_VA_logMAR status:")
+  log_message(paste0("  - Missing values: ", n_miss_outcome))
+  log_message(paste0("  - Method assigned: ", method_outcome))
+  log_message(paste0("  - Number of predictors: ", n_preds_outcome))
+  log_message(paste0("  - In visit sequence: ", "outcome_VA_logMAR" %in% visit_sequence))
+  
+  # Check if cohort_id might be blocking
+  if ("cohort_id" %in% names(df_mice)) {
+    cohort_excluded <- sum(df_mice$cohort_id == "excluded")
+    log_message(paste0("  - Records with cohort_id='excluded': ", cohort_excluded))
+  }
+}
+
 imp_start <- Sys.time()
 
 mice_results <- mice(
@@ -423,6 +497,27 @@ mice_results <- mice(
 
 imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
 log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
+
+# Check if imputation actually happened
+log_message("\nPost-imputation check - variables that were imputed:")
+imputed_vars_actual <- names(mice_results$imp)
+log_message(paste0("Number of variables actually imputed: ", length(imputed_vars_actual)))
+print(imputed_vars_actual)
+
+# Check specific variables
+for (v in c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR")) {
+  if (v %in% names(mice_results$imp)) {
+    log_message(paste0(v, ": WAS IMPUTED"))
+  } else {
+    log_message(paste0(v, ": WAS NOT IMPUTED"))
+  }
+}
+
+# Check for logged events (errors during imputation)
+if (!is.null(mice_results$loggedEvents)) {
+  log_message("\nWARNING: Logged events during imputation:")
+  print(mice_results$loggedEvents)
+}
 
 # Minimal completeness verification: first completed dataset has no missing values
 first_imp <- complete(mice_results, 1)
