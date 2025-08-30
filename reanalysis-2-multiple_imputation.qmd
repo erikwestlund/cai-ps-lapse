@@ -123,7 +123,18 @@ df_mice <- df_for_imputation |>
     cohort_id = factor(cohort_id),  # Ensure cohort_id is a factor
     gender_cat = factor(gender_cat),
     race_ethnic_cat = factor(race_ethnic_cat),
-    insurance_cat = factor(insurance_cat)
+    insurance_cat = factor(insurance_cat),
+    
+    # Convert binary variables to factors for logreg method
+    # These need to be factors with 2 levels for mice logreg to work
+    ever_lapse_binary = factor(ever_lapse_binary, levels = c(0, 1)),
+    catsurg_before_hitplus_cat = factor(catsurg_before_hitplus_cat, levels = c(0, 1)),
+    glaucoma_bef_hitplus_cat = factor(glaucoma_bef_hitplus_cat, levels = c(0, 1)),
+    otherretina_bef_hitplus_cat = factor(otherretina_bef_hitplus_cat, levels = c(0, 1)),
+    other_inject = factor(other_inject, levels = c(0, 1)),
+    anti_VEGF = factor(anti_VEGF, levels = c(0, 1)),
+    focal_laser_flag = factor(focal_laser_flag, levels = c(0, 1)),
+    PRP_flag = factor(PRP_flag, levels = c(0, 1))
   )
 ```
 
@@ -195,16 +206,9 @@ custom_methods["insurance_cat"] <- "polyreg"
 custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor; see below.
 custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor; see below.
 
-# Variables that are complete (no missing data) - set method but won't actually be imputed
-# Setting methods ensures correct measurement level is used IF they had missing data
-custom_methods["ever_lapse_binary"] <- "logreg"  # Binary - complete
-custom_methods["glaucoma_bef_hitplus_cat"] <- "logreg"  # Binary - already recoded to 0/1
-custom_methods["otherretina_bef_hitplus_cat"] <- "logreg"  # Binary - already recoded to 0/1
-custom_methods["gender_cat"] <- "logreg"  # Binary categorical - likely complete
-custom_methods["other_inject"] <- "logreg"  # Binary - likely complete
-custom_methods["anti_VEGF"] <- "logreg"  # Binary - likely complete  
-custom_methods["focal_laser_flag"] <- "logreg"  # Binary - likely complete
-custom_methods["PRP_flag"] <- "logreg"  # Binary - likely complete
+# Variables that are complete (no missing data) - leave method empty
+# mice will automatically skip variables with no missing data
+# Only set methods for variables that actually have missing data to avoid type mismatches
 
 # Note: Variables with complete data won't be imputed even if they have a method assigned
 # The method specification ensures proper measurement level if imputation were needed
