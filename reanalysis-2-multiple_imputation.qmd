@@ -65,7 +65,7 @@ vars_no_impute_no_predict <- c(
 # Variables that should NOT be imputed but CAN be used as predictors  
 vars_no_impute_yes_predict <- c(
   "ever_lapse_binary",  # Exposure - complete
-  "cohort_id"          # Data indicator - complete
+  "cohort_id"           # Data indicator - complete
 )
 
 # Cluster variable (patient ID)
@@ -236,49 +236,92 @@ log_message("Imputation methods configured")
 ## Setup Predictor Matrix
 
 ```{r setup-predictors}
-# Use quickpred to get smart predictor selection
-# This selects predictors with correlation >= 0.10 (R^2 >= 0.01)
-# As recommended in Van Buuren's MICE documentation
-
-# Variables that should always be included as predictors (key variables)
-vars_always_predict <- c(
-  "ever_lapse_binary",      # Exposure
-  "baseline_VA_logMAR",     # Key outcome
-  "outcome_VA_logMAR",      # Key outcome
-  "age",                    # Demographics
-  "gender_cat",
-  "race_ethnic_cat",        # Demographics
-  "insurance_cat",          # Demographics/SES
-  "CCI", "DCSI",           # Comorbidities
-  "person_dr",              # DR severity - key clinical variable
-  "anti_VEGF",              # Key treatment
-  "focal_laser_flag",       # Treatment
-  "PRP_flag",               # Treatment
-  "glaucoma_bef_hitplus_cat",  # Ocular comorbidity
-  "otherretina_bef_hitplus_cat", # Ocular comorbidity
-  "catsurg_before_hitplus_cat",  # Cataract surgery
-  "fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr" # Fellow-eye predictors
-)
+# Create predictor matrix based on theoretical relationships
+# Start with empty matrix (no predictors)
+pred_matrix <- matrix(0, nrow = ncol(df_mice), ncol = ncol(df_mice))
+colnames(pred_matrix) <- names(df_mice)
+rownames(pred_matrix) <- names(df_mice)
 
 # Variables that should never be predictors
 vars_never_predict <- c(
   vars_no_impute_no_predict
 )
 
-# Generate predictor matrix using quickpred
-# Lower threshold to 0.05 to capture more predictive relationships
-# This includes variables with correlations >= 0.05 (R^2 >= 0.0025)
-pred_matrix <- quickpred(
-  df_mice, 
-  exclude = vars_never_predict,
-  include = vars_always_predict,
-  mincor = 0.05,  # Lowered from 0.10 to include more predictors
-  method = "pearson"
-)
-
 # No multilevel imputation: ensure cluster ID is not used as predictor
 pred_matrix[, cluster_var] <- 0
 pred_matrix[cluster_var, ] <- 0
+
+# Set default predictors for imputation variables
+# Demographics predict most variables
+demographic_vars <- c("age", "gender_cat", "race_ethnic_cat", "insurance_cat")
+for (var in c(vars_impute_continuous, vars_impute_binary, vars_impute_categorical, vars_impute_ordinal)) {
+  if (var %in% rownames(pred_matrix)) {
+    for (demo in demographic_vars) {
+      if (demo %in% colnames(pred_matrix)) {
+        pred_matrix[var, demo] <- 1
+      }
+    }
+  }
+}
+
+# Comorbidities predict most variables
+comorbidity_vars <- c("CCI", "DCSI", "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat")
+for (var in c(vars_impute_continuous, vars_impute_binary, vars_impute_categorical, vars_impute_ordinal)) {
+  if (var %in% rownames(pred_matrix)) {
+    for (comorb in comorbidity_vars) {
+      if (comorb %in% colnames(pred_matrix)) {
+        pred_matrix[var, comorb] <- 1
+      }
+    }
+  }
+}
+
+# Treatment variables predict outcomes and DR severity
+treatment_vars <- c("anti_VEGF", "focal_laser_flag", "PRP_flag", "other_inject")
+for (var in c("intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")) {
+  if (var %in% rownames(pred_matrix)) {
+    for (tr in treatment_vars) {
+      if (tr %in% colnames(pred_matrix)) {
+        pred_matrix[var, tr] <- 1
+      }
+    }
+  }
+}
+
+# Fellow-eye variables predict corresponding variables
+fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr")
+if ("baseline_VA_logMAR" %in% rownames(pred_matrix) && "fellow_baseline_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
+}
+if ("intermediate_VA_logMAR" %in% rownames(pred_matrix) && "fellow_intermediate_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
+}
+if ("outcome_VA_logMAR" %in% rownames(pred_matrix) && "fellow_outcome_VA" %in% colnames(pred_matrix)) {
+  pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
+}
+if ("person_dr" %in% rownames(pred_matrix) && "fellow_dr" %in% colnames(pred_matrix)) {
+  pred_matrix["person_dr", "fellow_dr"] <- 1
+}
+
+# Exposure variable predicts outcomes
+if ("ever_lapse_binary" %in% colnames(pred_matrix)) {
+  for (var in c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")) {
+    if (var %in% rownames(pred_matrix)) {
+      pred_matrix[var, "ever_lapse_binary"] <- 1
+    }
+  }
+}
+
+# Temporal relationships for VA variables
+if ("intermediate_VA_logMAR" %in% rownames(pred_matrix) && "baseline_VA_logMAR" %in% colnames(pred_matrix)) {
+  pred_matrix["intermediate_VA_logMAR", "baseline_VA_logMAR"] <- 1
+}
+if ("outcome_VA_logMAR" %in% rownames(pred_matrix) && "baseline_VA_logMAR" %in% colnames(pred_matrix)) {
+  pred_matrix["outcome_VA_logMAR", "baseline_VA_logMAR"] <- 1
+}
+if ("outcome_VA_logMAR" %in% rownames(pred_matrix) && "intermediate_VA_logMAR" %in% colnames(pred_matrix)) {
+  pred_matrix["outcome_VA_logMAR", "intermediate_VA_logMAR"] <- 1
+}
 
 
 
@@ -366,6 +409,10 @@ if ("fellow_baseline_VA" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_lo
 if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 1
 if ("fellow_outcome_VA" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
 if ("fellow_dr" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) pred_matrix["person_dr", "fellow_dr"] <- 1
+
+# Fellow-eye VA (baseline/intermediate) also inform DR severity
+if ("fellow_baseline_VA" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) pred_matrix["person_dr", "fellow_baseline_VA"] <- 1
+if ("fellow_intermediate_VA" %in% colnames(pred_matrix) && "person_dr" %in% rownames(pred_matrix)) pred_matrix["person_dr", "fellow_intermediate_VA"] <- 1
 
 # Ocular comorbidities and cataract surgery predict VA timepoints
 for (va in c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR")) {
