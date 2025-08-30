@@ -13,10 +13,16 @@ init_log <- function(analysis_name, log_dir = "logs") {
   timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
   log_file <- file.path(log_dir, paste0(analysis_name, "_", timestamp, ".log"))
   
+  # Check if log file exists and delete it to avoid permission errors
+  if (file.exists(log_file)) {
+    try(unlink(log_file, force = TRUE), silent = TRUE)
+  }
+  
   # Initialize log with header
   header_msg <- paste0("================================================================================\n",
                       "Analysis: ", analysis_name, "\n",
                       "Started: ", Sys.time(), "\n",
+                      "Note: Previous log (if any) was deleted to avoid permission errors\n",
                       "================================================================================\n\n")
   
   # Write to log file
@@ -130,14 +136,16 @@ finalize_log <- function(success = TRUE) {
 create_latest_log_link <- function(log_file, analysis_name, log_dir = "logs") {
   latest_link <- file.path(log_dir, paste0(analysis_name, "_latest.log"))
   
-  # Remove existing symlink if it exists
-  if (file.exists(latest_link)) {
-    unlink(latest_link)
+  # Remove existing symlink if it exists (force removal to avoid permission errors)
+  if (file.exists(latest_link) || file.symlink(latest_link)) {
+    try(unlink(latest_link, force = TRUE), silent = TRUE)
   }
   
   # Create new symlink (on Unix-like systems)
   if (.Platform$OS.type == "unix") {
-    system(paste0("ln -s ", basename(log_file), " ", latest_link))
+    try({
+      system(paste0("ln -sf ", basename(log_file), " ", latest_link))
+    }, silent = TRUE)
   }
 }
 
