@@ -34,7 +34,7 @@ if (analysis_mode == "test") {
   n_imputations <- 2
   n_iterations <- 2
 } else if (analysis_mode == "final") {
-  n_imputations <- 50
+  n_imputations <- 30
   n_iterations <- 20
 } else {
   stop("Invalid analysis_mode. Must be 'test' or 'final'")
