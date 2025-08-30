@@ -436,6 +436,28 @@ if (length(missing_after) > 0) {
 }
 ```
 
+## Post-Imputation Completeness
+
+```{r post-imputation-completeness}
+# Table of variables with remaining missingness in the first completed dataset
+comp_table <- tibble(
+  Variable = names(first_imp),
+  Present = colSums(!is.na(first_imp)),
+  Missing = colSums(is.na(first_imp))
+) |>
+  dplyr::mutate(MissingPct = round(Missing / nrow(first_imp) * 100, 2)) |>
+  dplyr::arrange(dplyr::desc(Missing))
+
+vars_with_missing <- comp_table |>
+  dplyr::filter(Missing > 0)
+
+if (nrow(vars_with_missing) > 0) {
+  kable(vars_with_missing, caption = "Variables with missing data after imputation (first completed dataset)")
+} else {
+  kable(tibble(Message = "No variables with missing data after imputation (first completed dataset)"))
+}
+```
+
  
 
 ## Create Complete Datasets and Derive Variables
