@@ -6,6 +6,11 @@ date: "`r Sys.Date()`"
 format: html
 ---
 
+::: {.callout-important}
+## Key Change from Previous Version
+`cohort_id` has been removed from the imputation model to avoid perfect prediction issues. The variable perfectly predicted outcome missingness (all 'excluded' had missing outcomes, all 'submitted' had observed outcomes), preventing successful imputation. The variable is preserved and added back after imputation for tracking purposes.
+:::
+
 ## Setup
 
 ```{r setup}
@@ -72,10 +77,10 @@ imputation_vars <- c(
   "e_mrn_deidentified",
   
   # Temporal VA variables
-  "cohort_id",                 # Data indicator only - not used as predictor
+  # NOTE: cohort_id REMOVED - it perfectly predicts outcome missingness
   "baseline_VA_logMAR",        # Baseline VA
-  "intermediate_VA_logMAR",    # Intermediate follow-up VA (for excluded cohort)
-  "outcome_VA_logMAR",         # 2-year outcome (true for submitted, missing for excluded)
+  "intermediate_VA_logMAR",    # Intermediate follow-up VA
+  "outcome_VA_logMAR",         # 2-year outcome
   # NOT outcome_va_vi_binary - derived from logMAR threshold
   
   # Exposure
@@ -110,16 +115,17 @@ imputation_vars <- c(
 df_mice <- df_for_imputation |>
   mutate(
     # Create a unique row identifier to preserve exact row matching
-    row_id = dplyr::row_number()
+    row_id = dplyr::row_number(),
+    # Store cohort_id separately for later use (not in imputation)
+    cohort_id_original = cohort_id
   ) |>
-  dplyr::select(row_id, dplyr::all_of(imputation_vars)) |>
+  dplyr::select(row_id, cohort_id_original, dplyr::all_of(imputation_vars)) |>
   mutate(
     # Convert person_dr to ordered factor for polr imputation method
     person_dr = factor(person_dr, levels = c(0, 1, 2),
                        labels = c("No_DR", "NPDR", "PDR"),
                        ordered = TRUE),
     # Lock factor levels for categorical variables to ensure consistency
-    cohort_id = factor(cohort_id),
     gender_cat = factor(gender_cat),
     race_ethnic_cat = factor(race_ethnic_cat),
     insurance_cat = factor(insurance_cat)
@@ -180,7 +186,7 @@ print(custom_methods)
 custom_methods["baseline_VA_logMAR"] <- "pmm"
 custom_methods["intermediate_VA_logMAR"] <- "pmm"
 custom_methods["outcome_VA_logMAR"] <- "pmm"
-custom_methods["cohort_id"] <- ""  # never impute
+# cohort_id removed from dataset to avoid perfect prediction
 
 # Other continuous
 custom_methods["CCI"] <- "pmm"
@@ -208,6 +214,7 @@ custom_methods["insurance_cat"] <- "polyreg"
 # IDs and fellow-eye variables: never impute
 custom_methods["row_id"] <- ""
 custom_methods["e_mrn_deidentified"] <- ""
+custom_methods["cohort_id_original"] <- ""  # Stored for later, not imputed
 for (fv in c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")) {
   if (fv %in% names(custom_methods)) custom_methods[fv] <- ""
 }
@@ -249,14 +256,14 @@ colnames(pred_matrix) <- names(df_mice)
 rownames(pred_matrix) <- names(df_mice)
 
 # Never impute IDs (row = 0) and never use them as predictors (col = 0)
-for (idv in c("row_id", "e_mrn_deidentified")) {
+for (idv in c("row_id", "e_mrn_deidentified", "cohort_id_original")) {
   if (idv %in% rownames(pred_matrix)) pred_matrix[idv, ] <- 0
   if (idv %in% colnames(pred_matrix)) pred_matrix[, idv] <- 0
 }
 
-# Never impute but can be used as predictors: ever_lapse_binary, cohort_id
+# Never impute but can be used as predictors: ever_lapse_binary
 if ("ever_lapse_binary" %in% rownames(pred_matrix)) pred_matrix["ever_lapse_binary", ] <- 0
-if ("cohort_id" %in% rownames(pred_matrix)) pred_matrix["cohort_id", ] <- 0
+# cohort_id removed entirely to avoid perfect prediction issues
 
 # Fellow-eye and helper vars are predictors only (never imputed)
 fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")
@@ -475,11 +482,12 @@ if ("outcome_VA_logMAR" %in% names(df_mice)) {
   log_message(paste0("  - Number of predictors: ", n_preds_outcome))
   log_message(paste0("  - In visit sequence: ", "outcome_VA_logMAR" %in% visit_sequence))
   
-  # Check if cohort_id might be blocking
-  if ("cohort_id" %in% names(df_mice)) {
-    cohort_excluded <- sum(df_mice$cohort_id == "excluded")
-    log_message(paste0("  - Records with cohort_id='excluded': ", cohort_excluded))
-  }
+  # Note about cohort_id removal
+  log_message("  - cohort_id removed from model to avoid perfect prediction")
+  
+  # Check proportion missing
+  pct_missing <- round(100 * n_miss_outcome / nrow(df_mice), 1)
+  log_message(paste0("  - Percent missing: ", pct_missing, "%"))
 }
 
 imp_start <- Sys.time()
@@ -571,10 +579,18 @@ imputed_datasets <- lapply(1:n_imputations, function(i) {
     create_dr_severity_variables()     # dr_severity from person_dr
 })
 
-# Add back variables not included in imputation or transformations (exact row match on row_id)
+# Add back cohort_id and other variables not included in imputation
 df_original_full <- df_for_imputation |>
   mutate(row_id = dplyr::row_number())
 
+# First add back cohort_id from cohort_id_original
+imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
+  imp_data$cohort_id <- imp_data$cohort_id_original
+  imp_data$cohort_id_original <- NULL  # Remove the temporary column
+  imp_data
+})
+
+# Then add any other variables not included in imputation or transformations
 vars_in_imputed <- names(imputed_datasets[[1]])
 vars_to_add <- setdiff(names(df_original_full), c(vars_in_imputed, "row_id"))
 
