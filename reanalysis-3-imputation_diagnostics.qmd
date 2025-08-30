@@ -367,7 +367,12 @@ temporal_summary <- temporal_df |>
     mean_discrepancy = round(mean(discrepancy), 5),
     max_discrepancy = round(max(discrepancy), 5),
     pct_reversals = round(100 * mean(trajectory_reversal), 1),
-    cor_segments = round(cor(change_1, change_2, use = "complete.obs"), 3),
+    # Handle correlation when SD is zero (all values the same)
+    cor_segments = if(sd(change_1, na.rm = TRUE) == 0 | sd(change_2, na.rm = TRUE) == 0) {
+      NA_real_
+    } else {
+      round(cor(change_1, change_2, use = "complete.obs"), 3)
+    },
     .groups = "drop"
   )
 
@@ -377,7 +382,8 @@ kable(temporal_summary,
 
 # Sample trajectories
 set.seed(2025)
-sample_ids <- sample(temporal_df$row_number(), min(200, nrow(temporal_df)))
+n_sample <- min(200, nrow(temporal_df))
+sample_ids <- sample(1:nrow(temporal_df), n_sample)
 
 trajectory_plot_data <- temporal_df[sample_ids,] |>
   mutate(patient_id = row_number()) |>
