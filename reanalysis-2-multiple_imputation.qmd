@@ -115,11 +115,9 @@ imputation_vars <- c(
 df_mice <- df_for_imputation |>
   mutate(
     # Create a unique row identifier to preserve exact row matching
-    row_id = dplyr::row_number(),
-    # Store cohort_id separately for later use (not in imputation)
-    cohort_id_original = cohort_id
+    row_id = dplyr::row_number()
   ) |>
-  dplyr::select(row_id, cohort_id_original, dplyr::all_of(imputation_vars)) |>
+  dplyr::select(row_id, dplyr::all_of(imputation_vars)) |>
   mutate(
     # Convert person_dr to ordered factor for polr imputation method
     person_dr = factor(person_dr, levels = c(0, 1, 2),
@@ -214,7 +212,6 @@ custom_methods["insurance_cat"] <- "polyreg"
 # IDs and fellow-eye variables: never impute
 custom_methods["row_id"] <- ""
 custom_methods["e_mrn_deidentified"] <- ""
-custom_methods["cohort_id_original"] <- ""  # Stored for later, not imputed
 for (fv in c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")) {
   if (fv %in% names(custom_methods)) custom_methods[fv] <- ""
 }
@@ -256,7 +253,7 @@ colnames(pred_matrix) <- names(df_mice)
 rownames(pred_matrix) <- names(df_mice)
 
 # Never impute IDs (row = 0) and never use them as predictors (col = 0)
-for (idv in c("row_id", "e_mrn_deidentified", "cohort_id_original")) {
+for (idv in c("row_id", "e_mrn_deidentified")) {
   if (idv %in% rownames(pred_matrix)) pred_matrix[idv, ] <- 0
   if (idv %in% colnames(pred_matrix)) pred_matrix[, idv] <- 0
 }
@@ -530,12 +527,33 @@ if (!is.null(mice_results$loggedEvents)) {
 # Minimal completeness verification: first completed dataset has no missing values
 first_imp <- complete(mice_results, 1)
 missing_after <- colSums(is.na(first_imp))
+
+# Check specific key variables
+key_vars_check <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")
+log_message("\nMissing values in key variables after imputation:")
+for (v in key_vars_check) {
+  if (v %in% names(first_imp)) {
+    n_miss_after <- sum(is.na(first_imp[[v]]))
+    n_miss_before <- sum(is.na(df_mice[[v]]))
+    log_message(paste0(v, ": Before=", n_miss_before, ", After=", n_miss_after))
+  }
+}
+
+# Report on variables that still have missing values
 missing_after <- missing_after[missing_after > 0]
 if (length(missing_after) > 0) {
-  log_message("WARNING: Missing values remain after imputation:")
+  log_message("\nWARNING: Variables with remaining missing values:")
   print(missing_after)
+  
+  # Check if these are the fellow variables (which shouldn't be imputed)
+  fellow_vars_missing <- intersect(names(missing_after), 
+                                   c("fellow_baseline_VA", "fellow_intermediate_VA", 
+                                     "fellow_outcome_VA", "fellow_dr"))
+  if (length(fellow_vars_missing) > 0) {
+    log_message("Note: Fellow variables are expected to have missing values (single eyes)")
+  }
 } else {
-  log_message("SUCCESS: All missing data imputed in first completed dataset.")
+  log_message("\nSUCCESS: All missing data imputed in first completed dataset.")
 }
 ```
 
@@ -583,10 +601,14 @@ imputed_datasets <- lapply(1:n_imputations, function(i) {
 df_original_full <- df_for_imputation |>
   mutate(row_id = dplyr::row_number())
 
-# First add back cohort_id from cohort_id_original
+# Add back cohort_id from the original data
 imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
-  imp_data$cohort_id <- imp_data$cohort_id_original
-  imp_data$cohort_id_original <- NULL  # Remove the temporary column
+  # Add cohort_id back from original data based on row_id
+  imp_data <- imp_data |>
+    dplyr::left_join(
+      df_original_full |> dplyr::select(row_id, cohort_id),
+      by = "row_id"
+    )
   imp_data
 })
 
