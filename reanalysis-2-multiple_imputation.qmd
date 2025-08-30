@@ -124,11 +124,13 @@ df_person_dr <- df_for_imputation |>
 df_mice <- df_for_imputation |>
   mutate(
     # Create a unique row identifier to preserve exact row matching
-    row_id = row_number()
+    row_id = row_number(),
+    # Create numeric cluster ID for 2l.pan (required for multilevel imputation)
+    cluster_id = as.numeric(factor(e_mrn_deidentified))
   ) |>
   # Join the person-level DR severity
   left_join(df_person_dr, by = "e_mrn_deidentified") |>
-  dplyr::select(row_id, dplyr::all_of(imputation_vars), person_dr_max) |>
+  dplyr::select(row_id, cluster_id, dplyr::all_of(imputation_vars), person_dr_max) |>
   mutate(
     # Convert person_dr_max to ordered factor for polr imputation method
     person_dr_max = factor(person_dr_max, levels = c(0, 1, 2), 
@@ -230,6 +232,7 @@ custom_methods["insurance_cat"] <- "polyreg"
 # Don't impute these variables
 # Method = "" means: don't impute (but still use as predictor EXCEPT for IDs)
 custom_methods["row_id"] <- ""  # Row ID - never impute, never use as predictor; see below.
+custom_methods["cluster_id"] <- ""  # Cluster ID for 2l methods - never impute
 custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never use as predictor; see below.
 
 # Variables that are complete (no missing data) - leave method empty
@@ -243,9 +246,11 @@ custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never u
 pred_matrix <- mice_dry$predictorMatrix
 
 # Don't use IDs as predictors AND don't impute them
-# EXCEPT: e_mrn_deidentified is set to -2 as cluster indicator for 2l methods
-pred_matrix[, "e_mrn_deidentified"] <- -2  # Cluster indicator for 2l.pan
-pred_matrix["e_mrn_deidentified", ] <- 0  # Don't predict e_mrn itself
+# EXCEPT: cluster_id is set to -2 as cluster indicator for 2l methods
+pred_matrix[, "cluster_id"] <- -2  # Cluster indicator for 2l.pan
+pred_matrix["cluster_id", ] <- 0  # Don't predict cluster_id itself
+pred_matrix[, "e_mrn_deidentified"] <- 0  # Don't use patient ID as predictor
+pred_matrix["e_mrn_deidentified", ] <- 0  # Don't predict patient ID
 pred_matrix[, "row_id"] <- 0
 pred_matrix["row_id", ] <- 0
 
