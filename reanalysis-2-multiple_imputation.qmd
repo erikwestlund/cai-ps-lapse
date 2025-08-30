@@ -544,6 +544,14 @@ imputed_datasets <- lapply(1:n_imputations, function(i) {
     create_treatment_type() |>  # Creates treatment_type and any_treatment
     create_dr_severity_variables()  # Creates dr_severity factor from person_dr
   
+  # Verify dr_severity was created properly
+  if (!"dr_severity" %in% names(imp_data)) {
+    stop("dr_severity not created in imputation ", i)
+  }
+  if (!is.factor(imp_data$dr_severity)) {
+    stop("dr_severity is not a factor in imputation ", i)
+  }
+  
   return(imp_data)
 })
 
@@ -650,6 +658,41 @@ completeness_check <- lapply(imputed_datasets, function(d) {
 **Number of incomplete cases in PS model variables per imputed dataset:**
 ```{r completeness-results}
 print(unlist(completeness_check))
+```
+
+### DR Severity Variable Check
+
+```{r dr-severity-check}
+# Verify dr_severity was created properly in all datasets
+dr_severity_summary <- lapply(1:min(3, n_imputations), function(i) {
+  imp_data <- imputed_datasets[[i]]
+  
+  # Check dr_severity exists and is a factor
+  if (!"dr_severity" %in% names(imp_data)) {
+    return(data.frame(imputation = i, status = "MISSING"))
+  }
+  
+  # Get summary
+  dr_table <- table(imp_data$dr_severity, useNA = "ifany")
+  
+  data.frame(
+    imputation = i,
+    No_DR = dr_table["No_DR"],
+    NPDR = dr_table["NPDR"],
+    PDR = dr_table["PDR"],
+    Missing = sum(is.na(imp_data$dr_severity)),
+    is_factor = is.factor(imp_data$dr_severity),
+    n_levels = nlevels(imp_data$dr_severity)
+  )
+})
+
+dr_summary_df <- do.call(rbind, dr_severity_summary)
+kable(dr_summary_df, caption = "DR severity distribution in first 3 imputed datasets")
+
+# Confirm factor levels are correct
+if (is.factor(imputed_datasets[[1]]$dr_severity)) {
+  cat("DR severity levels:", paste(levels(imputed_datasets[[1]]$dr_severity), collapse = ", "), "\n")
+}
 ```
 
 ### Patient-Level Variable Consistency Check

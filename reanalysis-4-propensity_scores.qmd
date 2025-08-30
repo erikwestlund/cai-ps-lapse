@@ -77,20 +77,26 @@ variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 ## Define Propensity Score Formula
 
 ```{r ps-formula}
-# Use original formula from get_matching_formula() 
-# to maintain consistency with original analysis
+# Use reanalysis formula that includes DR severity
+# This is more comprehensive than the original formula
 
 ps_formula_original <- get_matching_formula()
+ps_formula_reanalysis <- get_matching_formula_reanalysis()
 
 ```
 
-**Propensity score formula (original, without DR severity):**
-```{r print-formula}
-# Show the formula being used
+**Original propensity score formula (without DR severity):**
+```{r print-formula-original}
 print(ps_formula_original)
+```
 
-# Set the formula to use for analysis
-ps_formula <- ps_formula_original
+**Reanalysis propensity score formula (with DR severity):**
+```{r print-formula-reanalysis}
+print(ps_formula_reanalysis)
+
+# Use the reanalysis formula that includes dr_severity
+ps_formula <- ps_formula_reanalysis
+cat("\nUsing reanalysis formula with dr_severity for propensity score estimation.\n")
 ```
 
 ## Run Twang Propensity Score Models
