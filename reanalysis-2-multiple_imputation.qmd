@@ -511,12 +511,19 @@ imputed_datasets <- lapply(1:n_imputations, function(i) {
   
   # Copy person_dr_max back to person_dr for each eye
   # This ensures DR severity is consistent within patients
+  # Handle the factor conversion correctly
   imp_data <- imp_data |>
     mutate(
-      # Convert person_dr_max back to numeric for person_dr
-      person_dr = as.numeric(as.character(factor(person_dr_max, 
-                                                 labels = c("0", "1", "2"))))
-    )
+      # person_dr_max is an ordered factor with levels "No_DR", "NPDR", "PDR"
+      # Convert to numeric 0, 1, 2
+      person_dr = case_when(
+        person_dr_max == "No_DR" ~ 0,
+        person_dr_max == "NPDR" ~ 1,
+        person_dr_max == "PDR" ~ 2,
+        TRUE ~ NA_real_
+      )
+    ) |>
+    select(-person_dr_max)  # Remove person_dr_max after using it
   
   # Apply transformation functions to recreate all derived variables
   imp_data <- imp_data |>
@@ -545,10 +552,22 @@ vars_to_add <- setdiff(names(df_original_full), c(vars_in_imputed, "row_id"))
 
 ```{r add-back-vars}
 if(length(vars_to_add) > 0) {
+  # IMPORTANT: Exclude No_DR, NPDR, PDR from vars_to_add to prevent overwriting person_dr
+  # These would cause create_dr_severity_variables to recalculate person_dr from eye-level data
+  original_vars_to_add <- vars_to_add
+  vars_to_add <- setdiff(vars_to_add, c("No_DR", "NPDR", "PDR"))
+  
+  if (length(original_vars_to_add) != length(vars_to_add)) {
+    log_message("Excluded No_DR/NPDR/PDR from variables to add back to preserve person_dr consistency")
+  }
+  
   # Add these variables back to each imputed dataset using row_id for exact matching
   imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
     # Store original row count
     orig_rows <- nrow(imp_data)
+    
+    # Store the consistent person_dr we just created
+    person_dr_consistent <- imp_data$person_dr
     
     # Join using row_id for exact 1:1 matching
     imp_data <- imp_data |>
@@ -556,7 +575,9 @@ if(length(vars_to_add) > 0) {
         df_original_full |> 
           dplyr::select(row_id, dplyr::all_of(vars_to_add)),
         by = "row_id"
-      )
+      ) |>
+      # Ensure person_dr remains consistent (in case it somehow got overwritten)
+      mutate(person_dr = person_dr_consistent)
     
     # Verify no row duplication
     if (nrow(imp_data) != orig_rows) {
