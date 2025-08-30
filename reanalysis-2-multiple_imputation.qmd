@@ -8,7 +8,7 @@ format: html
 
 ::: {.callout-important}
 ## Key Change from Previous Version
-`cohort_id` has been removed from the imputation model to avoid perfect prediction issues. The variable perfectly predicted outcome missingness (all 'excluded' had missing outcomes, all 'submitted' had observed outcomes), preventing successful imputation. The variable is preserved and added back after imputation for tracking purposes.
+`cohort_id` is included in the dataset but NOT used as a predictor in the imputation model to avoid perfect prediction issues. The variable is set to never be imputed (method = "") and its column in the predictor matrix is set to 0 so it cannot predict other variables. This allows mice to understand the data structure while preventing perfect prediction problems.
 :::
 
 ## Setup
@@ -76,8 +76,10 @@ if ("e_mrn_deidentified" %in% names(df_for_imputation)) {
 imputation_vars <- c(
   "e_mrn_deidentified",
   
+  # Data indicator - will NOT be imputed or used as predictor
+  "cohort_id",                 # Kept in dataset but not used for prediction
+  
   # Temporal VA variables
-  # NOTE: cohort_id REMOVED - it perfectly predicts outcome missingness
   "baseline_VA_logMAR",        # Baseline VA
   "intermediate_VA_logMAR",    # Intermediate follow-up VA
   "outcome_VA_logMAR",         # 2-year outcome
@@ -124,6 +126,7 @@ df_mice <- df_for_imputation |>
                        labels = c("No_DR", "NPDR", "PDR"),
                        ordered = TRUE),
     # Lock factor levels for categorical variables to ensure consistency
+    cohort_id = factor(cohort_id),  # Keep as factor but won't impute
     gender_cat = factor(gender_cat),
     race_ethnic_cat = factor(race_ethnic_cat),
     insurance_cat = factor(insurance_cat)
@@ -184,7 +187,9 @@ print(custom_methods)
 custom_methods["baseline_VA_logMAR"] <- "pmm"
 custom_methods["intermediate_VA_logMAR"] <- "pmm"
 custom_methods["outcome_VA_logMAR"] <- "pmm"
-# cohort_id removed from dataset to avoid perfect prediction
+
+# Data indicator - never impute
+custom_methods["cohort_id"] <- ""
 
 # Other continuous
 custom_methods["CCI"] <- "pmm"
@@ -258,9 +263,12 @@ for (idv in c("row_id", "e_mrn_deidentified")) {
   if (idv %in% colnames(pred_matrix)) pred_matrix[, idv] <- 0
 }
 
-# Never impute but can be used as predictors: ever_lapse_binary
+# Never impute these variables (set their rows to 0)
 if ("ever_lapse_binary" %in% rownames(pred_matrix)) pred_matrix["ever_lapse_binary", ] <- 0
-# cohort_id removed entirely to avoid perfect prediction issues
+if ("cohort_id" %in% rownames(pred_matrix)) pred_matrix["cohort_id", ] <- 0
+
+# CRITICAL: cohort_id must NOT be used as a predictor (set its column to 0)
+if ("cohort_id" %in% colnames(pred_matrix)) pred_matrix[, "cohort_id"] <- 0
 
 # Fellow-eye and helper vars are predictors only (never imputed)
 fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")
@@ -479,8 +487,12 @@ if ("outcome_VA_logMAR" %in% names(df_mice)) {
   log_message(paste0("  - Number of predictors: ", n_preds_outcome))
   log_message(paste0("  - In visit sequence: ", "outcome_VA_logMAR" %in% visit_sequence))
   
-  # Note about cohort_id removal
-  log_message("  - cohort_id removed from model to avoid perfect prediction")
+  # Check cohort_id setup
+  if ("cohort_id" %in% names(df_mice)) {
+    log_message("  - cohort_id: included but NOT used as predictor")
+    cohort_excluded <- sum(df_mice$cohort_id == "excluded")
+    log_message(paste0("  - Records with cohort_id='excluded': ", cohort_excluded))
+  }
   
   # Check proportion missing
   pct_missing <- round(100 * n_miss_outcome / nrow(df_mice), 1)
@@ -597,22 +609,11 @@ imputed_datasets <- lapply(1:n_imputations, function(i) {
     create_dr_severity_variables()     # dr_severity from person_dr
 })
 
-# Add back cohort_id and other variables not included in imputation
+# Add back variables not included in imputation or transformations
 df_original_full <- df_for_imputation |>
   mutate(row_id = dplyr::row_number())
 
-# Add back cohort_id from the original data
-imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
-  # Add cohort_id back from original data based on row_id
-  imp_data <- imp_data |>
-    dplyr::left_join(
-      df_original_full |> dplyr::select(row_id, cohort_id),
-      by = "row_id"
-    )
-  imp_data
-})
-
-# Then add any other variables not included in imputation or transformations
+# Add any other variables not included in imputation or transformations
 vars_in_imputed <- names(imputed_datasets[[1]])
 vars_to_add <- setdiff(names(df_original_full), c(vars_in_imputed, "row_id"))
 
