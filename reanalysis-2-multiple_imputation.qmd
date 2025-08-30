@@ -1,6 +1,6 @@
 ---
 title: "Reanalysis Step 2: Multiple Imputation"
-subtitle: "Imputation using mice with strict temporal constraints"
+subtitle: "Imputing missing values using mice with strict temporal and fellow-eye constraints"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
 format: html
@@ -11,137 +11,120 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
-source("functions.R")
+source("functions.R")  # Load formula definitions and helper functions
 seed <- 2025
 setup_analysis(seed = seed)
 
+# Packages
 library(mice)
-library(miceadds)
 library(VIM)
 library(naniar)
 library(dplyr)
 library(tidyr)
 library(knitr)
-library(lme4)
+library(tibble)
 
-# Initialize logging
-log_file <- init_log("multiple_imputation")
-
-# ANALYSIS MODE
-analysis_mode <- "final"  # "test" or "final"
+# ANALYSIS MODE: "test" or "final"
+# test = 2 imputations, 3 iterations (fast)
+# final = 30 imputations, 20 iterations (stability achieved ~20)
+analysis_mode <- "test"
 
 if (analysis_mode == "test") {
   n_imputations <- 2
   n_iterations <- 3
-} else {
+} else if (analysis_mode == "final") {
   n_imputations <- 30
   n_iterations <- 20
+} else {
+  stop("Invalid analysis_mode. Must be 'test' or 'final'")
 }
 
+# Initialize logging
+log_file <- init_log("multiple_imputation")
 log_message(paste0("Analysis mode: ", analysis_mode))
 log_message(paste0("Imputations: ", n_imputations, ", Iterations: ", n_iterations))
 ```
 
-## Load Data
+## Load Prepared Data
 
 ```{r load-data}
-# Load the prepared dataset
-df_original <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
-log_message(paste0("Loaded ", nrow(df_original), " observations"))
+# Load the prepared dataset from Step 1
+df_for_imputation <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
+variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
 
-# Get unique patient count
-n_patients <- n_distinct(df_original$e_mrn_deidentified)
-log_message(paste0("Number of unique patients: ", n_patients))
+ps_model_vars <- variable_lists$ps_model_vars
+outcome_model_vars <- variable_lists$outcome_model_vars
+
+# Quick record/patient counts
+log_message(paste0("Loaded records: ", nrow(df_for_imputation)))
+if ("e_mrn_deidentified" %in% names(df_for_imputation)) {
+  log_message(paste0("Unique patients: ", dplyr::n_distinct(df_for_imputation$e_mrn_deidentified)))
+}
 ```
 
 ## Define Variables for Imputation
 
-```{r define-variables}
-# Variables that should NOT be imputed and should NOT be used as predictors
-vars_no_impute_no_predict <- c(
-  "row_id"  # Internal row identifier
-)
+```{r define-imputation-vars}
+# Variables to include in imputation model (SOURCE variables only)
+# Derived variables will be recreated post-imputation
 
-# Variables that should NOT be imputed but CAN be used as predictors  
-vars_no_impute_yes_predict <- c(
-  "ever_lapse_binary",  # Exposure - complete
-  "cohort_id"           # Data indicator - complete
-)
-
-# Cluster variable (patient ID)
-cluster_var <- "e_mrn_deidentified"
-
-# Variables to impute - continuous (use PMM with clustering)
-vars_impute_continuous <- c(
-  "baseline_VA_logMAR",
-  "intermediate_VA_logMAR", 
-  "outcome_VA_logMAR",
-  "age",
-  "CCI",
-  "DCSI"
-)
-
-# Variables to impute - binary
-vars_impute_binary <- c(
-  "catsurg_before_hitplus_cat"
-)
-
-# Variables to impute - categorical
-vars_impute_categorical <- c(
+imputation_vars <- c(
+  "e_mrn_deidentified",
+  
+  # Temporal VA variables
+  "cohort_id",                 # Data indicator only - not used as predictor
+  "baseline_VA_logMAR",        # Baseline VA
+  "intermediate_VA_logMAR",    # Intermediate follow-up VA (for excluded cohort)
+  "outcome_VA_logMAR",         # 2-year outcome (true for submitted, missing for excluded)
+  # NOT outcome_va_vi_binary - derived from logMAR threshold
+  
+  # Exposure
+  "ever_lapse_binary",
+  
+  # Demographics/Clinical
   "gender_cat",
   "race_ethnic_cat",
-  "insurance_cat"
-)
-
-# Variables to impute - ordinal
-vars_impute_ordinal <- c(
-  "person_dr"  # 0=No_DR, 1=NPDR, 2=PDR
-)
-
-# Treatment variables (binary, likely complete)
-vars_treatment <- c(
+  "insurance_cat",
+  "age",                        # Continuous age (source)
+  # NOT age_cat - derived from cut(age)
+  "CCI",
+  "DCSI",
+  
+  # Treatment indicators - ALL SOURCES
   "other_inject",
   "anti_VEGF",
   "focal_laser_flag",
-  "PRP_flag"
-)
-
-# Comorbidity indicators (binary factors from step 1)
-vars_comorbidity <- c(
+  "PRP_flag",
+  # NOT treatment_type or any_treatment - derived from these 4
+  
+  # Comorbidities (already recoded to 0/1)
   "glaucoma_bef_hitplus_cat",
-  "otherretina_bef_hitplus_cat"
+  "otherretina_bef_hitplus_cat",
+  "catsurg_before_hitplus_cat",
+  
+  # DR severity - use person_dr (created from No_DR/NPDR/PDR)
+  "person_dr"                  # Numeric 0/1/2 → ordered factor
+  # NOT dr_severity/person_dr_severity - derived from person_dr
 )
 
-# All variables for imputation dataset
-all_vars <- c(
-  cluster_var,
-  vars_no_impute_no_predict,
-  vars_no_impute_yes_predict,
-  vars_impute_continuous,
-  vars_impute_binary,
-  vars_impute_categorical,
-  vars_impute_ordinal,
-  vars_treatment,
-  vars_comorbidity
-)
-```
-
-## Prepare Data for MICE
-
-```{r prepare-data}
-# Select variables and clean up (rely on step 1 outputs)
-df_mice <- df_original |>
-  select(any_of(all_vars)) |>
+df_mice <- df_for_imputation |>
   mutate(
-    # Ensure person_dr is ordered factor
-    person_dr = if (is.numeric(person_dr)) {
-      factor(person_dr, levels = c(0L, 1L, 2L), labels = c("No_DR", "NPDR", "PDR"), ordered = TRUE)
-    } else {
-      factor(person_dr, levels = c("No_DR", "NPDR", "PDR"), ordered = TRUE)
-    },
-    # Clean factor levels (remove spaces for formula compatibility)
-    across(where(is.character), ~ factor(gsub("[^[:alnum:]_]", "_", .x)))
+    # Create a unique row identifier to preserve exact row matching
+    row_id = dplyr::row_number()
   ) |>
+  dplyr::select(row_id, dplyr::all_of(imputation_vars)) |>
+  mutate(
+    # Convert person_dr to ordered factor for polr imputation method
+    person_dr = factor(person_dr, levels = c(0, 1, 2),
+                       labels = c("No_DR", "NPDR", "PDR"),
+                       ordered = TRUE),
+    # Lock factor levels for categorical variables to ensure consistency
+    cohort_id = factor(cohort_id),
+    gender_cat = factor(gender_cat),
+    race_ethnic_cat = factor(race_ethnic_cat),
+    insurance_cat = factor(insurance_cat)
+  ) |>
+  # Fellow-eye variables (computed within patient clusters)
   dplyr::group_by(e_mrn_deidentified) |>
   dplyr::mutate(
     n_eyes = dplyr::n(),
@@ -154,331 +137,180 @@ df_mice <- df_original |>
                                factor(NA, levels = levels(person_dr), ordered = TRUE))
   ) |>
   dplyr::ungroup() |>
-  dplyr::select(-eye_index) |>
-  dplyr::mutate(
-    # Convert cluster variable to integer for 2l methods
-    e_mrn_deidentified = as.integer(as.factor(e_mrn_deidentified))
-  )
-
-# Check missing data pattern
-log_message("Missing data summary:")
-missing_summary <- df_mice |>
-  summarise(across(everything(), ~ sum(is.na(.)))) |>
-  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
-  filter(n_missing > 0) |>
-  arrange(desc(n_missing))
-
-print(missing_summary)
+  dplyr::select(-eye_index)
 ```
 
-## Setup Imputation Methods
+## Setup Imputation Model (dry run and methods)
 
-```{r setup-methods}
-# Initialize mice to get default setup
-ini <- mice(df_mice, maxit = 0, printFlag = FALSE)
+```{r setup-mice}
+# Dry run to inspect missingness and defaults
+mice_dry <- mice(df_mice, maxit = 0, printFlag = FALSE)
 
-# Set up methods vector
-methods <- ini$method
-
-# No imputation for these
-methods[intersect(vars_no_impute_no_predict, names(methods))] <- ""
-methods[intersect(vars_no_impute_yes_predict, names(methods))] <- ""
-if (cluster_var %in% names(methods)) {
-  methods[cluster_var] <- ""
-}
-
-# Continuous variables - use standard PMM (no multilevel)
-for (var in vars_impute_continuous) {
-  if (var %in% names(methods)) {
-    methods[var] <- "pmm"
-  }
-}
-
-# Binary variables
-for (var in vars_impute_binary) {
-  if (var %in% names(methods)) {
-    methods[var] <- "logreg"
-  }
-}
-
-# Categorical variables  
-for (var in vars_impute_categorical) {
-  if (var %in% names(methods)) {
-    methods[var] <- "polyreg"
-  }
-}
-
-# Ordinal variables
-for (var in vars_impute_ordinal) {
-  if (var %in% names(methods)) {
-    methods[var] <- "polr"
-  }
-}
-
-# Treatment and comorbidity variables (likely complete, but set methods just in case)
-for (var in c(vars_treatment, vars_comorbidity)) {
-  if (var %in% names(methods)) {
-    methods[var] <- "logreg"
-  }
-}
-
-# Fellow-eye variables: predictors only (do not impute)
-vars_fellow <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")
-for (var in vars_fellow) {
-  if (var %in% names(methods)) {
-    methods[var] <- ""
-  }
-}
-
-log_message("Imputation methods configured")
-
-# Print methods summary to verify configuration
-methods_summary <- data.frame(
-  Variable = names(methods),
-  Method = methods,
-  stringsAsFactors = FALSE
+# Missingness summary
+miss_vars <- data.frame(
+  Variable = names(mice_dry$nmis),
+  N_Missing = mice_dry$nmis,
+  Pct_Missing = round(mice_dry$nmis/nrow(df_mice) * 100, 1)
 ) |>
-  mutate(
-    Will_Impute = Method != ""
-  )
+  dplyr::filter(N_Missing > 0) |>
+  dplyr::arrange(dplyr::desc(N_Missing))
 
-log_message("\nVariables that WILL be imputed:")
-print(methods_summary |> filter(Will_Impute))
+# Configure methods explicitly
+custom_methods <- mice_dry$method
 
-log_message("\nVariables that will NOT be imputed:")
-print(methods_summary |> filter(!Will_Impute))
+# Temporal VA variables
+custom_methods["baseline_VA_logMAR"] <- "pmm"
+custom_methods["intermediate_VA_logMAR"] <- "pmm"
+custom_methods["outcome_VA_logMAR"] <- "pmm"
+custom_methods["cohort_id"] <- ""  # never impute
 
-# Specifically check our key variables
-key_vars_check <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")
-log_message("\nMethods for key variables with missingness:")
-for (var in key_vars_check) {
-  if (var %in% names(methods)) {
-    log_message(paste0(var, ": ", methods[var]))
-  } else {
-    log_message(paste0(var, ": NOT IN DATASET"))
-  }
+# Other continuous
+custom_methods["CCI"] <- "pmm"
+custom_methods["DCSI"] <- "pmm"
+custom_methods["age"] <- "pmm"
+
+# Ordinal
+custom_methods["person_dr"] <- "polr"
+
+# Binary
+custom_methods["catsurg_before_hitplus_cat"] <- "logreg"
+custom_methods["ever_lapse_binary"] <- "logreg"  # likely complete, ok to set type
+custom_methods["glaucoma_bef_hitplus_cat"] <- "logreg"
+custom_methods["otherretina_bef_hitplus_cat"] <- "logreg"
+custom_methods["gender_cat"] <- "logreg"  # if binary
+custom_methods["other_inject"] <- "logreg"
+custom_methods["anti_VEGF"] <- "logreg"
+custom_methods["focal_laser_flag"] <- "logreg"
+custom_methods["PRP_flag"] <- "logreg"
+
+# Polytomous
+custom_methods["race_ethnic_cat"] <- "polyreg"
+custom_methods["insurance_cat"] <- "polyreg"
+
+# IDs and fellow-eye variables: never impute
+custom_methods["row_id"] <- ""
+custom_methods["e_mrn_deidentified"] <- ""
+for (fv in c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")) {
+  if (fv %in% names(custom_methods)) custom_methods[fv] <- ""
 }
 ```
 
-## Setup Predictor Matrix
+### Initial Imputation Model Summary
+
+**Total variables in dataset:** `r ncol(df_mice)`  
+**Variables to be imputed:** `r sum(mice_dry$nmis > 0)`  
+**Total missing values:** `r sum(mice_dry$nmis)`
+
+**Missing data by variable:**
+```{r missing-vars-table}
+kable(miss_vars)
+```
+
+## Setup Predictor Matrix (strict temporal + fellow-eye logic)
 
 ```{r setup-predictors}
-# Create predictor matrix based on theoretical relationships with strict temporal ordering
-# Start with empty matrix (no predictors)
+# Start with empty matrix, then opt in predictors explicitly
 pred_matrix <- matrix(0, nrow = ncol(df_mice), ncol = ncol(df_mice))
 colnames(pred_matrix) <- names(df_mice)
 rownames(pred_matrix) <- names(df_mice)
 
-# STEP 1: Ensure complete exclusions for non-imputed variables
-# e_mrn_deidentified and row_id should be completely excluded (rows and columns = 0)
-if ("e_mrn_deidentified" %in% names(df_mice)) {
-  pred_matrix[, "e_mrn_deidentified"] <- 0
-  pred_matrix["e_mrn_deidentified", ] <- 0
-}
-if ("row_id" %in% names(df_mice)) {
-  pred_matrix[, "row_id"] <- 0
-  pred_matrix["row_id", ] <- 0
+# Never impute IDs (row = 0) and never use them as predictors (col = 0)
+for (idv in c("row_id", "e_mrn_deidentified")) {
+  if (idv %in% rownames(pred_matrix)) pred_matrix[idv, ] <- 0
+  if (idv %in% colnames(pred_matrix)) pred_matrix[, idv] <- 0
 }
 
-# Ensure ever_lapse_binary and cohort_id are never imputed (rows = 0) but can be predictors
-if ("ever_lapse_binary" %in% rownames(pred_matrix)) {
-  pred_matrix["ever_lapse_binary", ] <- 0  # Never imputed
-}
-if ("cohort_id" %in% rownames(pred_matrix)) {
-  pred_matrix["cohort_id", ] <- 0  # Never imputed
-}
+# Never impute but can be used as predictors: ever_lapse_binary, cohort_id
+if ("ever_lapse_binary" %in% rownames(pred_matrix)) pred_matrix["ever_lapse_binary", ] <- 0
+if ("cohort_id" %in% rownames(pred_matrix)) pred_matrix["cohort_id", ] <- 0
 
-# Ensure all fellow variables are never imputed (rows = 0)
+# Fellow-eye and helper vars are predictors only (never imputed)
 fellow_vars <- c("fellow_baseline_VA", "fellow_intermediate_VA", "fellow_outcome_VA", "fellow_dr", "n_eyes")
-for (v in fellow_vars) {
-  if (v %in% rownames(pred_matrix)) {
-    pred_matrix[v, ] <- 0  # Never imputed
-  }
+for (fv in fellow_vars) {
+  if (fv %in% rownames(pred_matrix)) pred_matrix[fv, ] <- 0
 }
 
-# Define variable groups for clarity
+# Variable groups
 demographic_vars <- c("age", "gender_cat", "race_ethnic_cat", "insurance_cat")
 global_comorbidity_vars <- c("CCI", "DCSI")
 ocular_comorbidity_vars <- c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", "catsurg_before_hitplus_cat")
 treatment_vars <- c("anti_VEGF", "focal_laser_flag", "PRP_flag", "other_inject")
 
-# STEP 2: Configure baseline_VA_logMAR predictors
-# Predictors: demographics, global comorbidities, ocular comorbidities, exposure, fellow_baseline_VA
-# NO treatments, NO intermediate/outcome VAs
+# baseline_VA_logMAR predictors (no future info)
 if ("baseline_VA_logMAR" %in% rownames(pred_matrix)) {
-  # Demographics
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 1
-  }
-  # Global comorbidities
-  for (v in global_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 1
-  }
-  # Ocular comorbidities and cataract
-  for (v in ocular_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 1
-  }
-  # Exposure
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 1
+  for (v in global_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 1
+  for (v in ocular_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 1
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "ever_lapse_binary"] <- 1
-  # Fellow eye baseline only
   if ("fellow_baseline_VA" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "fellow_baseline_VA"] <- 1
-  
-  # Explicitly exclude treatments and future timepoints
-  for (v in treatment_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", v] <- 0
-  }
-  if ("intermediate_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "intermediate_VA_logMAR"] <- 0
-  if ("outcome_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "outcome_VA_logMAR"] <- 0
-  if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "fellow_intermediate_VA"] <- 0
-  if ("fellow_outcome_VA" %in% colnames(pred_matrix)) pred_matrix["baseline_VA_logMAR", "fellow_outcome_VA"] <- 0
 }
 
-# STEP 3: Configure intermediate_VA_logMAR predictors
-# Predictors: baseline_VA, demographics, CCI/DCSI, ocular comorbidities, exposure, fellow_baseline_VA
-# NO treatments, NO fellow_intermediate_VA, NO outcome VAs
+# intermediate_VA_logMAR predictors (no treatments, no future)
 if ("intermediate_VA_logMAR" %in% rownames(pred_matrix)) {
-  # Baseline VA
   if ("baseline_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "baseline_VA_logMAR"] <- 1
-  # Demographics
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 1
-  }
-  # Global comorbidities
-  for (v in global_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 1
-  }
-  # Ocular comorbidities and cataract
-  for (v in ocular_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 1
-  }
-  # Exposure
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 1
+  for (v in global_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 1
+  for (v in ocular_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 1
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "ever_lapse_binary"] <- 1
-  # Fellow eye baseline only (NOT intermediate)
   if ("fellow_baseline_VA" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "fellow_baseline_VA"] <- 1
-  
-  # Explicitly exclude treatments, fellow_intermediate_VA, and outcome VAs
-  for (v in treatment_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", v] <- 0
-  }
-  if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "fellow_intermediate_VA"] <- 0
-  if ("outcome_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "outcome_VA_logMAR"] <- 0
-  if ("fellow_outcome_VA" %in% colnames(pred_matrix)) pred_matrix["intermediate_VA_logMAR", "fellow_outcome_VA"] <- 0
+  # Explicitly exclude future/fellow-intermediate via omission (remain 0)
 }
 
-# STEP 4: Configure outcome_VA_logMAR predictors
-# Predictors: baseline_VA, intermediate_VA, demographics, CCI/DCSI, ocular comorbidities, exposure, treatments
-# Fellow predictors: fellow_baseline_VA and fellow_outcome_VA (NOT fellow_intermediate_VA)
+# outcome_VA_logMAR predictors (allow treatments and fellow baseline/outcome)
 if ("outcome_VA_logMAR" %in% rownames(pred_matrix)) {
-  # Prior timepoints
   if ("baseline_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "baseline_VA_logMAR"] <- 1
   if ("intermediate_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "intermediate_VA_logMAR"] <- 1
-  # Demographics
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
-  }
-  # Global comorbidities
-  for (v in global_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
-  }
-  # Ocular comorbidities and cataract
-  for (v in ocular_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
-  }
-  # Exposure
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
+  for (v in global_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
+  for (v in ocular_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "ever_lapse_binary"] <- 1
-  # Treatments (allowed for outcome)
-  for (v in treatment_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
-  }
-  # Fellow predictors: baseline and outcome only
+  for (v in treatment_vars) if (v %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", v] <- 1
   if ("fellow_baseline_VA" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "fellow_baseline_VA"] <- 1
   if ("fellow_outcome_VA" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "fellow_outcome_VA"] <- 1
-  
-  # Explicitly exclude fellow_intermediate_VA
-  if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) pred_matrix["outcome_VA_logMAR", "fellow_intermediate_VA"] <- 0
 }
 
-# STEP 5: Configure person_dr predictors
-# Predictors: demographics, CCI/DCSI, ocular comorbidities, baseline_VA, exposure, treatments, fellow_baseline_VA
-# NO fellow_intermediate_VA, NO outcome_VA (to remain strictly pre-outcome)
+# person_dr predictors (pre-outcome only, include fellow_baseline_VA and fellow_dr)
 if ("person_dr" %in% rownames(pred_matrix)) {
-  # Demographics
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
-  }
-  # Global comorbidities
-  for (v in global_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
-  }
-  # Ocular comorbidities and cataract
-  for (v in ocular_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
-  }
-  # Baseline VA
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
+  for (v in global_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
+  for (v in ocular_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
   if ("baseline_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["person_dr", "baseline_VA_logMAR"] <- 1
-  # Exposure
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["person_dr", "ever_lapse_binary"] <- 1
-  # Treatments
-  for (v in treatment_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
-  }
-  # Fellow predictors: baseline only and fellow_dr
+  for (v in treatment_vars) if (v %in% colnames(pred_matrix)) pred_matrix["person_dr", v] <- 1
   if ("fellow_baseline_VA" %in% colnames(pred_matrix)) pred_matrix["person_dr", "fellow_baseline_VA"] <- 1
   if ("fellow_dr" %in% colnames(pred_matrix)) pred_matrix["person_dr", "fellow_dr"] <- 1
-  
-  # Explicitly exclude fellow_intermediate_VA and outcome_VA
-  if ("fellow_intermediate_VA" %in% colnames(pred_matrix)) pred_matrix["person_dr", "fellow_intermediate_VA"] <- 0
-  if ("outcome_VA_logMAR" %in% colnames(pred_matrix)) pred_matrix["person_dr", "outcome_VA_logMAR"] <- 0
-  if ("fellow_outcome_VA" %in% colnames(pred_matrix)) pred_matrix["person_dr", "fellow_outcome_VA"] <- 0
 }
 
-# STEP 6: Configure other variables (demographics, comorbidities, treatments)
-# Allow demographics to predict each other
-for (v1 in demographic_vars) {
-  for (v2 in demographic_vars) {
-    if (v1 != v2 && v1 %in% rownames(pred_matrix) && v2 %in% colnames(pred_matrix)) {
-      pred_matrix[v1, v2] <- 1
-    }
-  }
+# Demographics predict each other
+for (v1 in demographic_vars) for (v2 in demographic_vars) {
+  if (!identical(v1, v2) && v1 %in% rownames(pred_matrix) && v2 %in% colnames(pred_matrix)) pred_matrix[v1, v2] <- 1
 }
 
-# CCI and DCSI predict each other and are predicted by demographics
+# CCI and DCSI predict each other and are predicted by demographics and exposure
 if ("CCI" %in% rownames(pred_matrix)) {
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["CCI", v] <- 1
-  }
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["CCI", v] <- 1
   if ("DCSI" %in% colnames(pred_matrix)) pred_matrix["CCI", "DCSI"] <- 1
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["CCI", "ever_lapse_binary"] <- 1
 }
 if ("DCSI" %in% rownames(pred_matrix)) {
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["DCSI", v] <- 1
-  }
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["DCSI", v] <- 1
   if ("CCI" %in% colnames(pred_matrix)) pred_matrix["DCSI", "CCI"] <- 1
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["DCSI", "ever_lapse_binary"] <- 1
 }
 
-# Cataract surgery predicted by demographics and comorbidities
+# Cataract surgery predicted by demographics/comorbidities/exposure
 if ("catsurg_before_hitplus_cat" %in% rownames(pred_matrix)) {
-  for (v in demographic_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["catsurg_before_hitplus_cat", v] <- 1
-  }
-  for (v in global_comorbidity_vars) {
-    if (v %in% colnames(pred_matrix)) pred_matrix["catsurg_before_hitplus_cat", v] <- 1
-  }
+  for (v in demographic_vars) if (v %in% colnames(pred_matrix)) pred_matrix["catsurg_before_hitplus_cat", v] <- 1
+  for (v in global_comorbidity_vars) if (v %in% colnames(pred_matrix)) pred_matrix["catsurg_before_hitplus_cat", v] <- 1
   if ("ever_lapse_binary" %in% colnames(pred_matrix)) pred_matrix["catsurg_before_hitplus_cat", "ever_lapse_binary"] <- 1
 }
 
-# Treatment variables predict each other (treatment patterns)
-for (v1 in treatment_vars) {
-  for (v2 in treatment_vars) {
-    if (v1 != v2 && v1 %in% rownames(pred_matrix) && v2 %in% colnames(pred_matrix)) {
-      pred_matrix[v1, v2] <- 1
-    }
-  }
+# Treatment variables predict each other
+for (v1 in treatment_vars) for (v2 in treatment_vars) {
+  if (!identical(v1, v2) && v1 %in% rownames(pred_matrix) && v2 %in% colnames(pred_matrix)) pred_matrix[v1, v2] <- 1
 }
 
-log_message("Predictor matrix configured with strict temporal constraints")
+log_message("Predictor matrix configured with strict temporal and fellow-eye constraints")
 
 # Save the predictor matrix to CSV for inspection
 pred_matrix_df <- as.data.frame(pred_matrix)
@@ -486,125 +318,283 @@ pred_matrix_df <- cbind(Variable = rownames(pred_matrix_df), pred_matrix_df)
 write.csv(pred_matrix_df, file.path(reanalysis_data_dir, "predictor_matrix.csv"), row.names = FALSE)
 log_message(paste0("Saved predictor matrix to: ", file.path(reanalysis_data_dir, "predictor_matrix.csv")))
 
-# Verification: Print predictor counts for key variables
+# Simple verification prints
 pred_counts <- data.frame(
   Variable = rownames(pred_matrix),
   N_Predictors = rowSums(pred_matrix > 0),
   N_Times_Used_As_Predictor = colSums(pred_matrix > 0)[rownames(pred_matrix)]
 )
 pred_counts <- pred_counts[order(-pred_counts$N_Predictors), ]
-
-log_message("\nPredictor counts for all variables:")
 print(pred_counts)
 
-# Specific verification for variables with missingness
-key_vars <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")
-log_message("\nDetailed predictors for key variables with missingness:")
-for (var in key_vars) {
+# Detailed predictors for key variables
+for (var in c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")) {
   if (var %in% rownames(pred_matrix)) {
     predictors <- colnames(pred_matrix)[pred_matrix[var, ] == 1]
-    log_message(paste0("\n", var, " (", length(predictors), " predictors):"))
-    log_message(paste0("  ", paste(predictors, collapse = ", ")))
+    log_message(paste0("Predictors for ", var, " (", length(predictors), "): ", paste(predictors, collapse = ", ")))
   }
 }
 ```
 
-## Run Imputation
+### Final Imputation Model Configuration
 
-```{r run-imputation}
-log_message("Starting MICE imputation...")
+```{r final-model-config}
+missing_info <- data.frame(
+  Variable = names(mice_dry$nmis),
+  N_Missing = mice_dry$nmis,
+  stringsAsFactors = FALSE
+)
 
-# Run the imputation
-imp <- mice(
-  df_mice, 
+final_methods <- data.frame(
+  Variable = names(custom_methods),
+  Method = custom_methods,
+  Type = dplyr::case_when(
+    custom_methods == "" ~ "Excluded (not imputed)",
+    custom_methods == "pmm" ~ "Predictive mean matching",
+    custom_methods == "polr" ~ "Proportional odds regression",
+    custom_methods == "logreg" ~ "Logistic regression",
+    custom_methods == "polyreg" ~ "Polytomous regression",
+    TRUE ~ custom_methods
+  ),
+  stringsAsFactors = FALSE
+) |>
+  dplyr::left_join(missing_info, by = "Variable") |>
+  dplyr::mutate(
+    Will_Be_Imputed = N_Missing > 0 & Method != "",
+    Role = dplyr::case_when(
+      Variable %in% c("row_id", "e_mrn_deidentified") ~ "ID (excluded)",
+      Variable %in% fellow_vars ~ "Fellow (predictor only)",
+      N_Missing == 0 & Method != "" ~ "Complete predictor",
+      N_Missing > 0 & Method != "" ~ "To be imputed",
+      TRUE ~ "Other"
+    )
+  )
+
+vars_to_impute <- final_methods |>
+  dplyr::filter(Will_Be_Imputed) |>
+  dplyr::pull(Variable)
+
+kable(final_methods |>
+        dplyr::select(Variable, Type, N_Missing, Role) |>
+        dplyr::arrange(Role == "ID (excluded)", Role == "Fellow (predictor only)", dplyr::desc(N_Missing)),
+      col.names = c("Variable", "Method Type", "Missing Values", "Role in Imputation"))
+```
+
+### Visit Sequence
+
+```{r visit-sequence}
+visit_sequence <- c()
+if ("baseline_VA_logMAR" %in% vars_to_impute) visit_sequence <- c(visit_sequence, "baseline_VA_logMAR")
+if ("intermediate_VA_logMAR" %in% vars_to_impute) visit_sequence <- c(visit_sequence, "intermediate_VA_logMAR")
+if ("outcome_VA_logMAR" %in% vars_to_impute) visit_sequence <- c(visit_sequence, "outcome_VA_logMAR")
+other_vars_to_impute <- setdiff(vars_to_impute, c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR"))
+visit_sequence <- c(visit_sequence, other_vars_to_impute)
+imputation_order <- paste(visit_sequence, collapse = ", ")
+```
+
+**Imputation order (respecting temporal structure):** `r imputation_order`
+
+### Imputation Parameters
+
+```{r imputation-params}
+imp_params <- data.frame(
+  Parameter = c("Mode", "Number of imputations (m)", "Max iterations (maxit)", "Random seed", "Visit sequence"),
+  Value = c(analysis_mode, n_imputations, n_iterations, seed, ifelse(length(visit_sequence) > 0, "Temporal order enforced", "Default"))
+)
+kable(imp_params)
+```
+
+## Run Multiple Imputation
+
+```{r mice-run}
+log_message("Starting MICE imputation process...")
+imp_start <- Sys.time()
+
+mice_results <- mice(
+  df_mice,
   m = n_imputations,
-  method = methods,
+  method = custom_methods,
   predictorMatrix = pred_matrix,
+  visitSequence = visit_sequence,
   maxit = n_iterations,
   seed = seed,
   printFlag = TRUE
 )
 
-log_message("MICE imputation completed")
+imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
+log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
 
-# Check for logged events
-if (!is.null(imp$loggedEvents)) {
-  log_message("Logged events during imputation:")
-  print(imp$loggedEvents)
-}
-
-# Verify imputation results
-log_message("\nVerifying imputation results...")
-first_imp <- complete(imp, 1)
-log_message("Missing data in first imputed dataset:")
-missing_after <- colSums(is.na(first_imp))
-missing_after <- missing_after[missing_after > 0]
-if (length(missing_after) > 0) {
-  print(missing_after)
-  log_message("WARNING: The above variables still have missing data after imputation!")
-} else {
-  log_message("SUCCESS: All missing data has been imputed.")
-}
-
-# Save convergence plot
+# Convergence plot
 pdf(file.path(reanalysis_data_dir, "mice_convergence.pdf"))
-plot(imp)
+plot(mice_results)
 dev.off()
 ```
 
-## Extract and Save Results
+## Imputation Diagnostics (selected variables)
 
-```{r save-results}
-# Extract all imputed datasets
-imputed_list <- complete(imp, action = "all")
+```{r imputation-diagnostics}
+# Show diagnostic plots only when a variable has missingness
+if (sum(is.na(df_mice$CCI)) > 0) {
+  densityplot(mice_results, ~ CCI, main = "CCI") |> print()
+  stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "CCI: Original vs Imputed") |> print()
+}
+if (sum(is.na(df_mice$DCSI)) > 0) {
+  densityplot(mice_results, ~ DCSI, main = "DCSI") |> print()
+  stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "DCSI: Original vs Imputed") |> print()
+}
+if (sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ baseline_VA_logMAR, main = "Baseline VA (logMAR)") |> print()
+  stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "Baseline VA: Original vs Imputed") |> print()
+}
+if (sum(is.na(df_mice$intermediate_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ intermediate_VA_logMAR, main = "Intermediate VA (logMAR)") |> print()
+  stripplot(mice_results, intermediate_VA_logMAR ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "Intermediate VA: Original vs Imputed") |> print()
+}
+if (sum(is.na(df_mice$outcome_VA_logMAR)) > 0) {
+  densityplot(mice_results, ~ outcome_VA_logMAR, main = "Outcome VA at 2 Years (logMAR)") |> print()
+  stripplot(mice_results, outcome_VA_logMAR ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "Outcome VA: Original vs Imputed") |> print()
+}
 
-# Apply any derived variables needed
-imputed_list <- lapply(imputed_list, function(data) {
-  data |>
-    mutate(
-      # Create binary outcome from logMAR
-      outcome_va_vi_binary = ifelse(outcome_VA_logMAR >= 1.0, 1, 0)
+# person_dr (ordinal categorical): summarize proportions across imputations
+if (sum(is.na(df_mice$person_dr)) > 0) {
+  dr_props <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    prop.table(table(imp_data$person_dr))
+  })
+  if (!is.null(dim(dr_props))) {
+    dr_summary <- data.frame(
+      Category = rownames(dr_props),
+      Mean_Proportion = apply(dr_props, 1, mean) |> round(3),
+      SD = apply(dr_props, 1, sd) |> round(3)
     )
+    kable(dr_summary, caption = "DR severity proportions across imputations")
+  }
+}
+
+# Categorical example: cataract surgery proportions across imputations
+if (sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
+  cat_props <- sapply(1:n_imputations, function(i) {
+    imp_data <- complete(mice_results, i)
+    prop.table(table(imp_data$catsurg_before_hitplus_cat))
+  })
+  if (!is.null(dim(cat_props))) {
+    cat_summary <- data.frame(
+      Level = rownames(cat_props),
+      Mean_Proportion = apply(cat_props, 1, mean) |> round(3),
+      SD = apply(cat_props, 1, sd) |> round(3)
+    )
+    kable(cat_summary, caption = "Cataract surgery proportions across imputations")
+  }
+}
+```
+
+## Create Complete Datasets and Derive Variables
+
+```{r complete-datasets}
+# Extract all imputed datasets
+imputed_datasets <- complete(mice_results, action = "all")
+
+# Apply transformation functions to recreate derived variables
+imputed_datasets <- lapply(1:n_imputations, function(i) {
+  imp_data <- imputed_datasets[[i]]
+  imp_data |>
+    create_outcome_variables() |>      # outcome_va_vi_binary from logMAR
+    create_age_cat() |>                # age_cat from age
+    create_treatment_type() |>         # treatment_type, any_treatment
+    create_dr_severity_variables()     # dr_severity from person_dr
 })
 
-# Save the mice object
-saveRDS(imp, file.path(reanalysis_data_dir, "mice_results.rds"))
-log_message(paste0("Saved MICE object to: mice_results.rds"))
+# Add back variables not included in imputation or transformations (exact row match on row_id)
+df_original_full <- df_for_imputation |>
+  mutate(row_id = dplyr::row_number())
 
-# Save the list of complete datasets
-saveRDS(imputed_list, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
-log_message(paste0("Saved ", length(imputed_list), " imputed datasets"))
+vars_in_imputed <- names(imputed_datasets[[1]])
+vars_to_add <- setdiff(names(df_original_full), c(vars_in_imputed, "row_id"))
 
-# Create summary
-summary_stats <- data.frame(
+if (length(vars_to_add) > 0) {
+  imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
+    orig_rows <- nrow(imp_data)
+    imp_data <- imp_data |>
+      dplyr::left_join(
+        df_original_full |>
+          dplyr::select(row_id, dplyr::all_of(vars_to_add)),
+        by = "row_id"
+      ) |>
+      dplyr::select(-row_id)
+    if (nrow(imp_data) != orig_rows) stop("Join changed row count; row_id join must be 1:1")
+    imp_data
+  })
+}
+
+# Completeness check for PS model variables
+completeness_check <- lapply(imputed_datasets, function(d) {
+  sum(!complete.cases(d[, ps_model_vars]))
+})
+```
+
+### Completeness Check
+
+```{r completeness-results}
+print(unlist(completeness_check))
+```
+
+## Save Imputed Datasets
+
+```{r save-imputed}
+saveRDS(mice_results, file.path(reanalysis_data_dir, "mice_results.rds"))
+saveRDS(imputed_datasets, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+saveRDS(imputed_datasets[[1]], file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
+```
+
+**Saved `r n_imputations` imputed datasets to:** `r reanalysis_data_dir`
+
+## Summary
+
+```{r summary}
+total_vars <- ncol(df_mice)
+id_vars <- sum(c("row_id", "e_mrn_deidentified") %in% names(df_mice))
+substantive_vars <- total_vars - id_vars
+
+summary_table <- tibble(
   Metric = c(
     "Original observations",
-    "Unique patients",
-    "Variables in imputation", 
-    "Number of imputations",
-    "Iterations per imputation",
+    "Total variables in dataset",
+    "ID variables (excluded from model)",
+    "Substantive variables in imputation model",
     "Variables with missing data",
-    "Total missing values"
+    "Variables actually imputed",
+    "Number of imputations",
+    "Maximum missing percentage",
+    "Imputation iterations"
   ),
   Value = c(
     nrow(df_mice),
-    n_patients,
-    ncol(df_mice),
+    total_vars,
+    id_vars,
+    substantive_vars,
+    sum(mice_results$nmis > 0),
+    length(names(mice_results$nmis)[mice_results$nmis > 0]),
     n_imputations,
-    n_iterations,
-    sum(colSums(is.na(df_mice)) > 0),
-    sum(is.na(df_mice))
+    paste0(round(max(mice_results$nmis/nrow(df_mice)) * 100, 1), "%"),
+    mice_results$iteration
   )
 )
 
-kable(summary_stats, caption = "Imputation Summary")
+summary_table |>
+  kable(caption = "Multiple imputation summary")
 
-# Finalize logging
+imputed_vars <- names(mice_results$nmis)[mice_results$nmis > 0]
+print(imputed_vars)
+
+log_message("Multiple imputation analysis completed successfully")
+log_message(paste0("Total imputed datasets created: ", n_imputations))
 final_log <- finalize_log(success = TRUE)
 ```
 
-**Analysis complete. Log file:** `r final_log`
+**Log file location:** `r final_log`
 
 ## Next Steps
 
 Run `reanalysis-3-imputation_diagnostics.qmd` to assess imputation quality.
+
+ 
