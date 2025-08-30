@@ -4,6 +4,23 @@
 
 # Initialize logging for a specific analysis step
 init_log <- function(analysis_name, log_dir = "logs") {
+  # Close any existing log connections first
+  try({
+    # Close all sink connections if any exist
+    while (sink.number() > 0) {
+      sink()
+    }
+    # Close all open connections except stdin/stdout/stderr
+    cons <- showConnections()
+    if (nrow(cons) > 0) {
+      for (i in 1:nrow(cons)) {
+        if (as.numeric(rownames(cons)[i]) > 2) {  # Don't close stdin(0), stdout(1), stderr(2)
+          try(close(getConnection(as.numeric(rownames(cons)[i]))), silent = TRUE)
+        }
+      }
+    }
+  }, silent = TRUE)
+  
   # Create log directory if it doesn't exist
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE)
@@ -13,20 +30,26 @@ init_log <- function(analysis_name, log_dir = "logs") {
   timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
   log_file <- file.path(log_dir, paste0(analysis_name, "_", timestamp, ".log"))
   
-  # Check if log file exists and delete it to avoid permission errors
+  # Delete any existing file with same name (shouldn't happen with timestamp, but just in case)
   if (file.exists(log_file)) {
+    Sys.sleep(0.1)  # Small delay to ensure file handle is released
     try(unlink(log_file, force = TRUE), silent = TRUE)
+    Sys.sleep(0.1)  # Another small delay
   }
   
   # Initialize log with header
   header_msg <- paste0("================================================================================\n",
                       "Analysis: ", analysis_name, "\n",
                       "Started: ", Sys.time(), "\n",
-                      "Note: Previous log (if any) was deleted to avoid permission errors\n",
                       "================================================================================\n\n")
   
-  # Write to log file
-  cat(header_msg, file = log_file, append = FALSE)
+  # Use writeLines instead of cat for more reliable file writing
+  tryCatch({
+    writeLines(header_msg, log_file)
+  }, error = function(e) {
+    # If writeLines fails, try cat
+    cat(header_msg, file = log_file, append = FALSE)
+  })
   
   # Also output to console
   cat(header_msg)
@@ -45,13 +68,48 @@ log_message <- function(msg, level = "INFO") {
   
   if (!is.null(log_file)) {
     timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-    formatted_msg <- paste0("[", timestamp, "] [", level, "] ", msg, "\n")
+    formatted_msg <- paste0("[", timestamp, "] [", level, "] ", msg)
     
-    # Write to log file
-    cat(formatted_msg, file = log_file, append = TRUE)
+    # Try multiple approaches to write to log file
+    write_success <- FALSE
     
-    # Also output to console for interactive use
-    cat(formatted_msg)
+    # Approach 1: Try write() function
+    tryCatch({
+      write(formatted_msg, file = log_file, append = TRUE)
+      write_success <- TRUE
+    }, error = function(e) {
+      write_success <- FALSE
+    })
+    
+    # Approach 2: If write() failed, try cat() with error handling
+    if (!write_success) {
+      tryCatch({
+        cat(formatted_msg, "\n", file = log_file, append = TRUE, sep = "")
+        write_success <- TRUE
+      }, error = function(e) {
+        write_success <- FALSE
+      })
+    }
+    
+    # Approach 3: If still failing, try opening a connection
+    if (!write_success) {
+      tryCatch({
+        con <- file(log_file, open = "a")
+        writeLines(formatted_msg, con)
+        close(con)
+        write_success <- TRUE
+      }, error = function(e) {
+        write_success <- FALSE
+      })
+    }
+    
+    # Always output to console
+    cat(formatted_msg, "\n")
+    
+    # If writing failed completely, warn user
+    if (!write_success) {
+      warning(paste("Could not write to log file:", log_file))
+    }
     
     # Return the message invisibly
     invisible(formatted_msg)
@@ -117,15 +175,33 @@ finalize_log <- function(success = TRUE) {
                          "Log file: ", log_file, "\n",
                          "================================================================================\n")
     
-    # Write to log file
-    cat(summary_msg, file = log_file, append = TRUE)
+    # Try to write final message
+    tryCatch({
+      cat(summary_msg, file = log_file, append = TRUE)
+    }, error = function(e) {
+      # If can't write, at least show in console
+      warning("Could not write final message to log file")
+    })
     
     # Also output to console
     cat(summary_msg)
     
-    # Clear options
+    # Clear options BEFORE closing connections
     options(current_log_file = NULL)
     options(log_start_time = NULL)
+    
+    # Clean up any open connections
+    try({
+      # Close all sink connections if any exist
+      while (sink.number() > 0) {
+        sink()
+      }
+      # Garbage collection to ensure file handles are released
+      gc(verbose = FALSE)
+    }, silent = TRUE)
+    
+    # Small delay to ensure file is released
+    Sys.sleep(0.1)
     
     # Return log file path for reference
     return(log_file)
