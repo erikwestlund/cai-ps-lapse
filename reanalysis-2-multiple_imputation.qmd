@@ -1,6 +1,6 @@
 ---
-title: "Reanalysis Step 2: Multiple Imputation (Clean Version)"
-subtitle: "Simplified imputation using mice with clustering"
+title: "Reanalysis Step 2: Multiple Imputation"
+subtitle: "Imputation using mice with strict temporal constraints"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
 format: html
@@ -25,7 +25,7 @@ library(knitr)
 library(lme4)
 
 # Initialize logging
-log_file <- init_log("multiple_imputation_clean")
+log_file <- init_log("multiple_imputation")
 
 # ANALYSIS MODE
 analysis_mode <- "final"  # "test" or "final"
@@ -231,6 +231,33 @@ for (var in vars_fellow) {
 }
 
 log_message("Imputation methods configured")
+
+# Print methods summary to verify configuration
+methods_summary <- data.frame(
+  Variable = names(methods),
+  Method = methods,
+  stringsAsFactors = FALSE
+) |>
+  mutate(
+    Will_Impute = Method != ""
+  )
+
+log_message("\nVariables that WILL be imputed:")
+print(methods_summary |> filter(Will_Impute))
+
+log_message("\nVariables that will NOT be imputed:")
+print(methods_summary |> filter(!Will_Impute))
+
+# Specifically check our key variables
+key_vars_check <- c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR", "person_dr")
+log_message("\nMethods for key variables with missingness:")
+for (var in key_vars_check) {
+  if (var %in% names(methods)) {
+    log_message(paste0(var, ": ", methods[var]))
+  } else {
+    log_message(paste0(var, ": NOT IN DATASET"))
+  }
+}
 ```
 
 ## Setup Predictor Matrix
@@ -500,8 +527,21 @@ if (!is.null(imp$loggedEvents)) {
   print(imp$loggedEvents)
 }
 
+# Verify imputation results
+log_message("\nVerifying imputation results...")
+first_imp <- complete(imp, 1)
+log_message("Missing data in first imputed dataset:")
+missing_after <- colSums(is.na(first_imp))
+missing_after <- missing_after[missing_after > 0]
+if (length(missing_after) > 0) {
+  print(missing_after)
+  log_message("WARNING: The above variables still have missing data after imputation!")
+} else {
+  log_message("SUCCESS: All missing data has been imputed.")
+}
+
 # Save convergence plot
-pdf(file.path(reanalysis_data_dir, "mice_convergence_clean.pdf"))
+pdf(file.path(reanalysis_data_dir, "mice_convergence.pdf"))
 plot(imp)
 dev.off()
 ```
@@ -522,11 +562,11 @@ imputed_list <- lapply(imputed_list, function(data) {
 })
 
 # Save the mice object
-saveRDS(imp, file.path(reanalysis_data_dir, "mice_results_clean.rds"))
-log_message(paste0("Saved MICE object to: mice_results_clean.rds"))
+saveRDS(imp, file.path(reanalysis_data_dir, "mice_results.rds"))
+log_message(paste0("Saved MICE object to: mice_results.rds"))
 
 # Save the list of complete datasets
-saveRDS(imputed_list, file.path(reanalysis_data_dir, "imputed_datasets_clean.rds"))
+saveRDS(imputed_list, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
 log_message(paste0("Saved ", length(imputed_list), " imputed datasets"))
 
 # Create summary

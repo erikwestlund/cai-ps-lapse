@@ -260,40 +260,47 @@ changes_df <- all_changes[[1]]
 ```{r summary-stats}
 # Compare change scores across all three groups
 change_summary_detailed <- changes_df |>
+  filter(!is.na(change_baseline_to_outcome)) |>  # Filter out NAs first
   group_by(imputation_group) |>
   summarise(
     n = n(),
-    mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
-    sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
-    median_change = median(change_baseline_to_outcome, na.rm = TRUE),
-    q25_change = quantile(change_baseline_to_outcome, 0.25, na.rm = TRUE),
-    q75_change = quantile(change_baseline_to_outcome, 0.75, na.rm = TRUE),
-    min_change = min(change_baseline_to_outcome, na.rm = TRUE),
-    max_change = max(change_baseline_to_outcome, na.rm = TRUE),
+    n_valid = sum(!is.na(change_baseline_to_outcome)),
+    mean_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else mean(change_baseline_to_outcome, na.rm = TRUE),
+    sd_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else sd(change_baseline_to_outcome, na.rm = TRUE),
+    median_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else median(change_baseline_to_outcome, na.rm = TRUE),
+    q25_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else quantile(change_baseline_to_outcome, 0.25, na.rm = TRUE),
+    q75_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else quantile(change_baseline_to_outcome, 0.75, na.rm = TRUE),
+    min_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else min(change_baseline_to_outcome, na.rm = TRUE),
+    max_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else max(change_baseline_to_outcome, na.rm = TRUE),
     .groups = "drop"
   ) |>
   mutate(
     iqr_change = q75_change - q25_change
   )
 
-kable(change_summary_detailed |> 
-        select(imputation_group, n, mean_change, sd_change, median_change, iqr_change, min_change, max_change),
-      digits = 3,
-      col.names = c("Group", "N", "Mean", "SD", "Median", "IQR", "Min", "Max"),
-      caption = "Distribution of vision changes (outcome - baseline) by detailed imputation group")
+# Only display if we have valid data
+if(nrow(change_summary_detailed) > 0) {
+  kable(change_summary_detailed |> 
+          select(imputation_group, n, mean_change, sd_change, median_change, iqr_change, min_change, max_change),
+        digits = 3,
+        col.names = c("Group", "N", "Mean", "SD", "Median", "IQR", "Min", "Max"),
+        caption = "Distribution of vision changes (outcome - baseline) by detailed imputation group")
+}
 
 # Also keep simplified version for compatibility
 change_summary <- changes_df |>
+  filter(!is.na(change_baseline_to_outcome)) |>  # Filter out NAs first
   group_by(outcome_was_imputed) |>
   summarise(
     n = n(),
-    mean_change = mean(change_baseline_to_outcome, na.rm = TRUE),
-    sd_change = sd(change_baseline_to_outcome, na.rm = TRUE),
-    median_change = median(change_baseline_to_outcome, na.rm = TRUE),
-    q25_change = quantile(change_baseline_to_outcome, 0.25, na.rm = TRUE),
-    q75_change = quantile(change_baseline_to_outcome, 0.75, na.rm = TRUE),
-    min_change = min(change_baseline_to_outcome, na.rm = TRUE),
-    max_change = max(change_baseline_to_outcome, na.rm = TRUE),
+    n_valid = sum(!is.na(change_baseline_to_outcome)),
+    mean_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else mean(change_baseline_to_outcome, na.rm = TRUE),
+    sd_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else sd(change_baseline_to_outcome, na.rm = TRUE),
+    median_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else median(change_baseline_to_outcome, na.rm = TRUE),
+    q25_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else quantile(change_baseline_to_outcome, 0.25, na.rm = TRUE),
+    q75_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else quantile(change_baseline_to_outcome, 0.75, na.rm = TRUE),
+    min_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else min(change_baseline_to_outcome, na.rm = TRUE),
+    max_change = if(all(is.na(change_baseline_to_outcome))) NA_real_ else max(change_baseline_to_outcome, na.rm = TRUE),
     .groups = "drop"
   ) |>
   mutate(
@@ -301,47 +308,97 @@ change_summary <- changes_df |>
     group = ifelse(outcome_was_imputed, "Imputed", "Observed")
   )
 
-# Statistical tests across three groups
-anova_test <- aov(change_baseline_to_outcome ~ imputation_group, data = changes_df)
-anova_summary <- summary(anova_test)
+# Statistical tests across three groups - only if we have valid data
+# Filter to non-missing values and check if we have enough groups
+valid_data <- changes_df |>
+  filter(!is.na(change_baseline_to_outcome) & !is.na(imputation_group))
 
-# Pairwise comparisons
-pairwise_tests <- pairwise.t.test(changes_df$change_baseline_to_outcome, 
-                                  changes_df$imputation_group,
-                                  p.adjust.method = "bonferroni")
+# Check if we have at least 2 groups with data
+groups_with_data <- valid_data |>
+  group_by(imputation_group) |>
+  summarise(n = n(), .groups = "drop") |>
+  filter(n > 0)
 
-# Format ANOVA results
-anova_results <- data.frame(
-  Test = "One-way ANOVA",
-  F_Statistic = anova_summary[[1]]$`F value`[1],
-  df1 = anova_summary[[1]]$Df[1],
-  df2 = anova_summary[[1]]$Df[2],
-  P_Value = anova_summary[[1]]$`Pr(>F)`[1],
-  Interpretation = ifelse(anova_summary[[1]]$`Pr(>F)`[1] < 0.05, 
-                         "Groups differ significantly", "No significant difference")
-)
+if(nrow(groups_with_data) >= 2) {
+  anova_test <- aov(change_baseline_to_outcome ~ imputation_group, data = valid_data)
+  anova_summary <- summary(anova_test)
+} else {
+  anova_test <- NULL
+  anova_summary <- NULL
+}
 
-kable(anova_results, digits = 4, caption = "ANOVA comparing change distributions across three groups")
-
-# Format pairwise results
-pairwise_matrix <- pairwise_tests$p.value
-pairwise_df <- data.frame(
-  Comparison = c("Imputed (with intermediate) vs Observed",
-                "Imputed (no intermediate) vs Observed",
-                "Imputed (no intermediate) vs Imputed (with intermediate)"),
-  P_Value = c(pairwise_matrix[1,1], pairwise_matrix[2,1], pairwise_matrix[2,2]),
-  Significant = ifelse(c(pairwise_matrix[1,1], pairwise_matrix[2,1], pairwise_matrix[2,2]) < 0.05,
-                      "Yes", "No")
-)
-
-kable(pairwise_df, digits = 4, caption = "Pairwise comparisons (Bonferroni adjusted)")
+# Pairwise comparisons - only if we have valid data
+if(!is.null(anova_test) && nrow(groups_with_data) >= 2) {
+  pairwise_tests <- pairwise.t.test(valid_data$change_baseline_to_outcome, 
+                                    valid_data$imputation_group,
+                                    p.adjust.method = "bonferroni")
+  
+  # Format ANOVA results
+  anova_results <- data.frame(
+    Test = "One-way ANOVA",
+    F_Statistic = anova_summary[[1]]$`F value`[1],
+    df1 = anova_summary[[1]]$Df[1],
+    df2 = anova_summary[[1]]$Df[2],
+    P_Value = anova_summary[[1]]$`Pr(>F)`[1],
+    Interpretation = ifelse(anova_summary[[1]]$`Pr(>F)`[1] < 0.05, 
+                           "Groups differ significantly", "No significant difference")
+  )
+  
+  kable(anova_results, digits = 4, caption = "ANOVA comparing change distributions across three groups")
+  
+  # Format pairwise results if available
+  if(!is.null(pairwise_tests$p.value)) {
+    pairwise_matrix <- pairwise_tests$p.value
+    
+    # Build pairwise comparison dataframe dynamically based on available comparisons
+    comparisons <- list()
+    p_values <- list()
+    
+    # Check which comparisons are available
+    if(nrow(pairwise_matrix) >= 1 && ncol(pairwise_matrix) >= 1 && !is.na(pairwise_matrix[1,1])) {
+      comparisons <- c(comparisons, "Imputed (with intermediate) vs Observed")
+      p_values <- c(p_values, pairwise_matrix[1,1])
+    }
+    if(nrow(pairwise_matrix) >= 2 && ncol(pairwise_matrix) >= 1 && !is.na(pairwise_matrix[2,1])) {
+      comparisons <- c(comparisons, "Imputed (no intermediate) vs Observed")
+      p_values <- c(p_values, pairwise_matrix[2,1])
+    }
+    if(nrow(pairwise_matrix) >= 2 && ncol(pairwise_matrix) >= 2 && !is.na(pairwise_matrix[2,2])) {
+      comparisons <- c(comparisons, "Imputed (no intermediate) vs Imputed (with intermediate)")
+      p_values <- c(p_values, pairwise_matrix[2,2])
+    }
+    
+    if(length(comparisons) > 0) {
+      pairwise_df <- data.frame(
+        Comparison = unlist(comparisons),
+        P_Value = unlist(p_values),
+        Significant = ifelse(unlist(p_values) < 0.05, "Yes", "No")
+      )
+      
+      kable(pairwise_df, digits = 4, caption = "Pairwise comparisons (Bonferroni adjusted)")
+    }
+  }
+} else {
+  cat("Note: ANOVA test could not be performed due to insufficient groups with valid data.\n")
+}
 
 # Also do simplified tests for backward compatibility
-t_test <- t.test(change_baseline_to_outcome ~ outcome_was_imputed, data = changes_df)
-ks_test <- ks.test(
-  changes_df$change_baseline_to_outcome[changes_df$outcome_was_imputed],
-  changes_df$change_baseline_to_outcome[!changes_df$outcome_was_imputed]
-)
+valid_simple <- changes_df |> filter(!is.na(change_baseline_to_outcome))
+if(nrow(valid_simple) > 0 && length(unique(valid_simple$outcome_was_imputed)) == 2) {
+  t_test <- t.test(change_baseline_to_outcome ~ outcome_was_imputed, data = valid_simple)
+  
+  observed_vals <- valid_simple$change_baseline_to_outcome[!valid_simple$outcome_was_imputed]
+  imputed_vals <- valid_simple$change_baseline_to_outcome[valid_simple$outcome_was_imputed]
+  
+  if(length(observed_vals) > 0 && length(imputed_vals) > 0) {
+    ks_test <- ks.test(imputed_vals, observed_vals)
+  } else {
+    ks_test <- NULL
+  }
+} else {
+  t_test <- NULL
+  ks_test <- NULL
+}
 ```
 
 ### Visualization of Change Distributions
