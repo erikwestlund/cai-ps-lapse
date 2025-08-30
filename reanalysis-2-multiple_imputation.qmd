@@ -576,27 +576,33 @@ if(length(vars_to_add) > 0) {
   })
 }
 
-# FINAL STEP: Enforce person_dr consistency across all datasets
-# Take the maximum person_dr value per patient to ensure consistency
+# FINAL STEP: Enforce patient-level variable consistency across all datasets
+# person_dr, CCI, and DCSI should be consistent within patients
 imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
-  # Calculate max person_dr per patient
-  person_dr_max_lookup <- imp_data |>
+  # Calculate consistent values per patient (using max for all)
+  patient_level_vars <- imp_data |>
     group_by(e_mrn_deidentified) |>
     summarise(
-      person_dr_max_value = max(person_dr, na.rm = TRUE),
+      person_dr_consistent = max(person_dr, na.rm = TRUE),
+      CCI_consistent = max(CCI, na.rm = TRUE),
+      DCSI_consistent = max(DCSI, na.rm = TRUE),
       .groups = 'drop'
     )
   
-  # Replace person_dr with the consistent max value
+  # Replace with consistent values
   imp_data <- imp_data |>
-    left_join(person_dr_max_lookup, by = "e_mrn_deidentified") |>
-    mutate(person_dr = person_dr_max_value) |>
-    select(-person_dr_max_value)
+    left_join(patient_level_vars, by = "e_mrn_deidentified") |>
+    mutate(
+      person_dr = person_dr_consistent,
+      CCI = CCI_consistent,
+      DCSI = DCSI_consistent
+    ) |>
+    select(-person_dr_consistent, -CCI_consistent, -DCSI_consistent)
   
   return(imp_data)
 })
 
-log_message("Enforced person_dr consistency by taking max value per patient")
+log_message("Enforced patient-level consistency for person_dr, CCI, and DCSI by taking max value per patient")
 
 completeness_check <- lapply(imputed_datasets, function(d) {
   sum(!complete.cases(d[, ps_model_vars]))
@@ -611,42 +617,50 @@ completeness_check <- lapply(imputed_datasets, function(d) {
 print(unlist(completeness_check))
 ```
 
-### Person-Level DR Consistency Check
+### Patient-Level Variable Consistency Check
 
-```{r dr-consistency-check}
-# Check that person_dr is consistent within patients after imputation
-dr_consistency_check <- lapply(1:n_imputations, function(i) {
+```{r patient-consistency-check}
+# Check that patient-level variables are consistent within patients after imputation
+consistency_check <- lapply(1:n_imputations, function(i) {
   imp_data <- imputed_datasets[[i]]
   
-  # Check consistency of person_dr within patients
-  dr_check <- imp_data |>
+  # Check consistency of person_dr, CCI, and DCSI within patients
+  patient_check <- imp_data |>
     group_by(e_mrn_deidentified) |>
     summarise(
       n_eyes = n(),
-      unique_dr_values = n_distinct(person_dr, na.rm = TRUE),
-      is_consistent = unique_dr_values <= 1  # Should be 1 unique value per patient
+      unique_dr = n_distinct(person_dr, na.rm = TRUE),
+      unique_cci = n_distinct(CCI, na.rm = TRUE),
+      unique_dcsi = n_distinct(DCSI, na.rm = TRUE),
+      dr_consistent = unique_dr <= 1,
+      cci_consistent = unique_cci <= 1,
+      dcsi_consistent = unique_dcsi <= 1,
+      all_consistent = dr_consistent & cci_consistent & dcsi_consistent
     )
   
-  n_inconsistent <- sum(!dr_check$is_consistent)
   return(list(
     dataset = i,
-    n_patients_checked = nrow(dr_check),
-    n_inconsistent_patients = n_inconsistent,
-    pct_consistent = round((1 - n_inconsistent/nrow(dr_check)) * 100, 2)
+    n_patients = nrow(patient_check),
+    dr_pct_consistent = round(mean(patient_check$dr_consistent) * 100, 2),
+    cci_pct_consistent = round(mean(patient_check$cci_consistent) * 100, 2),
+    dcsi_pct_consistent = round(mean(patient_check$dcsi_consistent) * 100, 2),
+    all_pct_consistent = round(mean(patient_check$all_consistent) * 100, 2)
   ))
 })
 
 # Display results
-dr_consistency_df <- bind_rows(dr_consistency_check)
-log_message(paste0("DR consistency check: ", 
-                  min(dr_consistency_df$pct_consistent), "% to ",
-                  max(dr_consistency_df$pct_consistent), "% consistent across datasets"))
+consistency_df <- bind_rows(consistency_check)
+log_message(paste0("Patient-level consistency - person_dr: ", 
+                  min(consistency_df$dr_pct_consistent), "%, ",
+                  "CCI: ", min(consistency_df$cci_pct_consistent), "%, ",
+                  "DCSI: ", min(consistency_df$dcsi_pct_consistent), "%"))
 ```
 
-**Person-level DR consistency after imputation:**
-```{r dr-consistency-table}
-kable(dr_consistency_df, 
-      col.names = c("Dataset", "Patients", "Inconsistent", "% Consistent"))
+**Patient-level variable consistency after imputation:**
+```{r consistency-table}
+kable(consistency_df, 
+      col.names = c("Dataset", "Patients", "DR %", "CCI %", "DCSI %", "All %"),
+      caption = "Percentage of patients with consistent values across eyes")
 ```
 
 ## Save Imputed Datasets
