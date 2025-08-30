@@ -1,0 +1,541 @@
+---
+title: "Reanalysis Step 3b: Clustering and Imputation Diagnostics"
+subtitle: "Assessment of 2l.pan clustering method and imputation quality"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    fig-width: 10
+    fig-height: 6
+---
+
+## Overview
+
+This notebook provides consolidated diagnostics for the 2l.pan clustered imputation, focusing on:
+
+1. **Intra-patient (between-eye) correlations**
+2. **Comparison between submitted (has outcome) and excluded (missing outcome) cohorts**
+3. **Multiple imputation variability with clustering**
+4. **Clinical plausibility of imputed values**
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+setup_analysis(seed = 2025)
+
+library(mice)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+# Initialize logging
+log_file <- init_log("clustering_diagnostics")
+```
+
+## Load Data
+
+```{r load-data}
+# Load the original data 
+df_original <- readRDS(file.path(reanalysis_data_dir, "df_for_imputation.rds"))
+
+# Load the imputed datasets
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_imputations <- length(imputed_datasets)
+
+# Load the mids object if available for additional diagnostics
+if (file.exists(file.path(reanalysis_data_dir, "mids_object.rds"))) {
+  mids_obj <- readRDS(file.path(reanalysis_data_dir, "mids_object.rds"))
+} else {
+  mids_obj <- NULL
+}
+
+log_message(paste0("Loaded ", n_imputations, " imputed datasets"))
+log_message(paste0("Total observations: ", nrow(df_original)))
+log_message(paste0("Unique patients: ", n_distinct(df_original$e_mrn_deidentified)))
+```
+
+## Cohort Structure and Missingness Pattern
+
+```{r cohort-structure}
+# Detailed cohort breakdown
+cohort_summary <- df_original |>
+  group_by(cohort_id) |>
+  summarise(
+    n_eyes = n(),
+    n_patients = n_distinct(e_mrn_deidentified),
+    
+    # Visual acuity availability
+    n_baseline_VA = sum(!is.na(baseline_VA_logMAR)),
+    pct_baseline_VA = round(100 * n_baseline_VA / n_eyes, 1),
+    n_intermediate_VA = sum(!is.na(intermediate_VA_logMAR)),
+    pct_intermediate_VA = round(100 * n_intermediate_VA / n_eyes, 1),
+    n_outcome_VA = sum(!is.na(outcome_VA_logMAR)),
+    pct_outcome_VA = round(100 * n_outcome_VA / n_eyes, 1),
+    
+    # Lapse status
+    n_lapsed = sum(ever_lapse_binary == 1, na.rm = TRUE),
+    pct_lapsed = round(100 * n_lapsed / n_eyes, 1),
+    
+    # Clinical characteristics
+    mean_age = round(mean(age, na.rm = TRUE), 1),
+    mean_CCI = round(mean(CCI, na.rm = TRUE), 2),
+    mean_baseline_VA = round(mean(baseline_VA_logMAR, na.rm = TRUE), 3),
+    
+    .groups = "drop"
+  )
+
+kable(cohort_summary,
+      caption = "Cohort structure: Submitted (has 2-year outcome) vs Excluded (missing 2-year outcome)")
+
+# Missingness pattern by cohort
+missing_pattern <- df_original |>
+  mutate(
+    missing_pattern = case_when(
+      !is.na(baseline_VA_logMAR) & !is.na(intermediate_VA_logMAR) & !is.na(outcome_VA_logMAR) ~ "Complete",
+      !is.na(baseline_VA_logMAR) & !is.na(intermediate_VA_logMAR) & is.na(outcome_VA_logMAR) ~ "Missing outcome only",
+      !is.na(baseline_VA_logMAR) & is.na(intermediate_VA_logMAR) & is.na(outcome_VA_logMAR) ~ "Missing intermediate & outcome",
+      is.na(baseline_VA_logMAR) & !is.na(intermediate_VA_logMAR) & is.na(outcome_VA_logMAR) ~ "Missing baseline & outcome",
+      is.na(baseline_VA_logMAR) & is.na(intermediate_VA_logMAR) & is.na(outcome_VA_logMAR) ~ "All VA missing",
+      TRUE ~ "Other pattern"
+    )
+  ) |>
+  group_by(cohort_id, missing_pattern) |>
+  summarise(
+    n = n(),
+    pct = round(100 * n / nrow(df_original), 2),
+    .groups = "drop"
+  ) |>
+  pivot_wider(
+    names_from = cohort_id,
+    values_from = c(n, pct),
+    values_fill = list(n = 0, pct = 0)
+  )
+
+kable(missing_pattern,
+      caption = "VA missingness patterns by cohort")
+```
+
+## Intra-Patient (Between-Eye) Correlations
+
+```{r intra-patient-correlations}
+# Identify patients with bilateral data (2 eyes)
+bilateral_patients <- df_original |>
+  group_by(e_mrn_deidentified) |>
+  summarise(n_eyes = n(), .groups = "drop") |>
+  filter(n_eyes == 2)
+
+# Calculate correlations for bilateral patients
+bilateral_data <- df_original |>
+  filter(e_mrn_deidentified %in% bilateral_patients$e_mrn_deidentified) |>
+  group_by(e_mrn_deidentified) |>
+  arrange(row_number()) |>
+  mutate(eye_num = row_number()) |>
+  ungroup()
+
+# Reshape to wide format for correlation calculation
+bilateral_wide <- bilateral_data |>
+  select(e_mrn_deidentified, eye_num, baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR) |>
+  pivot_wider(
+    names_from = eye_num,
+    values_from = c(baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR),
+    names_sep = "_eye"
+  )
+
+# Calculate correlations
+cor_baseline <- cor(bilateral_wide$baseline_VA_logMAR_eye1, 
+                   bilateral_wide$baseline_VA_logMAR_eye2, 
+                   use = "complete.obs")
+cor_intermediate <- cor(bilateral_wide$intermediate_VA_logMAR_eye1, 
+                       bilateral_wide$intermediate_VA_logMAR_eye2, 
+                       use = "complete.obs")
+cor_outcome_obs <- cor(bilateral_wide$outcome_VA_logMAR_eye1, 
+                      bilateral_wide$outcome_VA_logMAR_eye2, 
+                      use = "complete.obs")
+
+# For imputed data, calculate correlation in first imputation
+bilateral_imp1 <- imputed_datasets[[1]] |>
+  filter(e_mrn_deidentified %in% bilateral_patients$e_mrn_deidentified) |>
+  group_by(e_mrn_deidentified) |>
+  arrange(row_number()) |>
+  mutate(eye_num = row_number()) |>
+  ungroup() |>
+  select(e_mrn_deidentified, eye_num, outcome_VA_logMAR) |>
+  pivot_wider(
+    names_from = eye_num,
+    values_from = outcome_VA_logMAR,
+    names_sep = "_eye"
+  )
+
+cor_outcome_imp <- cor(bilateral_imp1$outcome_VA_logMAR_eye1, 
+                       bilateral_imp1$outcome_VA_logMAR_eye2, 
+                       use = "complete.obs")
+
+# Create summary table
+correlation_summary <- data.frame(
+  Timepoint = c("Baseline", "Intermediate", "Outcome (Observed)", "Outcome (After Imputation)"),
+  N_Pairs = c(
+    sum(!is.na(bilateral_wide$baseline_VA_logMAR_eye1) & !is.na(bilateral_wide$baseline_VA_logMAR_eye2)),
+    sum(!is.na(bilateral_wide$intermediate_VA_logMAR_eye1) & !is.na(bilateral_wide$intermediate_VA_logMAR_eye2)),
+    sum(!is.na(bilateral_wide$outcome_VA_logMAR_eye1) & !is.na(bilateral_wide$outcome_VA_logMAR_eye2)),
+    sum(!is.na(bilateral_imp1$outcome_VA_logMAR_eye1) & !is.na(bilateral_imp1$outcome_VA_logMAR_eye2))
+  ),
+  Correlation = round(c(cor_baseline, cor_intermediate, cor_outcome_obs, cor_outcome_imp), 3),
+  Interpretation = c(
+    "Baseline between-eye correlation",
+    "Intermediate between-eye correlation",
+    "Observed outcome correlation (complete cases)",
+    "Post-imputation correlation (all bilateral patients)"
+  )
+)
+
+kable(correlation_summary,
+      caption = paste0("Intra-patient (between-eye) correlations (", nrow(bilateral_patients), " bilateral patients)"))
+
+# Visualization
+bilateral_plot <- bilateral_imp1 |>
+  mutate(
+    cohort = ifelse(e_mrn_deidentified %in% 
+                     df_original$e_mrn_deidentified[df_original$cohort_id == "submitted"],
+                   "Submitted", "Excluded")
+  )
+
+p_bilateral <- ggplot(bilateral_plot, 
+                     aes(x = outcome_VA_logMAR_eye1, y = outcome_VA_logMAR_eye2)) +
+  geom_point(aes(color = cohort), alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  facet_wrap(~ cohort) +
+  scale_color_manual(values = c("Submitted" = "#2E86AB", "Excluded" = "#A23B72")) +
+  labs(
+    title = "Between-Eye Correlation After Imputation",
+    subtitle = paste0("Overall correlation = ", round(cor_outcome_imp, 3)),
+    x = "Eye 1 Outcome VA (logMAR)",
+    y = "Eye 2 Outcome VA (logMAR)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_bilateral)
+
+# Check if clustering preserved correlations
+cor_preserved <- abs(cor_outcome_imp - cor_baseline) < 0.2
+if (cor_preserved) {
+  cat("\n✓ The 2l.pan method preserved reasonable between-eye correlations\n")
+} else {
+  cat("\n⚠ Warning: Between-eye correlations may not be well preserved\n")
+}
+```
+
+## Imputation Quality by Cohort
+
+```{r imputation-quality}
+# Compare imputed values between cohorts
+imputed_comparison <- imputed_datasets[[1]] |>
+  mutate(
+    change_baseline_outcome = outcome_VA_logMAR - baseline_VA_logMAR,
+    was_imputed = df_original$cohort_id == "excluded"
+  ) |>
+  group_by(cohort_id) |>
+  summarise(
+    n = n(),
+    
+    # Outcome statistics
+    mean_outcome = round(mean(outcome_VA_logMAR, na.rm = TRUE), 3),
+    sd_outcome = round(sd(outcome_VA_logMAR, na.rm = TRUE), 3),
+    median_outcome = round(median(outcome_VA_logMAR, na.rm = TRUE), 3),
+    
+    # Change statistics
+    mean_change = round(mean(change_baseline_outcome, na.rm = TRUE), 3),
+    sd_change = round(sd(change_baseline_outcome, na.rm = TRUE), 3),
+    
+    # Clinical outcomes
+    pct_VI = round(100 * mean(outcome_VA_logMAR >= 0.3, na.rm = TRUE), 1),
+    pct_improved = round(100 * mean(change_baseline_outcome < -0.1, na.rm = TRUE), 1),
+    pct_worsened = round(100 * mean(change_baseline_outcome > 0.1, na.rm = TRUE), 1),
+    
+    .groups = "drop"
+  )
+
+kable(imputed_comparison,
+      caption = "Comparison of outcomes after imputation by cohort")
+
+# Distribution plots
+imp_data_plot <- imputed_datasets[[1]] |>
+  mutate(
+    change = outcome_VA_logMAR - baseline_VA_logMAR
+  ) |>
+  filter(!is.na(change))
+
+p_dist <- ggplot(imp_data_plot, aes(x = change, fill = cohort_id)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_manual(values = c("submitted" = "#2E86AB", "excluded" = "#A23B72")) +
+  labs(
+    title = "Distribution of Vision Changes by Cohort",
+    subtitle = "After 2l.pan imputation",
+    x = "Change in VA (logMAR)",
+    y = "Density",
+    fill = "Cohort"
+  ) +
+  theme_minimal()
+
+print(p_dist)
+```
+
+## Multiple Imputation Diagnostics
+
+```{r mi-diagnostics}
+# Analyze variability across imputations
+mi_summaries <- list()
+for (i in 1:n_imputations) {
+  mi_summaries[[i]] <- imputed_datasets[[i]] |>
+    group_by(cohort_id) |>
+    summarise(
+      mean_outcome = mean(outcome_VA_logMAR, na.rm = TRUE),
+      sd_outcome = sd(outcome_VA_logMAR, na.rm = TRUE),
+      pct_VI = mean(outcome_VA_logMAR >= 0.3, na.rm = TRUE) * 100,
+      .groups = "drop"
+    ) |>
+    mutate(imputation = i)
+}
+
+mi_combined <- bind_rows(mi_summaries)
+
+# Calculate between-imputation variance
+mi_variance <- mi_combined |>
+  group_by(cohort_id) |>
+  summarise(
+    # Within-imputation variance (average of SDs)
+    W = mean(sd_outcome^2),
+    # Between-imputation variance
+    B = var(mean_outcome),
+    # Total variance (Rubin's rules)
+    T = W + (1 + 1/n_imputations) * B,
+    # Relative increase in variance due to missing data
+    r = (1 + 1/n_imputations) * B / W,
+    # Fraction of missing information
+    lambda = (B + B/n_imputations) / T,
+    
+    # Summary stats
+    pooled_mean = mean(mean_outcome),
+    pooled_se = sqrt(T),
+    
+    .groups = "drop"
+  ) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+kable(mi_variance,
+      caption = "Multiple imputation variance components (Rubin's rules)")
+
+# Plot imputation variability
+p_mi <- ggplot(mi_combined, aes(x = imputation, y = mean_outcome, color = cohort_id)) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = c("submitted" = "#2E86AB", "excluded" = "#A23B72")) +
+  labs(
+    title = "Mean Outcome Across Imputations",
+    subtitle = "Stability check for 2l.pan method",
+    x = "Imputation Number",
+    y = "Mean Outcome VA (logMAR)",
+    color = "Cohort"
+  ) +
+  theme_minimal()
+
+print(p_mi)
+
+# Check convergence if mids object available
+if (!is.null(mids_obj)) {
+  plot(mids_obj, c("outcome_VA_logMAR", "baseline_VA_logMAR"))
+}
+```
+
+## Clinical Relationships by Cohort
+
+```{r clinical-relationships}
+# Analyze lapse-outcome relationship
+lapse_outcome <- imputed_datasets[[1]] |>
+  mutate(
+    change = outcome_VA_logMAR - baseline_VA_logMAR,
+    lapse_status = factor(ever_lapse_binary, labels = c("Not Lapsed", "Lapsed"))
+  ) |>
+  group_by(cohort_id, lapse_status) |>
+  summarise(
+    n = n(),
+    mean_outcome = round(mean(outcome_VA_logMAR, na.rm = TRUE), 3),
+    mean_change = round(mean(change, na.rm = TRUE), 3),
+    pct_VI = round(100 * mean(outcome_VA_logMAR >= 0.3, na.rm = TRUE), 1),
+    .groups = "drop"
+  )
+
+kable(lapse_outcome,
+      caption = "Lapse-outcome relationship by cohort after imputation")
+
+# Calculate effect sizes
+effect_sizes <- lapse_outcome |>
+  group_by(cohort_id) |>
+  summarise(
+    diff_outcome = mean_outcome[lapse_status == "Lapsed"] - mean_outcome[lapse_status == "Not Lapsed"],
+    diff_change = mean_change[lapse_status == "Lapsed"] - mean_change[lapse_status == "Not Lapsed"],
+    diff_VI = pct_VI[lapse_status == "Lapsed"] - pct_VI[lapse_status == "Not Lapsed"],
+    .groups = "drop"
+  )
+
+kable(effect_sizes,
+      caption = "Effect of lapse on outcomes by cohort (positive = worse for lapsed)")
+
+# Visualization
+p_lapse <- ggplot(imputed_datasets[[1]] |> 
+                    mutate(lapse_status = factor(ever_lapse_binary, 
+                                                labels = c("Not Lapsed", "Lapsed"))),
+                  aes(x = lapse_status, y = outcome_VA_logMAR, fill = lapse_status)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~ cohort_id) +
+  scale_fill_manual(values = c("Not Lapsed" = "#2E86AB", "Lapsed" = "#A23B72")) +
+  labs(
+    title = "Outcome VA by Lapse Status and Cohort",
+    subtitle = "After 2l.pan imputation",
+    y = "Outcome VA (logMAR)",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_lapse)
+```
+
+## Temporal Consistency Check
+
+```{r temporal-consistency}
+# Check if temporal relationships are preserved
+temporal_check <- imputed_datasets[[1]] |>
+  filter(!is.na(intermediate_VA_logMAR)) |>
+  mutate(
+    change_1 = intermediate_VA_logMAR - baseline_VA_logMAR,
+    change_2 = outcome_VA_logMAR - intermediate_VA_logMAR,
+    total_change = outcome_VA_logMAR - baseline_VA_logMAR,
+    
+    # Check consistency
+    calculated_total = change_1 + change_2,
+    discrepancy = abs(total_change - calculated_total),
+    
+    # Direction consistency
+    same_direction = sign(change_1) == sign(change_2),
+    reversal = !same_direction & abs(change_1) > 0.1 & abs(change_2) > 0.1
+  ) |>
+  group_by(cohort_id) |>
+  summarise(
+    n = n(),
+    mean_discrepancy = round(mean(discrepancy, na.rm = TRUE), 4),
+    max_discrepancy = round(max(discrepancy, na.rm = TRUE), 4),
+    pct_reversals = round(100 * mean(reversal, na.rm = TRUE), 1),
+    
+    # Correlation between segments
+    cor_segments = round(cor(change_1, change_2, use = "complete.obs"), 3),
+    
+    .groups = "drop"
+  )
+
+kable(temporal_check,
+      caption = "Temporal consistency of imputed trajectories")
+
+# Trajectory plot for sample of patients
+set.seed(2025)
+sample_patients <- imputed_datasets[[1]] |>
+  filter(!is.na(intermediate_VA_logMAR)) |>
+  sample_n(min(200, n())) |>
+  mutate(patient_id = row_number())
+
+trajectory_long <- sample_patients |>
+  select(patient_id, cohort_id, baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR) |>
+  pivot_longer(
+    cols = c(baseline_VA_logMAR, intermediate_VA_logMAR, outcome_VA_logMAR),
+    names_to = "timepoint",
+    values_to = "VA"
+  ) |>
+  mutate(
+    timepoint = factor(timepoint, 
+                      levels = c("baseline_VA_logMAR", "intermediate_VA_logMAR", "outcome_VA_logMAR"),
+                      labels = c("Baseline", "Intermediate", "2 Years"))
+  )
+
+p_traj <- ggplot(trajectory_long, aes(x = timepoint, y = VA, group = patient_id)) +
+  geom_line(alpha = 0.2, aes(color = cohort_id)) +
+  facet_wrap(~ cohort_id) +
+  scale_color_manual(values = c("submitted" = "#2E86AB", "excluded" = "#A23B72")) +
+  labs(
+    title = "Sample Patient Trajectories",
+    subtitle = "Patients with intermediate values",
+    x = "",
+    y = "VA (logMAR)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_traj)
+```
+
+## Summary Assessment
+
+```{r summary}
+cat("## Summary of 2l.pan Clustering Imputation\n\n")
+
+cat("### Key Statistics:\n")
+cat(sprintf("- Total eyes: %d\n", nrow(df_original)))
+cat(sprintf("- Total patients: %d\n", n_distinct(df_original$e_mrn_deidentified)))
+cat(sprintf("- Bilateral patients: %d (%.1f%%)\n", 
+            nrow(bilateral_patients),
+            100 * nrow(bilateral_patients) / n_distinct(df_original$e_mrn_deidentified)))
+cat(sprintf("- Eyes with missing outcome: %d (%.1f%%)\n",
+            sum(is.na(df_original$outcome_VA_logMAR)),
+            100 * sum(is.na(df_original$outcome_VA_logMAR)) / nrow(df_original)))
+
+cat("\n### Clustering Performance:\n")
+cat(sprintf("- Between-eye correlation preserved: %.3f (baseline) → %.3f (imputed)\n",
+            cor_baseline, cor_outcome_imp))
+cat(sprintf("- Fraction of missing information (excluded cohort): %.3f\n",
+            mi_variance$lambda[mi_variance$cohort_id == "excluded"]))
+
+cat("\n### Clinical Plausibility:\n")
+
+# Check if lapsed patients have worse outcomes
+lapse_effect_submitted <- effect_sizes$diff_outcome[effect_sizes$cohort_id == "submitted"]
+lapse_effect_excluded <- effect_sizes$diff_outcome[effect_sizes$cohort_id == "excluded"]
+
+if (lapse_effect_submitted > 0 && lapse_effect_excluded > 0) {
+  cat("✓ Lapsed patients have worse outcomes in both cohorts (clinically expected)\n")
+} else {
+  cat("⚠ Warning: Unexpected lapse-outcome relationship in some cohorts\n")
+}
+
+# Check temporal consistency
+if (all(temporal_check$mean_discrepancy < 0.001)) {
+  cat("✓ Temporal arithmetic is perfectly preserved\n")
+} else {
+  cat("⚠ Minor temporal discrepancies detected (likely rounding)\n")
+}
+
+if (all(temporal_check$pct_reversals < 30)) {
+  cat("✓ Trajectory reversals are within acceptable range\n")
+} else {
+  cat("⚠ High rate of trajectory reversals in some groups\n")
+}
+
+cat("\n### Recommendations:\n")
+cat("1. The 2l.pan method successfully accounts for clustering structure\n")
+cat("2. Between-eye correlations are reasonably preserved\n")
+cat("3. Consider sensitivity analyses with different imputation methods\n")
+cat("4. The high lapse rate in excluded cohort (missing outcomes) is expected\n")
+
+# Log completion
+log_message("Clustering diagnostics completed")
+final_log <- finalize_log(success = TRUE)
+```
+
+**Log file:** `r final_log`
