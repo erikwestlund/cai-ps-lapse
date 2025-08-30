@@ -203,10 +203,10 @@ kable(method_table)
 # Customize imputation methods as needed
 custom_methods <- mice_dry$method
 
-# Temporal VA variables
-custom_methods["baseline_VA_logMAR"] <- "pmm"  # Impute if missing
-custom_methods["intermediate_VA_logMAR"] <- "pmm"  # IMPUTE intermediate values
-custom_methods["outcome_VA_logMAR"] <- "pmm"  # Impute 2-year outcomes
+# Temporal VA variables - use 2l.pan for clustered imputation
+custom_methods["baseline_VA_logMAR"] <- "2l.pan"  # Clustered imputation
+custom_methods["intermediate_VA_logMAR"] <- "2l.pan"  # Clustered imputation
+custom_methods["outcome_VA_logMAR"] <- "2l.pan"  # Clustered imputation
 custom_methods["cohort_id"] <- ""  # Never impute - data management indicator only
 
 # Other continuous variables
@@ -243,8 +243,9 @@ custom_methods["e_mrn_deidentified"] <- ""  # Patient ID - never impute, never u
 pred_matrix <- mice_dry$predictorMatrix
 
 # Don't use IDs as predictors AND don't impute them
-pred_matrix[, "e_mrn_deidentified"] <- 0
-pred_matrix["e_mrn_deidentified", ] <- 0
+# EXCEPT: e_mrn_deidentified is set to -2 as cluster indicator for 2l methods
+pred_matrix[, "e_mrn_deidentified"] <- -2  # Cluster indicator for 2l.pan
+pred_matrix["e_mrn_deidentified", ] <- 0  # Don't predict e_mrn itself
 pred_matrix[, "row_id"] <- 0
 pred_matrix["row_id", ] <- 0
 
