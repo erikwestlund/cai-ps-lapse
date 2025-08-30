@@ -424,69 +424,19 @@ mice_results <- mice(
 imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
 log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
 
-# Convergence plot
-pdf(file.path(reanalysis_data_dir, "mice_convergence.pdf"))
-plot(mice_results)
-dev.off()
-```
-
-## Imputation Diagnostics (selected variables)
-
-```{r imputation-diagnostics}
-# Show diagnostic plots only when a variable has missingness
-if (sum(is.na(df_mice$CCI)) > 0) {
-  densityplot(mice_results, ~ CCI, main = "CCI") |> print()
-  stripplot(mice_results, CCI ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "CCI: Original vs Imputed") |> print()
-}
-if (sum(is.na(df_mice$DCSI)) > 0) {
-  densityplot(mice_results, ~ DCSI, main = "DCSI") |> print()
-  stripplot(mice_results, DCSI ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "DCSI: Original vs Imputed") |> print()
-}
-if (sum(is.na(df_mice$baseline_VA_logMAR)) > 0) {
-  densityplot(mice_results, ~ baseline_VA_logMAR, main = "Baseline VA (logMAR)") |> print()
-  stripplot(mice_results, baseline_VA_logMAR ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "Baseline VA: Original vs Imputed") |> print()
-}
-if (sum(is.na(df_mice$intermediate_VA_logMAR)) > 0) {
-  densityplot(mice_results, ~ intermediate_VA_logMAR, main = "Intermediate VA (logMAR)") |> print()
-  stripplot(mice_results, intermediate_VA_logMAR ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "Intermediate VA: Original vs Imputed") |> print()
-}
-if (sum(is.na(df_mice$outcome_VA_logMAR)) > 0) {
-  densityplot(mice_results, ~ outcome_VA_logMAR, main = "Outcome VA at 2 Years (logMAR)") |> print()
-  stripplot(mice_results, outcome_VA_logMAR ~ .imp, pch = 20, cex = 1.0, xlab = "Dataset (1=Original, 2+=Imputed)", main = "Outcome VA: Original vs Imputed") |> print()
-}
-
-# person_dr (ordinal categorical): summarize proportions across imputations
-if (sum(is.na(df_mice$person_dr)) > 0) {
-  dr_props <- sapply(1:n_imputations, function(i) {
-    imp_data <- complete(mice_results, i)
-    prop.table(table(imp_data$person_dr))
-  })
-  if (!is.null(dim(dr_props))) {
-    dr_summary <- data.frame(
-      Category = rownames(dr_props),
-      Mean_Proportion = apply(dr_props, 1, mean) |> round(3),
-      SD = apply(dr_props, 1, sd) |> round(3)
-    )
-    kable(dr_summary, caption = "DR severity proportions across imputations")
-  }
-}
-
-# Categorical example: cataract surgery proportions across imputations
-if (sum(is.na(df_mice$catsurg_before_hitplus_cat)) > 0) {
-  cat_props <- sapply(1:n_imputations, function(i) {
-    imp_data <- complete(mice_results, i)
-    prop.table(table(imp_data$catsurg_before_hitplus_cat))
-  })
-  if (!is.null(dim(cat_props))) {
-    cat_summary <- data.frame(
-      Level = rownames(cat_props),
-      Mean_Proportion = apply(cat_props, 1, mean) |> round(3),
-      SD = apply(cat_props, 1, sd) |> round(3)
-    )
-    kable(cat_summary, caption = "Cataract surgery proportions across imputations")
-  }
+# Minimal completeness verification: first completed dataset has no missing values
+first_imp <- complete(mice_results, 1)
+missing_after <- colSums(is.na(first_imp))
+missing_after <- missing_after[missing_after > 0]
+if (length(missing_after) > 0) {
+  log_message("WARNING: Missing values remain after imputation:")
+  print(missing_after)
+} else {
+  log_message("SUCCESS: All missing data imputed in first completed dataset.")
 }
 ```
+
+ 
 
 ## Create Complete Datasets and Derive Variables
 
