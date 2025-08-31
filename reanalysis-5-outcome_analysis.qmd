@@ -458,111 +458,151 @@ kable(key_results,
 ## Average Marginal Effects
 
 ```{r marginal-effects}
-# Check if AMEs are cached
-ame_cache_file <- file.path(reanalysis_data_dir, "ame_results_main_effects.rds")
-force_recalc_ame <- TRUE  # Set to TRUE to force recalculation
+# Check if marginal means are cached
+emmeans_cache_file <- file.path(reanalysis_data_dir, "emmeans_results_main_effects.rds")
+force_recalc_emmeans <- TRUE  # Set to TRUE to force recalculation
 
-if (file.exists(ame_cache_file) && !force_recalc_ame) {
-  # Load cached AMEs
-  ame_cache <- readRDS(ame_cache_file)
-  ame_list <- ame_cache$ame_list
-  ame_loaded_from_cache <- TRUE
-  ame_cache_location <- ame_cache_file
+if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
+  # Load cached results
+  emmeans_cache <- readRDS(emmeans_cache_file)
+  emmeans_list <- emmeans_cache$emmeans_list
+  contrasts_list <- emmeans_cache$contrasts_list
+  emmeans_loaded_from_cache <- TRUE
+  emmeans_cache_location <- emmeans_cache_file
 } else {
-  # Calculate AME for each imputed dataset then pool
-  ame_loaded_from_cache <- FALSE
-  ame_list <- list()
+  # Calculate marginal means for each imputed dataset then pool
+  emmeans_loaded_from_cache <- FALSE
+  emmeans_list <- list()
+  contrasts_list <- list()
   
   # Initialize progress tracking
-  progress <- init_progress(n_imputations, "Calculating AMEs")
+  progress <- init_progress(n_imputations, "Calculating marginal means")
   
   for (i in 1:n_imputations) {
     # Update progress
     progress <- update_progress(progress)
     
-    imp_data <- imputed_datasets[[i]]
-    imp_data$weights <- twang_weights[[i]]
+    # Get the fitted model for this imputation
+    model <- fitted_models[[i]]
     
-    # Calculate AME with clustering and weights
-    # marginaleffects handles survey designs well
-    # the model already handled the clustering
-    ame <- marginaleffects::avg_comparisons(
-      model,
-      variables = "ever_lapse_binary",
-      type = "response",   # average difference in predicted probabilities
-      newdata = imp_data,
-      wts = "weights"
-    )
+    # Calculate emmeans on the response scale
+    emm <- emmeans(model, 
+                   ~ ever_lapse_binary,
+                   type = "response",
+                   weights = "proportional")
     
-    ame_list[[i]] <- ame
+    # Get contrast (difference in probabilities)
+    contrast <- pairs(emm, reverse = TRUE)  # Lapsed - Not Lapsed
+    
+    emmeans_list[[i]] <- as.data.frame(emm)
+    contrasts_list[[i]] <- as.data.frame(contrast)
   }
   
   # Save to cache
-  ame_cache <- list(
-    ame_list = ame_list,
+  emmeans_cache <- list(
+    emmeans_list = emmeans_list,
+    contrasts_list = contrasts_list,
     n_imputations = n_imputations,
     timestamp = Sys.time()
   )
-  saveRDS(ame_cache, ame_cache_file)
-  ame_cache_location <- ame_cache_file
+  saveRDS(emmeans_cache, emmeans_cache_file)
+  emmeans_cache_location <- emmeans_cache_file
 }
 
-# Extract estimates and SEs for pooling
-# avg_comparisons returns a data frame, so we need to extract the first row
-ame_estimates <- sapply(ame_list, function(x) {
-  if (is.data.frame(x)) {
-    x$estimate[1]
-  } else {
-    x$estimate
-  }
+# Pool predicted probabilities for each group
+# Extract probabilities for not lapsed (ever_lapse_binary = 0)
+prob_not_lapsed <- sapply(emmeans_list, function(x) {
+  x[x$ever_lapse_binary == 0, "prob"][1]
+})
+se_not_lapsed <- sapply(emmeans_list, function(x) {
+  x[x$ever_lapse_binary == 0, "SE"][1]
 })
 
-ame_ses <- sapply(ame_list, function(x) {
-  if (is.data.frame(x)) {
-    x$std.error[1]
-  } else {
-    x$std.error
-  }
+# Extract probabilities for lapsed (ever_lapse_binary = 1)
+prob_lapsed <- sapply(emmeans_list, function(x) {
+  x[x$ever_lapse_binary == 1, "prob"][1]
+})
+se_lapsed <- sapply(emmeans_list, function(x) {
+  x[x$ever_lapse_binary == 1, "SE"][1]
 })
 
-# Apply Rubin's rules for pooling
-pooled_ame_est <- mean(ame_estimates)
-within_var <- mean(ame_ses^2)
-between_var <- var(ame_estimates)
-total_var <- within_var + between_var * (1 + 1/n_imputations)
-pooled_ame_se <- sqrt(total_var)
+# Pool using Rubin's rules for each group
+# Not lapsed
+pooled_prob_not_lapsed <- mean(prob_not_lapsed)
+within_var_not_lapsed <- mean(se_not_lapsed^2)
+between_var_not_lapsed <- var(prob_not_lapsed)
+total_var_not_lapsed <- within_var_not_lapsed + between_var_not_lapsed * (1 + 1/n_imputations)
+pooled_se_not_lapsed <- sqrt(total_var_not_lapsed)
 
-# Calculate FMI and df
-fmi <- (between_var * (1 + 1/n_imputations)) / total_var
-df_ame <- (n_imputations - 1) / fmi^2
+# Lapsed
+pooled_prob_lapsed <- mean(prob_lapsed)
+within_var_lapsed <- mean(se_lapsed^2)
+between_var_lapsed <- var(prob_lapsed)
+total_var_lapsed <- within_var_lapsed + between_var_lapsed * (1 + 1/n_imputations)
+pooled_se_lapsed <- sqrt(total_var_lapsed)
+
+# Calculate pooled risk difference
+risk_diff <- pooled_prob_lapsed - pooled_prob_not_lapsed
+
+# For risk difference SE, extract from contrasts
+# Note: contrasts from emmeans pairs() gives odds ratios, not risk differences
+# So we calculate risk difference SE using delta method or from the individual SEs
+risk_diff_var <- total_var_lapsed + total_var_not_lapsed  # Conservative approximation
+risk_diff_se <- sqrt(risk_diff_var)
+
+# Calculate FMI and df for risk difference
+between_var_diff <- var(prob_lapsed - prob_not_lapsed)
+within_var_diff <- risk_diff_var - between_var_diff * (1 + 1/n_imputations)
+fmi <- (between_var_diff * (1 + 1/n_imputations)) / risk_diff_var
+df_diff <- (n_imputations - 1) / fmi^2
 
 # CI using t-distribution
-t_crit <- qt(0.975, df_ame)
-ci_lower <- pooled_ame_est - t_crit * pooled_ame_se
-ci_upper <- pooled_ame_est + t_crit * pooled_ame_se
+t_crit <- qt(0.975, df_diff)
+ci_lower <- risk_diff - t_crit * risk_diff_se
+ci_upper <- risk_diff + t_crit * risk_diff_se
 
+# Create results data frame
+pooled_emmeans_results <- data.frame(
+  Group = c("Not Lapsed", "Lapsed", "Risk Difference"),
+  Estimate = c(pooled_prob_not_lapsed, pooled_prob_lapsed, risk_diff),
+  SE = c(pooled_se_not_lapsed, pooled_se_lapsed, risk_diff_se),
+  CI_Lower = c(
+    pooled_prob_not_lapsed - qt(0.975, df_diff) * pooled_se_not_lapsed,
+    pooled_prob_lapsed - qt(0.975, df_diff) * pooled_se_lapsed,
+    ci_lower
+  ),
+  CI_Upper = c(
+    pooled_prob_not_lapsed + qt(0.975, df_diff) * pooled_se_not_lapsed,
+    pooled_prob_lapsed + qt(0.975, df_diff) * pooled_se_lapsed,
+    ci_upper
+  )
+)
+
+# Display results
+kable(pooled_emmeans_results,
+      caption = "Pooled marginal means and risk difference from emmeans",
+      digits = 4,
+      col.names = c("Group", "Probability", "SE", "Lower CI", "Upper CI"))
+
+# Store for later use
 pooled_ame <- data.frame(
   Effect = "Average Marginal Effect of Lapse",
-  AME = pooled_ame_est,
-  SE = pooled_ame_se,
+  AME = risk_diff,
+  SE = risk_diff_se,
   CI_Lower = ci_lower,
   CI_Upper = ci_upper,
   FMI = fmi,
   Interpretation = paste0(
     "On average, lapsing from care increases the probability of VI/blindness by ",
-    round(pooled_ame_est, 3)
+    round(risk_diff, 3)
   )
 )
 
-kable(pooled_ame |> select(-Interpretation), 
-      caption = "Average marginal effect of lapsing",
-      digits = 4)
-
-# Display interpretation separately
+# Display interpretation
 ame_text <- pooled_ame$Interpretation
 ```
 
-**AME cache status:** `r ifelse(ame_loaded_from_cache, paste("Loaded from", ame_cache_location), paste("Newly calculated and saved to", ame_cache_location))`
+**Marginal means cache status:** `r ifelse(emmeans_loaded_from_cache, paste("Loaded from", emmeans_cache_location), paste("Newly calculated and saved to", emmeans_cache_location))`
 
 `r ame_text`
 
