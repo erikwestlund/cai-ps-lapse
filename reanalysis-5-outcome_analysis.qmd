@@ -1,5 +1,5 @@
 ---
-title: "Reanalysis Step 4: Main Effects Outcome Analysis"
+title: "Reanalysis Step 5: Main Effects Outcome Analysis"
 subtitle: "Analyzing lapse effect without interactions"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"

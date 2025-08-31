@@ -1,5 +1,5 @@
 ---
-title: "Reanalysis Step 5: Sensitivity Analysis and E-values"
+title: "Reanalysis Step 6: Sensitivity Analysis and E-values"
 subtitle: "Assessing robustness of main effect findings"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"

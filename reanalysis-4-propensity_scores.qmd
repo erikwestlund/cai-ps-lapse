@@ -1,5 +1,5 @@
 ---
-title: "Reanalysis Step 3: Propensity Score Analysis with Twang"
+title: "Reanalysis Step 4: Propensity Score Analysis with Twang"
 subtitle: "Calculating IPTW weights using GBM across imputed datasets"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
@@ -96,7 +96,7 @@ print(ps_formula_reanalysis)
 
 # Use the reanalysis formula that includes dr_severity
 ps_formula <- ps_formula_reanalysis
-cat("\nUsing reanalysis formula with dr_severity for propensity score estimation.\n")
+log_message("Using reanalysis formula with dr_severity for propensity score estimation.")
 ```
 
 ## Run Twang Propensity Score Models
@@ -276,6 +276,7 @@ imps_to_show <- 1:n_to_show
 
 # Generate diagnostic plots for selected imputations
 for (i in imps_to_show) {
+  log_message(paste0("Processing diagnostics for Imputation ", i))
   cat("\n### Imputation", i, "\n\n")
   
   twang_model <- twang_results[[i]]$model
@@ -370,7 +371,7 @@ for (i in imps_to_show) {
     
   }, error = function(e) {
     # Fallback to simpler summary if bal.table fails
-    cat("Note: Detailed balance table unavailable. Showing basic summary:\n\n")
+    log_message("Note: Detailed balance table unavailable. Showing basic summary.")
     
     # Use the summary method which is more reliable
     sum_output <- summary(twang_model)
@@ -379,11 +380,11 @@ for (i in imps_to_show) {
     if (!is.null(sum_output)) {
       print(sum_output)
     } else {
-      cat("Balance statistics not available for this imputation.\n")
+      log_message("Balance statistics not available for this imputation.")
     }
   })
   
-  cat("\n\n")
+  # Spacing
 }
 ```
 

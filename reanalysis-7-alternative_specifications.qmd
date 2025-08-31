@@ -1,5 +1,5 @@
 ---
-title: "Reanalysis Step 6: Alternative Propensity Score Specifications"
+title: "Reanalysis Step 7: Alternative Propensity Score Specifications"
 subtitle: "Comprehensive comparison of PS methods with multiple imputation"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"

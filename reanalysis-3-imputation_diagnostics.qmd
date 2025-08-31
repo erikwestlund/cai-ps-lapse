@@ -61,10 +61,10 @@ n_patients <- n_distinct(df_original$e_mrn_deidentified)
 n_bilateral <- sum(table(df_original$e_mrn_deidentified) == 2)
 n_missing_outcome <- sum(is.na(df_original$outcome_VA_logMAR))
 
-cat(sprintf("Dataset: %d eyes from %d patients\n", n_eyes, n_patients))
-cat(sprintf("Bilateral patients: %d (%.1f%%)\n", n_bilateral, 100*n_bilateral/n_patients))
-cat(sprintf("Missing outcomes: %d eyes (%.1f%%)\n", n_missing_outcome, 100*n_missing_outcome/n_eyes))
-cat(sprintf("Imputations performed: %d\n", n_imputations))
+log_message(sprintf("Dataset: %d eyes from %d patients", n_eyes, n_patients))
+log_message(sprintf("Bilateral patients: %d (%.1f%%)", n_bilateral, 100*n_bilateral/n_patients))
+log_message(sprintf("Missing outcomes: %d eyes (%.1f%%)", n_missing_outcome, 100*n_missing_outcome/n_eyes))
+log_message(sprintf("Imputations performed: %d", n_imputations))
 ```
 
 ## 1. Cohort Structure Analysis
@@ -198,7 +198,7 @@ if (!is.na(cor_outcome_imp)) {
   
   print(p_bilateral)
 } else {
-  cat("Between-eye correlation plot could not be generated.\n")
+  log_message("Between-eye correlation plot could not be generated.")
 }
 ```
 
@@ -419,12 +419,12 @@ print(p_direction)
 chi_table <- table(direction_df$imputation_group, direction_df$change_direction)
 chi_test <- chisq.test(chi_table)
 
-cat(sprintf("\nChi-square test: χ² = %.2f, p = %.4f\n", 
+log_message(sprintf("Chi-square test: χ² = %.2f, p = %.4f", 
             chi_test$statistic, chi_test$p.value))
 if(chi_test$p.value < 0.05) {
-  cat("The proportions of improved/stable/worsened differ significantly across groups.\n")
+  log_message("The proportions of improved/stable/worsened differ significantly across groups.")
 } else {
-  cat("The proportions are similar across groups.\n")
+  log_message("The proportions are similar across groups.")
 }
 ```
 
@@ -559,6 +559,7 @@ print(p_mi)
 ## 8. Summary Assessment
 
 ```{r summary-assessment}
+# Key Findings section
 cat("### Key Findings:\n\n")
 
 # 1. Clustering
@@ -566,37 +567,49 @@ cor_preserved <- abs(cor_outcome_imp - cor_baseline) < 0.2
 if (cor_preserved) {
   cat(sprintf("✓ Between-eye correlation preserved (%.3f baseline → %.3f imputed)\n", 
               cor_baseline, cor_outcome_imp))
+  log_message(sprintf("Between-eye correlation preserved (%.3f baseline → %.3f imputed)", 
+              cor_baseline, cor_outcome_imp))
 } else {
   cat(sprintf("⚠ Between-eye correlation changed substantially (%.3f → %.3f)\n",
+              cor_baseline, cor_outcome_imp))
+  log_message(sprintf("WARNING: Between-eye correlation changed substantially (%.3f → %.3f)",
               cor_baseline, cor_outcome_imp))
 }
 
 # 2. Distribution similarity
 if (ks_test$p.value > 0.05) {
   cat("✓ Imputed and observed distributions are statistically similar\n")
+  log_message("Imputed and observed distributions are statistically similar")
 } else {
   cat("⚠ Imputed and observed distributions differ significantly\n")
+  log_message("WARNING: Imputed and observed distributions differ significantly")
 }
 
 # 3. Clinical relationships
 if (all(effect_sizes$diff_outcome > 0)) {
   cat("✓ Lapsed patients have worse outcomes in all cohorts (clinically expected)\n")
+  log_message("Lapsed patients have worse outcomes in all cohorts (clinically expected)")
 } else {
   cat("⚠ Unexpected lapse-outcome relationship in some cohorts\n")
+  log_message("WARNING: Unexpected lapse-outcome relationship in some cohorts")
 }
 
 # 4. Temporal consistency
 if (all(temporal_summary$mean_discrepancy < 0.001)) {
   cat("✓ Temporal arithmetic is preserved\n")
+  log_message("Temporal arithmetic is preserved")
 } else {
   cat("⚠ Minor temporal discrepancies detected\n")
+  log_message("WARNING: Minor temporal discrepancies detected")
 }
 
 # 5. MI stability
 if (all(mi_variance$lambda < 0.5)) {
   cat("✓ Fraction of missing information is acceptable (<0.5)\n")
+  log_message("Fraction of missing information is acceptable (<0.5)")
 } else {
   cat("⚠ High fraction of missing information in some groups\n")
+  log_message("WARNING: High fraction of missing information in some groups")
 }
 
 cat("\n### Interpretation:\n\n")
@@ -612,11 +625,20 @@ cat(sprintf("- Lapse rate is much higher in excluded cohort (%.1f%%) vs submitte
 
 cat("- This suggests missingness is related to lapsing (MNAR mechanism)\n")
 
+log_message(sprintf("Excluded cohort has %.1f%% missing outcomes",
+            100 - cohort_summary$has_outcome[cohort_summary$cohort_id == "excluded"] / 
+            cohort_summary$n_eyes[cohort_summary$cohort_id == "excluded"] * 100))
+log_message(sprintf("Lapse rate: excluded cohort (%.1f%%) vs submitted (%.1f%%)",
+            cohort_summary$pct_lapsed[cohort_summary$cohort_id == "excluded"],
+            cohort_summary$pct_lapsed[cohort_summary$cohort_id == "submitted"]))
+
 cat("\n### Recommendations:\n\n")
 cat("1. The 2l.pan method successfully accounts for clustering\n")
 cat("2. Consider sensitivity analyses with alternative assumptions about lapsed patients\n")
 cat("3. Report results separately by cohort when effect modification is present\n")
 cat("4. Use robust standard errors to account for remaining clustering\n")
+
+log_message("Recommendations: 1) 2l.pan accounts for clustering, 2) Consider sensitivity analyses, 3) Report by cohort if needed, 4) Use robust SEs")
 
 # Finalize
 log_message("Combined imputation diagnostics completed")

@@ -1,5 +1,5 @@
 ---
-title: "Reanalysis Step 4: Outcome Analysis with Three-Way Interaction"
+title: "Reanalysis Step 5: Outcome Analysis with Three-Way Interaction"
 subtitle: "IPTW-weighted analysis of lapse × DR severity × treatment interactions"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
