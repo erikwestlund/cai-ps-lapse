@@ -132,9 +132,13 @@ log_message(paste0("Cache directory: ", cache_dir))
 log_message(paste0("Use cache: ", use_cache))
 
 # Function to process a single imputation
-process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_caching) {
+process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_caching, node_id, log_file_path) {
   # Recreate variables inside function to avoid scoping issues
   library(twang)
+  
+  # Log node start
+  start_msg <- paste0("Node ", node_id, " started: Processing imputation ", i)
+  cat(paste0(Sys.time(), " - ", start_msg, "\n"), file = log_file_path, append = TRUE)
   
   # Check for cached result
   cache_file <- file.path(cache_path, paste0("twang_imp_", i, ".rds"))
@@ -143,8 +147,13 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
     cached_result <- readRDS(cache_file)
     weights <- cached_result$weights
     
+    # Log cache hit
+    cache_msg <- paste0("Node ", node_id, " completed: Imputation ", i, " loaded from cache")
+    cat(paste0(Sys.time(), " - ", cache_msg, "\n"), file = log_file_path, append = TRUE)
+    
     return(list(
       imputation = i,
+      node_id = node_id,
       result = cached_result,
       trees_used = cached_result$n_trees_used,
       weight_min = round(min(weights), 3),
@@ -204,8 +213,13 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
     
     imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
     
+    # Log completion
+    complete_msg <- paste0("Node ", node_id, " completed: Imputation ", i, " fitted in ", imp_time, " minutes")
+    cat(paste0(Sys.time(), " - ", complete_msg, "\n"), file = log_file_path, append = TRUE)
+    
     return(list(
       imputation = i,
+      node_id = node_id,
       result = result,
       trees_used = result$n_trees_used,
       weight_min = round(min(weights), 3),
@@ -216,8 +230,28 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
   }
 }
 
+# Create node tracking
+node_counter <- 0
+get_next_node_id <- function() {
+  node_counter <<- node_counter + 1
+  return(node_counter)
+}
+
+# Create assignments of imputations to node IDs
+imputation_node_assignments <- data.frame(
+  imputation = 1:n_imputations,
+  node_id = NA
+)
+
+# Assign node IDs based on batch processing
+batch_size <- ceiling(n_imputations / ceiling(n_imputations / n_cores))
+for (i in 1:n_imputations) {
+  imputation_node_assignments$node_id[i] <- get_next_node_id()
+}
+
 # Run parallel processing
 log_message(paste0("Starting parallel processing of ", n_imputations, " imputations using ", n_cores, " cores"))
+log_message(paste0("Node assignments: ", paste(imputation_node_assignments$node_id, collapse = ", ")))
 parallel_start <- Sys.time()
 
 # Use mclapply on Unix/Mac, parLapply on Windows
@@ -225,7 +259,10 @@ if (.Platform$OS.type == "unix") {
   # Unix/Mac - use mclapply
   parallel_results <- mclapply(
     1:n_imputations,
-    function(i) process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache),
+    function(i) {
+      node_id <- imputation_node_assignments$node_id[i]
+      process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, node_id, log_file)
+    },
     mc.cores = n_cores
   )
 } else {
@@ -235,7 +272,7 @@ if (.Platform$OS.type == "unix") {
   # Export necessary objects to cluster
   clusterExport(cl, c(
     "process_imputation", "imputed_datasets", "ps_formula", 
-    "n_trees", "cache_dir", "use_cache"
+    "n_trees", "cache_dir", "use_cache", "imputation_node_assignments", "log_file"
   ), envir = environment())
   
   # Load required packages on each worker
@@ -245,7 +282,8 @@ if (.Platform$OS.type == "unix") {
   
   # Create wrapper function for parLapply
   parallel_results <- parLapply(cl, 1:n_imputations, function(i) {
-    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache)
+    node_id <- imputation_node_assignments$node_id[i]
+    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, node_id, log_file)
   })
   
   stopCluster(cl)
@@ -258,6 +296,7 @@ log_message(paste0("Parallel processing completed in ", parallel_time, " minutes
 twang_results <- list()
 progress_df <- data.frame(
   Imputation = integer(),
+  Node_ID = integer(),
   Trees_Used = integer(),
   Weight_Min = numeric(),
   Weight_Max = numeric(),
@@ -270,6 +309,7 @@ for (res in parallel_results) {
   
   progress_df <- rbind(progress_df, data.frame(
     Imputation = res$imputation,
+    Node_ID = res$node_id,
     Trees_Used = res$trees_used,
     Weight_Min = res$weight_min,
     Weight_Max = res$weight_max,
@@ -277,11 +317,11 @@ for (res in parallel_results) {
     Time_Minutes = res$time_mins
   ))
   
-  # Log individual result
+  # Log individual result summary
   if (res$cached) {
-    log_message(paste0("Imputation ", res$imputation, ": Loaded from cache"))
+    log_message(paste0("Imputation ", res$imputation, " (Node ", res$node_id, "): Loaded from cache"))
   } else {
-    log_message(paste0("Imputation ", res$imputation, ": Fitted in ", res$time_mins, " minutes"))
+    log_message(paste0("Imputation ", res$imputation, " (Node ", res$node_id, "): Fitted in ", res$time_mins, " minutes"))
   }
 }
 
@@ -291,7 +331,7 @@ progress_df <- progress_df[order(progress_df$Imputation), ]
 # Display progress summary with caching and timing information
 kable(progress_df, 
       caption = paste0("Twang Model Fitting Progress (Total time: ", parallel_time, " minutes using ", n_cores, " cores)"),
-      col.names = c("Imputation", "Trees Used", "Min Weight", "Max Weight", "From Cache", "Time (min)"))
+      col.names = c("Imputation", "Node ID", "Trees Used", "Min Weight", "Max Weight", "From Cache", "Time (min)"))
 ```
 
 ## Balance Assessment
