@@ -18,12 +18,14 @@ library(twang)
 library(ggplot2)
 library(gridExtra)
 library(knitr)
+library(parallel)
+library(doParallel)
 
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "test"  # Should match imputation mode
 
 # CACHING CONFIGURATION
-use_cache <- TRUE  # Set to FALSE to force re-computation
+use_cache <- FALSE  # Set to FALSE to force re-computation
 cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
 if (!dir.exists(cache_dir)) {
   dir.create(cache_dir, recursive = TRUE)
@@ -39,6 +41,10 @@ if (analysis_mode == "test") {
   max_imputations_for_diagnostics <- 5  # Show diagnostics for up to 5 imputations in final
   n_trees <- 3000  # More trees for final analysis
 }
+
+# Set up parallel processing
+n_cores <- detectCores() - 1  # Use all cores except one
+log_message(paste0("Parallel processing: Using ", n_cores, " cores"))
 
 ```
 
@@ -119,28 +125,25 @@ log_message(paste0("Number of imputations to process: ", n_imputations))
 log_message(paste0("Cache directory: ", cache_dir))
 log_message(paste0("Use cache: ", use_cache))
 
-# Initialize storage for PS results
-twang_results <- list()
-
-# Track progress
-progress_df <- data.frame(
-  Imputation = integer(),
-  Trees_Used = integer(),
-  Weight_Min = numeric(),
-  Weight_Max = numeric()
-)
-
-for (i in 1:n_imputations) {
+# Function to process a single imputation
+process_imputation <- function(i) {
   # Check for cached result
   cache_file <- file.path(cache_dir, paste0("twang_imp_", i, ".rds"))
   
   if (use_cache && file.exists(cache_file)) {
-    log_message(paste0("Imputation ", i, ": Loading from cache"))
     cached_result <- readRDS(cache_file)
-    twang_results[[i]] <- cached_result
     weights <- cached_result$weights
+    
+    return(list(
+      imputation = i,
+      result = cached_result,
+      trees_used = cached_result$n_trees_used,
+      weight_min = round(min(weights), 3),
+      weight_max = round(max(weights), 3),
+      cached = TRUE,
+      time_mins = 0
+    ))
   } else {
-    log_message(paste0("Imputation ", i, ": Fitting twang model"))
     imp_start <- Sys.time()
     
     # Run twang ps model - following analysis.Rmd approach
@@ -164,29 +167,97 @@ for (i in 1:n_imputations) {
       weights = weights,
       n_trees_used = twang_model$desc$es.mean$n.trees
     )
-    twang_results[[i]] <- result
     
     # Save to cache
     saveRDS(result, cache_file)
     
     imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
-    log_message(paste0("Imputation ", i, ": Completed in ", imp_time, " minutes, saved to cache"))
+    
+    return(list(
+      imputation = i,
+      result = result,
+      trees_used = result$n_trees_used,
+      weight_min = round(min(weights), 3),
+      weight_max = round(max(weights), 3),
+      cached = FALSE,
+      time_mins = imp_time
+    ))
   }
-  
-  # Track progress (works for both cached and newly computed)
-  progress_df <- rbind(progress_df, data.frame(
-    Imputation = i,
-    Trees_Used = twang_results[[i]]$n_trees_used,
-    Weight_Min = round(min(weights), 3),
-    Weight_Max = round(max(weights), 3)
-  ))
-  
-  # Log progress with time estimates
-  log_progress(i, n_imputations, "Imputation")
 }
 
-# Display progress summary
-kable(progress_df, caption = "Twang Model Fitting Progress")
+# Run parallel processing
+log_message(paste0("Starting parallel processing of ", n_imputations, " imputations using ", n_cores, " cores"))
+parallel_start <- Sys.time()
+
+# Use mclapply on Unix/Mac, parLapply on Windows
+if (.Platform$OS.type == "unix") {
+  # Unix/Mac - use mclapply
+  parallel_results <- mclapply(
+    1:n_imputations,
+    process_imputation,
+    mc.cores = n_cores
+  )
+} else {
+  # Windows - use parLapply
+  cl <- makeCluster(n_cores)
+  
+  # Export necessary objects to cluster
+  clusterExport(cl, c(
+    "cache_dir", "use_cache", "ps_formula", "imputed_datasets",
+    "n_trees", "ps", "get.weights"
+  ))
+  
+  # Load required packages on each worker
+  clusterEvalQ(cl, {
+    library(twang)
+  })
+  
+  parallel_results <- parLapply(cl, 1:n_imputations, process_imputation)
+  
+  stopCluster(cl)
+}
+
+parallel_time <- round(as.numeric(difftime(Sys.time(), parallel_start, units = "mins")), 2)
+log_message(paste0("Parallel processing completed in ", parallel_time, " minutes"))
+
+# Extract results and build progress dataframe
+twang_results <- list()
+progress_df <- data.frame(
+  Imputation = integer(),
+  Trees_Used = integer(),
+  Weight_Min = numeric(),
+  Weight_Max = numeric(),
+  Cached = logical(),
+  Time_Minutes = numeric()
+)
+
+for (res in parallel_results) {
+  twang_results[[res$imputation]] <- res$result
+  
+  progress_df <- rbind(progress_df, data.frame(
+    Imputation = res$imputation,
+    Trees_Used = res$trees_used,
+    Weight_Min = res$weight_min,
+    Weight_Max = res$weight_max,
+    Cached = res$cached,
+    Time_Minutes = res$time_mins
+  ))
+  
+  # Log individual result
+  if (res$cached) {
+    log_message(paste0("Imputation ", res$imputation, ": Loaded from cache"))
+  } else {
+    log_message(paste0("Imputation ", res$imputation, ": Fitted in ", res$time_mins, " minutes"))
+  }
+}
+
+# Sort progress_df by imputation number
+progress_df <- progress_df[order(progress_df$Imputation), ]
+
+# Display progress summary with caching and timing information
+kable(progress_df, 
+      caption = paste0("Twang Model Fitting Progress (Total time: ", parallel_time, " minutes using ", n_cores, " cores)"),
+      col.names = c("Imputation", "Trees Used", "Min Weight", "Max Weight", "From Cache", "Time (min)"))
 ```
 
 ## Balance Assessment
