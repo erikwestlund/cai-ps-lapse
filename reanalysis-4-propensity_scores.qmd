@@ -24,6 +24,9 @@ library(doParallel)
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "final"  # Should match imputation mode
 
+# PARALLEL PROCESSING CONFIGURATION
+max_cores_for_ps <- 3  # Maximum cores to use for propensity score estimation (memory-intensive)
+
 # CACHING CONFIGURATION
 use_cache <- FALSE  # Set to FALSE to force re-computation
 cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
@@ -43,8 +46,11 @@ if (analysis_mode == "test") {
 }
 
 # Set up parallel processing
-n_cores <- detectCores() - 1  # Use all cores except one
-log_message(paste0("Parallel processing: Using ", n_cores, " cores"))
+# Reduce cores for memory-intensive GBM models
+available_cores <- detectCores()
+# Use fewer cores to avoid memory issues - each GBM model needs substantial memory
+n_cores <- min(max_cores_for_ps, available_cores - 1)  # Use configured max cores to ensure sufficient memory per worker
+log_message(paste0("Parallel processing: Using ", n_cores, " cores (of ", available_cores, " available) to manage memory usage"))
 
 ```
 
