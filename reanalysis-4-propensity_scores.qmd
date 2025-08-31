@@ -49,7 +49,8 @@ if (analysis_mode == "test") {
 # Reduce cores for memory-intensive GBM models
 available_cores <- detectCores()
 # Use fewer cores to avoid memory issues - each GBM model needs substantial memory
-n_cores <- min(max_cores_for_ps, available_cores - 1)  # Use configured max cores to ensure sufficient memory per worker
+# Don't subtract 1 from max_cores_for_ps since it's already the desired limit
+n_cores <- if (available_cores > max_cores_for_ps) max_cores_for_ps else max(1, available_cores - 1)
 log_message(paste0("Parallel processing: Using ", n_cores, " cores (of ", available_cores, " available) to manage memory usage"))
 
 ```
@@ -230,24 +231,12 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
   }
 }
 
-# Create node tracking
-node_counter <- 0
-get_next_node_id <- function() {
-  node_counter <<- node_counter + 1
-  return(node_counter)
-}
-
 # Create assignments of imputations to node IDs
+# Each imputation gets a unique sequential ID for tracking
 imputation_node_assignments <- data.frame(
   imputation = 1:n_imputations,
-  node_id = NA
+  node_id = 1:n_imputations  # Simple sequential numbering: 1, 2, 3, 4, etc.
 )
-
-# Assign node IDs based on batch processing
-batch_size <- ceiling(n_imputations / ceiling(n_imputations / n_cores))
-for (i in 1:n_imputations) {
-  imputation_node_assignments$node_id[i] <- get_next_node_id()
-}
 
 # Run parallel processing
 log_message(paste0("Starting parallel processing of ", n_imputations, " imputations using ", n_cores, " cores"))
