@@ -460,7 +460,7 @@ kable(key_results,
 ```{r marginal-effects}
 # Check if AMEs are cached
 ame_cache_file <- file.path(reanalysis_data_dir, "ame_results_main_effects.rds")
-force_recalc_ame <- FALSE  # Set to TRUE to force recalculation
+force_recalc_ame <- TRUE  # Set to TRUE to force recalculation
 
 if (file.exists(ame_cache_file) && !force_recalc_ame) {
   # Load cached AMEs
