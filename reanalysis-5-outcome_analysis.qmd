@@ -456,7 +456,7 @@ kable(key_results,
 ```{r marginal-effects}
 # Check if AMEs are cached
 ame_cache_file <- file.path(reanalysis_data_dir, "ame_results_main_effects.rds")
-force_recalc_ame <- FALSE  # Set to TRUE to force recalculation
+force_recalc_ame <- TRUE  # Set to TRUE to force recalculation
 
 if (file.exists(ame_cache_file) && !force_recalc_ame) {
   # Load cached AMEs
@@ -592,7 +592,7 @@ if (!is.null(emm_results)) {
   pred_df$Lapse_Status <- ifelse(pred_df$ever_lapse_binary == 1, "Lapsed", "Not Lapsed")
   
   # Display predictions
-  kable(pred_df |> select(Lapse_Status, Predicted_Prob, SE, lower.CL, upper.CL), 
+  kable(pred_df |> select(Lapse_Status, Predicted_Prob, SE, asymp.LCL, asymp.UCL), 
         caption = "Predicted probability of VI/blindness by lapse status (marginalized over all covariates)",
         col.names = c("Lapse Status", "Predicted Probability", "SE", "Lower CI", "Upper CI"),
         digits = 3)
