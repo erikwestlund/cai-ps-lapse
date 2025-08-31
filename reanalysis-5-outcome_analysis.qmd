@@ -575,7 +575,7 @@ results_to_save <- list(
   pooled_coefficients = pooled_results,
   full_results = full_results,
   ame_results = pooled_ame,
-  predicted_probabilities = pred_wide,
+  predicted_probabilities = NULL,  # Predicted probabilities from emmeans section (single imputation only)
   model_formula = main_effects_formula,
   n_imputations = n_imputations,
   analysis_mode = analysis_mode,
