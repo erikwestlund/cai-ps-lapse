@@ -610,7 +610,7 @@ if (!is.null(emm_results)) {
   # Get confidence intervals using confint if not present
   if (!("lower.CL" %in% names(contrasts_df))) {
     contrasts_ci <- confint(contrasts_lapse)
-    contrasts_df <- cbind(contrasts_df, contrasts_ci[, c("lower.CL", "upper.CL")])
+    contrasts_df <- cbind(contrasts_df, contrasts_ci[, c("asymp.LCL", "asymp.UCL")])
   }
   
   # Display odds ratio from contrast
@@ -622,8 +622,8 @@ if (!is.null(emm_results)) {
     Contrast = "Lapsed vs Not Lapsed",
     Odds_Ratio = round(or_value, 3),
     SE = round(contrasts_df$SE[1], 4),
-    CI_Lower = round(1/contrasts_df$upper.CL[1], 3),  # Invert and swap
-    CI_Upper = round(1/contrasts_df$lower.CL[1], 3),  # Invert and swap
+    CI_Lower = round(1/contrasts_df$asymp.UCL[1], 3),  # Invert and swap
+    CI_Upper = round(1/contrasts_df$asymp.LCL[1], 3),  # Invert and swap
     p.value = format.pval(contrasts_df$p.value[1], digits = 4, eps = 0.0001)
   )
   
