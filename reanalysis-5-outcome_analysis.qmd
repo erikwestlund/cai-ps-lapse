@@ -324,15 +324,7 @@ for (i in 1:n_imputations) {
 imputation_estimates$running_avg_OR <- cumsum(imputation_estimates$OR) / seq_along(imputation_estimates$OR)
 
 # Display the convergence table (first 10 and last 10 if more than 20)
-if (n_imputations > 20) {
-  convergence_display <- rbind(
-    head(imputation_estimates, 10),
-    data.frame(imputation = "...", log_odds = "...", OR = "...", running_avg_OR = "..."),
-    tail(imputation_estimates, 10)
-  )
-} else {
-  convergence_display <- imputation_estimates
-}
+convergence_display <- imputation_estimates
 
 # Format for display
 convergence_display_formatted <- convergence_display
