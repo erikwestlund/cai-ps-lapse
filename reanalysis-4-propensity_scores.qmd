@@ -126,11 +126,14 @@ log_message(paste0("Cache directory: ", cache_dir))
 log_message(paste0("Use cache: ", use_cache))
 
 # Function to process a single imputation
-process_imputation <- function(i) {
-  # Check for cached result
-  cache_file <- file.path(cache_dir, paste0("twang_imp_", i, ".rds"))
+process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_caching) {
+  # Recreate variables inside function to avoid scoping issues
+  library(twang)
   
-  if (use_cache && file.exists(cache_file)) {
+  # Check for cached result
+  cache_file <- file.path(cache_path, paste0("twang_imp_", i, ".rds"))
+  
+  if (use_caching && file.exists(cache_file)) {
     cached_result <- readRDS(cache_file)
     weights <- cached_result$weights
     
@@ -146,23 +149,37 @@ process_imputation <- function(i) {
   } else {
     imp_start <- Sys.time()
     
-    # Get the data for this imputation and ensure lapse is numeric
-    imp_data <- data.frame(imputed_datasets[[i]])
+    # Get the data for this imputation
+    imp_data <- as.data.frame(imp_datasets[[i]])
     
-    # Ensure lapse is numeric 0/1 (required by twang)
-    if (!is.numeric(imp_data$lapse)) {
-      imp_data$lapse <- as.numeric(as.character(imp_data$lapse))
+    # Ensure lapse is properly formatted as numeric 0/1
+    if ("lapse" %in% names(imp_data)) {
+      if (is.factor(imp_data$lapse)) {
+        # Convert factor to numeric via character to avoid level issues
+        imp_data$lapse <- as.numeric(as.character(imp_data$lapse))
+      } else if (is.character(imp_data$lapse)) {
+        imp_data$lapse <- as.numeric(imp_data$lapse)
+      } else if (is.logical(imp_data$lapse)) {
+        imp_data$lapse <- as.numeric(imp_data$lapse)
+      }
+      
+      # Ensure values are 0 or 1
+      if (any(!imp_data$lapse %in% c(0, 1, NA))) {
+        stop(paste("Lapse variable contains values other than 0, 1, or NA in imputation", i))
+      }
+    } else {
+      stop(paste("Lapse variable not found in imputation", i))
     }
     
-    # Run twang ps model - following analysis.Rmd approach
+    # Run twang ps model
     twang_model <- ps(
-      formula = ps_formula,
+      formula = formula,
       data = imp_data,
-      n.trees = n_trees,
+      n.trees = trees,
       interaction.depth = 3,
       shrinkage = 0.01,
       estimand = "ATT",
-      stop.method = c("es.mean"),  # Using es.mean only for speed
+      stop.method = c("es.mean"),
       verbose = FALSE
     )
     
@@ -202,7 +219,7 @@ if (.Platform$OS.type == "unix") {
   # Unix/Mac - use mclapply
   parallel_results <- mclapply(
     1:n_imputations,
-    process_imputation,
+    function(i) process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache),
     mc.cores = n_cores
   )
 } else {
@@ -211,8 +228,8 @@ if (.Platform$OS.type == "unix") {
   
   # Export necessary objects to cluster
   clusterExport(cl, c(
-    "cache_dir", "use_cache", "ps_formula", "imputed_datasets",
-    "n_trees", "process_imputation"
+    "process_imputation", "imputed_datasets", "ps_formula", 
+    "n_trees", "cache_dir", "use_cache"
   ), envir = environment())
   
   # Load required packages on each worker
@@ -220,7 +237,10 @@ if (.Platform$OS.type == "unix") {
     library(twang)
   })
   
-  parallel_results <- parLapply(cl, 1:n_imputations, process_imputation)
+  # Create wrapper function for parLapply
+  parallel_results <- parLapply(cl, 1:n_imputations, function(i) {
+    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache)
+  })
   
   stopCluster(cl)
 }
