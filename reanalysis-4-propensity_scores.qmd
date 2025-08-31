@@ -48,6 +48,8 @@ if (analysis_mode == "test") {
 # Set up parallel processing
 # Reduce cores for memory-intensive GBM models
 available_cores <- detectCores()
+log_message(paste0("Detected ", available_cores, " available cores"))
+log_message(paste0("Max cores configured: ", max_cores_for_ps))
 # Use fewer cores to avoid memory issues - each GBM model needs substantial memory
 # Don't subtract 1 from max_cores_for_ps since it's already the desired limit
 n_cores <- if (available_cores > max_cores_for_ps) max_cores_for_ps else max(1, available_cores - 1)
@@ -256,7 +258,9 @@ if (.Platform$OS.type == "unix") {
   )
 } else {
   # Windows - use parLapply
+  log_message(paste0("Creating cluster with ", n_cores, " workers"))
   cl <- makeCluster(n_cores)
+  log_message(paste0("Cluster created with ", length(cl), " workers"))
   
   # Export necessary objects to cluster
   clusterExport(cl, c(
