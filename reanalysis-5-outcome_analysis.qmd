@@ -485,6 +485,9 @@ if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
     # Get the fitted model for this imputation
     model <- fitted_models[[i]]
     
+    # Set emmeans options to handle larger reference grids
+    emm_options(rg.limit = 130000)
+    
     # Calculate emmeans on the response scale
     emm <- emmeans(model, 
                    ~ ever_lapse_binary,
