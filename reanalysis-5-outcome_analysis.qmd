@@ -460,7 +460,7 @@ kable(key_results,
 ```{r marginal-effects}
 # Check if AMEs are cached
 ame_cache_file <- file.path(reanalysis_data_dir, "ame_results_main_effects.rds")
-force_recalc_ame <- TRUE  # Set to TRUE to force recalculation
+force_recalc_ame <- FALSE  # Set to TRUE to force recalculation
 
 if (file.exists(ame_cache_file) && !force_recalc_ame) {
   # Load cached AMEs
@@ -508,8 +508,22 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
 }
 
 # Extract estimates and SEs for pooling
-ame_estimates <- sapply(ame_list, function(x) x$estimate)
-ame_ses <- sapply(ame_list, function(x) x$std.error)
+# avg_comparisons returns a data frame, so we need to extract the first row
+ame_estimates <- sapply(ame_list, function(x) {
+  if (is.data.frame(x)) {
+    x$estimate[1]
+  } else {
+    x$estimate
+  }
+})
+
+ame_ses <- sapply(ame_list, function(x) {
+  if (is.data.frame(x)) {
+    x$std.error[1]
+  } else {
+    x$std.error
+  }
+})
 
 # Apply Rubin's rules for pooling
 pooled_ame_est <- mean(ame_estimates)
