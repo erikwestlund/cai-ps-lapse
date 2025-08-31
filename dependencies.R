@@ -62,7 +62,11 @@ install_dependencies <- function() {
     "purrr",
     "broom",
     "here",
-    "fs"
+    "fs",
+    
+    # Parallel processing
+    "parallel",  # Base R parallel package (usually pre-installed)
+    "doParallel"  # Parallel backend for foreach
   )
   
   # Check which packages are not installed
