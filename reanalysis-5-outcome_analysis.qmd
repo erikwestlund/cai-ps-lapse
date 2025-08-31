@@ -249,7 +249,7 @@ pooled_results <- summary(pooled, conf.int = TRUE) |>
   as.data.frame()
 
 # Extract main effect of lapse
-lapse_effect <- pooled_results[pooled_results$term == "ever_lapse_binary", ]
+lapse_effect <- pooled_results[pooled_results$term == "ever_lapse_binary1", ]
 
 # Calculate OR and CI
 lapse_effect$OR <- exp(lapse_effect$estimate)
@@ -308,7 +308,7 @@ imputation_estimates <- data.frame(
 # Get the lapse coefficient from each model
 for (i in 1:n_imputations) {
   # Extract from model summaries
-  lapse_row <- model_summaries[[i]][model_summaries[[i]]$term == "ever_lapse_binary", ]
+  lapse_row <- model_summaries[[i]][model_summaries[[i]]$term == "ever_lapse_binary1", ]
   
   if (nrow(lapse_row) > 0) {
     imputation_estimates$log_odds[i] <- lapse_row$estimate
@@ -444,7 +444,7 @@ full_results <- pooled_results |>
   )
 
 # Display key variables
-key_vars <- c("ever_lapse_binary")
+key_vars <- c("ever_lapse_binary1")
 key_results <- full_results[full_results$Variable %in% key_vars, ]
 
 kable(key_results, 
@@ -483,7 +483,7 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
     # marginaleffects handles survey designs well
     ame <- avg_slopes(
       fitted_models[[i]], 
-      variables = "ever_lapse_binary",
+      variables = "ever_lapse_binary1",
       newdata = imp_data,
       vcov = ~e_mrn_deidentified,  # Cluster SEs on patient ID
       wts = imp_data$weights  # Apply PS weights
