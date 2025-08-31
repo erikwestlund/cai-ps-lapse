@@ -481,12 +481,11 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
     
     # Calculate AME with clustering and weights
     # marginaleffects handles survey designs well
-    ame <- avg_slopes(
-      fitted_models[[i]], 
-      variables = "ever_lapse_binary1",
-      newdata = imp_data,
-      vcov = ~e_mrn_deidentified,  # Cluster SEs on patient ID
-      wts = imp_data$weights  # Apply PS weights
+    # the model already handled the clustering
+    ame <- marginaleffects::avg_comparisons(
+      model,
+      variables = "ever_lapse_binary",
+      type = "response"   # average difference in predicted probabilities
     )
     
     ame_list[[i]] <- ame
