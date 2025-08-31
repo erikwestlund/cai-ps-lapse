@@ -638,7 +638,7 @@ save_location <- file.path(reanalysis_data_dir, "outcome_analysis_main_effects_r
 The main effects model shows:
 
 - **Primary finding**: Lapsing from care has a significant effect on vision impairment/blindness (OR = `r round(lapse_effect$OR, 2)`, p `r ifelse(lapse_effect$p.value < 0.001, "< 0.001", paste("=", round(lapse_effect$p.value, 3)))`)
-- **Effect size**: The average marginal effect indicates that lapsing increases the probability of VI/blindness by `r round(pooled_ame_est, 3)`
+- **Effect size**: The average marginal effect indicates that lapsing increases the probability of VI/blindness by `r round(pooled_ame$AME, 3)`
 
 ```{r finalize-log}
 # Finalize logging
