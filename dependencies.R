@@ -131,7 +131,8 @@ load_required_libraries <- function() {
     "flextable",
     "gt",
     "kableExtra",
-    "EValue"
+    "EValue",
+    "doParallel"
   )
   
   for (pkg in required_packages) {
