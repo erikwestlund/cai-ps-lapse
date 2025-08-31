@@ -485,7 +485,9 @@ if (file.exists(ame_cache_file) && !force_recalc_ame) {
     ame <- marginaleffects::avg_comparisons(
       model,
       variables = "ever_lapse_binary",
-      type = "response"   # average difference in predicted probabilities
+      type = "response",   # average difference in predicted probabilities
+      newdata = imp_data,
+      wts = "weights"
     )
     
     ame_list[[i]] <- ame
@@ -596,22 +598,39 @@ if (!is.null(emm_results)) {
         col.names = c("Lapse Status", "Predicted Probability", "SE", "Lower CI", "Upper CI"),
         digits = 3)
   
-  # Calculate and display the contrast (risk difference)
+  # Calculate and display the contrast
   contrasts_lapse <- pairs(emm_results)
   contrasts_df <- as.data.frame(contrasts_lapse)
   
+  # When emmeans is on response scale, pairs() gives odds ratios
+  # Calculate risk difference from the predicted probabilities
+  risk_diff <- pred_df$Predicted_Prob[pred_df$Lapse_Status == "Lapsed"][1] - 
+               pred_df$Predicted_Prob[pred_df$Lapse_Status == "Not Lapsed"][1]
+  
+  # Display odds ratio from contrast
   kable(contrasts_df |> 
         mutate(
-          Contrast = "Lapsed - Not Lapsed",
-          Risk_Difference = round(estimate, 3),
-          SE = round(SE, 4),
-          CI_Lower = round(lower.CL, 3),
-          CI_Upper = round(upper.CL, 3),
+          Contrast = "Lapsed vs Not Lapsed",
+          Odds_Ratio = round(odds.ratio, 3),
+          SE_OR = round(SE, 4),
+          CI_Lower = round(asymp.LCL, 3),
+          CI_Upper = round(asymp.UCL, 3),
           p.value = format.pval(p.value, digits = 4, eps = 0.0001)
         ) |>
-        select(Contrast, Risk_Difference, SE, CI_Lower, CI_Upper, p.value),
-        caption = "Main effect: Risk difference with proper variance estimation",
-        col.names = c("Contrast", "Risk Difference", "SE", "Lower CI", "Upper CI", "P-value"))
+        select(Contrast, Odds_Ratio, SE_OR, CI_Lower, CI_Upper, p.value),
+        caption = "Main effect: Odds ratio for lapse effect",
+        col.names = c("Contrast", "Odds Ratio", "SE", "Lower CI", "Upper CI", "P-value"))
+  
+  # Also display risk difference
+  risk_diff_df <- data.frame(
+    Contrast = "Lapsed - Not Lapsed",
+    Risk_Difference = round(risk_diff, 3),
+    stringsAsFactors = FALSE
+  )
+  
+  kable(risk_diff_df,
+        caption = "Main effect: Risk difference (from predicted probabilities)",
+        col.names = c("Contrast", "Risk Difference"))
 } else {
   # If emmeans failed, display message
   print("Note: Predicted probabilities could not be calculated using emmeans.")
