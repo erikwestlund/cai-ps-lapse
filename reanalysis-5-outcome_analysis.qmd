@@ -131,12 +131,12 @@ kable(lapse_df, align = c('l', 'r', 'r'))
 ## Define Model Formula
 
 ```{r define-formula}
-# Get the ORIGINAL formulas from functions.R
-# Using original to maintain consistency with submitted analysis
-original_formulas <- get_analysis_formulas()
+# Get the REANALYSIS formulas from functions.R
+# Using reanalysis formulas that include dr_severity as a covariate
+reanalysis_formulas <- get_analysis_formulas_reanalysis()
 
-# Use the full formula (without dr_severity)
-main_effects_formula <- original_formulas$full
+# Use the full formula with dr_severity
+main_effects_formula <- reanalysis_formulas$full
 ```
 
 ### Model Specification
@@ -148,7 +148,11 @@ print(main_effects_formula)
 
 **Model Structure:**
 - Main effect of interest: `ever_lapse_binary`
-- Adjustment variables: DR severity, treatment status, and baseline covariates
+- Adjustment variables: 
+  - DR severity (`dr_severity`)
+  - Baseline visual acuity (`baseline_VA_logMAR`)
+  - Demographics and comorbidities
+  - Treatment indicators
 - No interaction terms
 
 ## Fit Models to Each Imputed Dataset
