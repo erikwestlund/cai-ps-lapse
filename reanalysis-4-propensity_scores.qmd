@@ -152,23 +152,23 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
     # Get the data for this imputation
     imp_data <- as.data.frame(imp_datasets[[i]])
     
-    # Ensure lapse is properly formatted as numeric 0/1
-    if ("lapse" %in% names(imp_data)) {
-      if (is.factor(imp_data$lapse)) {
+    # Ensure ever_lapse_binary is properly formatted as numeric 0/1
+    if ("ever_lapse_binary" %in% names(imp_data)) {
+      if (is.factor(imp_data$ever_lapse_binary)) {
         # Convert factor to numeric via character to avoid level issues
-        imp_data$lapse <- as.numeric(as.character(imp_data$lapse))
-      } else if (is.character(imp_data$lapse)) {
-        imp_data$lapse <- as.numeric(imp_data$lapse)
-      } else if (is.logical(imp_data$lapse)) {
-        imp_data$lapse <- as.numeric(imp_data$lapse)
+        imp_data$ever_lapse_binary <- as.numeric(as.character(imp_data$ever_lapse_binary))
+      } else if (is.character(imp_data$ever_lapse_binary)) {
+        imp_data$ever_lapse_binary <- as.numeric(imp_data$ever_lapse_binary)
+      } else if (is.logical(imp_data$ever_lapse_binary)) {
+        imp_data$ever_lapse_binary <- as.numeric(imp_data$ever_lapse_binary)
       }
       
       # Ensure values are 0 or 1
-      if (any(!imp_data$lapse %in% c(0, 1, NA))) {
-        stop(paste("Lapse variable contains values other than 0, 1, or NA in imputation", i))
+      if (any(!imp_data$ever_lapse_binary %in% c(0, 1, NA))) {
+        stop(paste("ever_lapse_binary variable contains values other than 0, 1, or NA in imputation", i))
       }
     } else {
-      stop(paste("Lapse variable not found in imputation", i))
+      stop(paste("ever_lapse_binary variable not found in imputation", i))
     }
     
     # Run twang ps model
