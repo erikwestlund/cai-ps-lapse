@@ -146,10 +146,18 @@ process_imputation <- function(i) {
   } else {
     imp_start <- Sys.time()
     
+    # Get the data for this imputation and ensure lapse is numeric
+    imp_data <- data.frame(imputed_datasets[[i]])
+    
+    # Ensure lapse is numeric 0/1 (required by twang)
+    if (!is.numeric(imp_data$lapse)) {
+      imp_data$lapse <- as.numeric(as.character(imp_data$lapse))
+    }
+    
     # Run twang ps model - following analysis.Rmd approach
     twang_model <- ps(
       formula = ps_formula,
-      data = data.frame(imputed_datasets[[i]]),  # Convert to data.frame as in analysis.Rmd
+      data = imp_data,
       n.trees = n_trees,
       interaction.depth = 3,
       shrinkage = 0.01,
@@ -204,8 +212,8 @@ if (.Platform$OS.type == "unix") {
   # Export necessary objects to cluster
   clusterExport(cl, c(
     "cache_dir", "use_cache", "ps_formula", "imputed_datasets",
-    "n_trees", "ps", "get.weights"
-  ))
+    "n_trees", "process_imputation"
+  ), envir = environment())
   
   # Load required packages on each worker
   clusterEvalQ(cl, {
