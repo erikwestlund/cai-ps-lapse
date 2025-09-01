@@ -25,7 +25,6 @@ library(tidyr)
 library(dplyr)
 library(mice)  # For pool() function with Barnard-Rubin df adjustment
 library(mitools)  # For additional MI utilities if needed
-library(marginaleffects)  # For proper AME calculation with correct SEs
 
 # ANALYSIS MODE: Use same as imputation/PS
 analysis_mode <- "final"  # Should match imputation and PS modes
@@ -33,7 +32,6 @@ analysis_mode <- "final"  # Should match imputation and PS modes
 # CACHE SETTINGS - Set these to TRUE to force recalculation
 force_refit_models <- FALSE  # Set to TRUE to re-fit all models
 force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
-force_recalc_ame <- FALSE  # Set to TRUE to recalculate AMEs with marginaleffects
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
@@ -1071,267 +1069,17 @@ kable(convergence_stats,
       col.names = c("Subgroup", "Mean", "SD", "CV (%)", "Final Running Avg"))
 ```
 
-## Average Marginal Effects by Subgroup
-
-```{r ame-calculation}
-# Function to calculate and pool AMEs across imputations using marginaleffects
-calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
-  
-  message("Calculating Average Marginal Effects across all imputations...")
-  message("Using marginaleffects for proper standard error calculation")
-  
-  # Store AME results from each imputation
-  all_ame_results <- list()
-  
-  for (imp in 1:n_imputations) {
-    message("  Processing imputation ", imp, "/", n_imputations)
-    
-    data_for_ame <- imputed_datasets[[imp]]
-    model_for_ame <- models[[imp]]
-    
-    imp_ame_results <- data.frame()
-    
-    for (dr_level in c("No_DR", "NPDR", "PDR")) {
-      for (tx_status in c("No_Treatment", "Any_Treatment")) {
-        
-        # Get subset for this subgroup
-        subset_indices <- which(data_for_ame$dr_severity == dr_level & 
-                               data_for_ame$any_treatment == tx_status)
-        n_subset <- length(subset_indices)
-        
-        if (n_subset > 0) {
-          subset_data <- data_for_ame[subset_indices, ]
-          
-          tryCatch({
-            # Calculate average marginal effect using marginaleffects
-            # This properly accounts for model uncertainty and survey design
-            ame_result <- avg_comparisons(
-              model_for_ame,
-              variables = "ever_lapse_binary",
-              comparison = "difference",  # Difference in probabilities
-              newdata = subset_data,
-              wts = "iptw_weight",  # Use the survey weights column
-              vcov = TRUE  # Use the model's vcov (accounts for clustering)
-            )
-            
-            # Extract the AME and SE
-            ame_value <- ame_result$estimate[1]
-            se_value <- ame_result$std.error[1]
-            
-          }, error = function(e) {
-            # Fallback to manual calculation with warning
-            message("    Warning: marginaleffects failed for ", dr_level, " + ", tx_status)
-            message("    Error: ", e$message)
-            message("    Using manual calculation (SEs may be underestimated)")
-            
-            # Manual calculation as fallback
-            subset_data_0 <- subset_data
-            subset_data_0$ever_lapse_binary <- factor("No_Lapse", 
-                                                      levels = c("No_Lapse", "Lapsed"))
-            
-            subset_data_1 <- subset_data
-            subset_data_1$ever_lapse_binary <- factor("Lapsed", 
-                                                      levels = c("No_Lapse", "Lapsed"))
-            
-            pred_0 <- predict(model_for_ame, newdata = subset_data_0, type = "response")
-            pred_1 <- predict(model_for_ame, newdata = subset_data_1, type = "response")
-            
-            individual_effects <- as.numeric(pred_1) - as.numeric(pred_0)
-            weights <- subset_data$iptw_weight
-            ame_value <- weighted.mean(individual_effects, w = weights, na.rm = TRUE)
-            
-            # Note: This SE is likely underestimated
-            weighted_var <- sum(weights * (individual_effects - ame_value)^2) / sum(weights)
-            se_value <- sqrt(weighted_var / n_subset) * 2  # Multiply by 2 as crude adjustment
-          })
-          
-          # Store results
-          imp_ame_results <- rbind(imp_ame_results, data.frame(
-            DR_Severity = dr_level,
-            Treatment = tx_status,
-            N = n_subset,
-            AME = ame_value,
-            SE = se_value,
-            stringsAsFactors = FALSE
-          ))
-        }
-      }
-    }
-    
-    all_ame_results[[imp]] <- imp_ame_results
-  }
-  
-  # Pool AME results across imputations using Rubin's rules
-  # Get unique subgroups
-  first_df <- all_ame_results[[1]]
-  n_subgroups <- nrow(first_df)
-  
-  pooled_ame <- data.frame(
-    DR_Severity = first_df$DR_Severity,
-    Treatment = first_df$Treatment,
-    N = first_df$N,  # Should be same across imputations
-    AME = numeric(n_subgroups),
-    SE = numeric(n_subgroups),
-    df = numeric(n_subgroups),
-    stringsAsFactors = FALSE
-  )
-  
-  # Apply Rubin's rules to each subgroup
-  for (j in 1:n_subgroups) {
-    # Extract AMEs and SEs for this subgroup
-    ames <- sapply(all_ame_results, function(x) x$AME[j])
-    ses <- sapply(all_ame_results, function(x) x$SE[j])
-    
-    # Rubin's rules
-    Q_bar <- mean(ames)
-    U_bar <- mean(ses^2)  # Within-imputation variance
-    B <- var(ames)  # Between-imputation variance
-    T <- U_bar + (1 + 1/n_imputations) * B  # Total variance
-    
-    # Degrees of freedom (Barnard-Rubin)
-    lambda <- (B + B/n_imputations) / T
-    df_old <- (n_imputations - 1) / (lambda^2)
-    
-    pooled_ame$AME[j] <- Q_bar
-    pooled_ame$SE[j] <- sqrt(T)
-    pooled_ame$df[j] <- df_old
-  }
-  
-  # Add confidence intervals and p-values using t-distribution with proper df
-  pooled_ame <- pooled_ame |>
-    mutate(
-      CI_Lower = AME - qt(0.975, df) * SE,
-      CI_Upper = AME + qt(0.975, df) * SE,
-      t_stat = AME / SE,
-      P_Value = 2 * pt(-abs(t_stat), df = df)
-    )
-  
-  return(pooled_ame)
-}
-
-# Check if AME results are cached
-ame_cache_file <- file.path(reanalysis_data_dir, "ame_results_interaction.rds")
-
-if (file.exists(ame_cache_file) && !force_recalc_ame) {
-  # Load cached results
-  ame_results <- readRDS(ame_cache_file)
-  ame_loaded_from_cache <- TRUE
-  ame_cache_location <- ame_cache_file
-  message("AME results loaded from cache: ", ame_cache_location)
-} else {
-  # Calculate new AME results
-  ame_loaded_from_cache <- FALSE
-  
-  # Calculate pooled AMEs
-  ame_results <- calculate_pooled_ames(imputed_datasets, models, n_imputations)
-  
-  # Save to cache
-  saveRDS(ame_results, ame_cache_file)
-  ame_cache_location <- ame_cache_file
-  message("AME results calculated and saved to cache: ", ame_cache_location)
-}
-
-# Format for display
-ame_display <- ame_results |>
-  mutate(
-    AME = round(AME, 4),
-    SE = round(SE, 4),
-    CI = paste0("(", round(CI_Lower, 4), ", ", round(CI_Upper, 4), ")"),
-    P_Value = format.pval(2 * pnorm(-abs(AME/SE)), digits = 4, eps = 0.0001)
-  ) |>
-  dplyr::select(DR_Severity, Treatment, N, AME, SE, CI, P_Value)
-
-kable(ame_display,
-      caption = "Average Marginal Effects of Lapsing by Subgroup",
-      col.names = c("DR Severity", "Treatment", "N", "AME", "SE", "95% CI", "P-value"),
-      row.names = FALSE)
-```
-
-### Forest Plot of Average Marginal Effects
-
-```{r ame-forest-plot}
-#| fig-height: 6
-#| fig-width: 10
-
-# Prepare data for forest plot
-forest_data <- ame_results |>
-  mutate(
-    # Create a combined label for the y-axis
-    Subgroup = paste0(DR_Severity, " + ", Treatment),
-    # Order for plotting (reverse for forest plot convention)
-    Subgroup = factor(Subgroup, levels = rev(unique(Subgroup)))
-  ) |>
-  arrange(desc(Subgroup))
-
-# Create forest plot
-forest_plot <- ggplot(forest_data, aes(x = AME, y = Subgroup)) +
-  # Add reference line at 0 (no effect)
-  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.7) +
-  
-  # Add confidence intervals
-  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper), 
-                 height = 0.2, size = 0.8, color = "gray30") +
-  
-  # Add point estimates
-  geom_point(aes(color = DR_Severity, shape = Treatment), size = 4) +
-  
-  # Labels and theme
-  labs(
-    title = "Average Marginal Effects of Lapsing on Vision Impairment",
-    subtitle = "By DR severity and treatment status (with 95% CI)",
-    x = "Average Marginal Effect (Probability Scale)",
-    y = "",
-    color = "DR Severity",
-    shape = "Treatment"
-  ) +
-  
-  # Theme adjustments
-  theme_minimal() +
-  theme(
-    plot.title = element_text(size = 14, face = "bold"),
-    plot.subtitle = element_text(size = 12),
-    axis.text.y = element_text(size = 11, hjust = 0),
-    axis.text.x = element_text(size = 11),
-    axis.title = element_text(size = 12),
-    legend.position = "bottom",
-    legend.box = "horizontal",
-    panel.grid.major.y = element_line(color = "gray90"),
-    panel.grid.minor = element_blank()
-  ) +
-  
-  # Color scale
-  scale_color_manual(values = c(
-    "No_DR" = "#1f77b4",
-    "NPDR" = "#ff7f0e", 
-    "PDR" = "#d62728"
-  )) +
-  
-  # Shape scale
-  scale_shape_manual(values = c(
-    "No_Treatment" = 16,  # Circle
-    "Any_Treatment" = 17   # Triangle
-  )) +
-  
-  # X-axis formatting
-  scale_x_continuous(labels = scales::percent_format(accuracy = 0.1))
-
-# Add text annotations with exact values
-forest_plot_annotated <- forest_plot +
-  geom_text(aes(label = sprintf("%.3f", AME)),
-            nudge_y = 0.3, size = 3.5, color = "black")
-
-# Display the annotated plot
-forest_plot_annotated
-```
-
 ## Export Results
 
 ```{r export}
+# Note: Using emmeans-based risk differences as the primary effect measure
+# These are calculated at the reference grid rather than averaged over observed data
+
 # Save key results for reporting
 results_to_save <- list(
   pooled_coefficients = pooled_results,
   subgroup_effects = subgroup_effects_stored,
-  ame_results = ame_results,
+  emmeans_results = pooled_results,  # The emmeans-based effects
   probability_table = if(exists("prob_table")) prob_table else NULL,
   model_summaries = model_summaries,
   n_imputations = n_imputations,
