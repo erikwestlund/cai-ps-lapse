@@ -16,6 +16,7 @@ install_dependencies <- function() {
     # Statistical analysis and survey methods
     "survey",
     "margins",
+    "marginaleffects",  # For proper AME calculation with correct SEs
     "emmeans",
     "car",
     
@@ -102,6 +103,7 @@ load_required_libraries <- function() {
     "tidyverse",
     "survey",
     "margins",
+    "marginaleffects",
     "emmeans",
     "car",
     "MatchIt",

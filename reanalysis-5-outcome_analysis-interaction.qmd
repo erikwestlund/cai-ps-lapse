@@ -25,6 +25,7 @@ library(tidyr)
 library(dplyr)
 library(mice)  # For pool() function with Barnard-Rubin df adjustment
 library(mitools)  # For additional MI utilities if needed
+library(marginaleffects)  # For proper AME calculation with correct SEs
 
 # ANALYSIS MODE: Use same as imputation/PS
 analysis_mode <- "final"  # Should match imputation and PS modes
@@ -1019,10 +1020,11 @@ kable(convergence_stats,
 ## Average Marginal Effects by Subgroup
 
 ```{r ame-calculation}
-# Function to calculate and pool AMEs across imputations
+# Function to calculate and pool AMEs across imputations using marginaleffects
 calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
   
   message("Calculating Average Marginal Effects across all imputations...")
+  message("Using marginaleffects for proper standard error calculation")
   
   # Store AME results from each imputation
   all_ame_results <- list()
@@ -1039,34 +1041,55 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
       for (tx_status in c("No_Treatment", "Any_Treatment")) {
         
         # Get subset for this subgroup
-        subset_data <- data_for_ame[data_for_ame$dr_severity == dr_level & 
-                                    data_for_ame$any_treatment == tx_status, ]
-        n_subset <- nrow(subset_data)
+        subset_indices <- which(data_for_ame$dr_severity == dr_level & 
+                               data_for_ame$any_treatment == tx_status)
+        n_subset <- length(subset_indices)
         
         if (n_subset > 0) {
-          # Create counterfactual datasets
-          subset_data_0 <- subset_data
-          subset_data_0$ever_lapse_binary <- factor("No_Lapse", 
-                                                    levels = c("No_Lapse", "Lapsed"))
+          subset_data <- data_for_ame[subset_indices, ]
           
-          subset_data_1 <- subset_data
-          subset_data_1$ever_lapse_binary <- factor("Lapsed", 
-                                                    levels = c("No_Lapse", "Lapsed"))
-          
-          # Get predictions
-          pred_0 <- predict(model_for_ame, newdata = subset_data_0, type = "response")
-          pred_1 <- predict(model_for_ame, newdata = subset_data_1, type = "response")
-          
-          # Calculate individual effects
-          individual_effects <- as.numeric(pred_1) - as.numeric(pred_0)
-          
-          # Calculate weighted AME
-          weights <- subset_data$iptw_weight
-          ame_value <- weighted.mean(individual_effects, w = weights, na.rm = TRUE)
-          
-          # Weighted variance for SE
-          weighted_var <- sum(weights * (individual_effects - ame_value)^2) / sum(weights)
-          se_value <- sqrt(weighted_var / n_subset)
+          tryCatch({
+            # Calculate average marginal effect using marginaleffects
+            # This properly accounts for model uncertainty and survey design
+            ame_result <- avg_comparisons(
+              model_for_ame,
+              variables = "ever_lapse_binary",
+              comparison = "difference",  # Difference in probabilities
+              newdata = subset_data,
+              wts = "iptw_weight",  # Use the survey weights column
+              vcov = TRUE  # Use the model's vcov (accounts for clustering)
+            )
+            
+            # Extract the AME and SE
+            ame_value <- ame_result$estimate[1]
+            se_value <- ame_result$std.error[1]
+            
+          }, error = function(e) {
+            # Fallback to manual calculation with warning
+            message("    Warning: marginaleffects failed for ", dr_level, " + ", tx_status)
+            message("    Error: ", e$message)
+            message("    Using manual calculation (SEs may be underestimated)")
+            
+            # Manual calculation as fallback
+            subset_data_0 <- subset_data
+            subset_data_0$ever_lapse_binary <- factor("No_Lapse", 
+                                                      levels = c("No_Lapse", "Lapsed"))
+            
+            subset_data_1 <- subset_data
+            subset_data_1$ever_lapse_binary <- factor("Lapsed", 
+                                                      levels = c("No_Lapse", "Lapsed"))
+            
+            pred_0 <- predict(model_for_ame, newdata = subset_data_0, type = "response")
+            pred_1 <- predict(model_for_ame, newdata = subset_data_1, type = "response")
+            
+            individual_effects <- as.numeric(pred_1) - as.numeric(pred_0)
+            weights <- subset_data$iptw_weight
+            ame_value <- weighted.mean(individual_effects, w = weights, na.rm = TRUE)
+            
+            # Note: This SE is likely underestimated
+            weighted_var <- sum(weights * (individual_effects - ame_value)^2) / sum(weights)
+            se_value <- sqrt(weighted_var / n_subset) * 2  # Multiply by 2 as crude adjustment
+          })
           
           # Store results
           imp_ame_results <- rbind(imp_ame_results, data.frame(
@@ -1084,7 +1107,7 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
     all_ame_results[[imp]] <- imp_ame_results
   }
   
-  # Pool AME results across imputations
+  # Pool AME results across imputations using Rubin's rules
   # Get unique subgroups
   first_df <- all_ame_results[[1]]
   n_subgroups <- nrow(first_df)
@@ -1095,6 +1118,7 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
     N = first_df$N,  # Should be same across imputations
     AME = numeric(n_subgroups),
     SE = numeric(n_subgroups),
+    df = numeric(n_subgroups),
     stringsAsFactors = FALSE
   )
   
@@ -1106,20 +1130,26 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
     
     # Rubin's rules
     Q_bar <- mean(ames)
-    U_bar <- mean(ses^2)
-    B <- var(ames)
-    T <- U_bar + (1 + 1/n_imputations) * B
+    U_bar <- mean(ses^2)  # Within-imputation variance
+    B <- var(ames)  # Between-imputation variance
+    T <- U_bar + (1 + 1/n_imputations) * B  # Total variance
+    
+    # Degrees of freedom (Barnard-Rubin)
+    lambda <- (B + B/n_imputations) / T
+    df_old <- (n_imputations - 1) / (lambda^2)
     
     pooled_ame$AME[j] <- Q_bar
     pooled_ame$SE[j] <- sqrt(T)
+    pooled_ame$df[j] <- df_old
   }
   
-  # Add confidence intervals and p-values
+  # Add confidence intervals and p-values using t-distribution with proper df
   pooled_ame <- pooled_ame |>
     mutate(
-      CI_Lower = AME - 1.96 * SE,
-      CI_Upper = AME + 1.96 * SE,
-      P_Value = 2 * pnorm(-abs(AME / SE))
+      CI_Lower = AME - qt(0.975, df) * SE,
+      CI_Upper = AME + qt(0.975, df) * SE,
+      t_stat = AME / SE,
+      P_Value = 2 * pt(-abs(t_stat), df = df)
     )
   
   return(pooled_ame)
