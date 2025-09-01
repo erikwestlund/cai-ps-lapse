@@ -107,32 +107,35 @@ log_message(sprintf("Excluded (missing outcome): %d (%.1f%%)", n_excluded, pct_e
 log_message(paste("Total columns in processed data:", length(names(original_data))))
 log_message(paste("Sample columns:", paste(names(original_data)[1:min(10, length(names(original_data)))], collapse = ", ")))
 
-# Based on the actual column names used in functions.R formulas
-# Core demographic variables
-demographic_vars <- c("age", "age_cat", "gender_cat", "race_ethnic_cat")
+# Variables from the actual matching and outcome formulas in functions.R
+# Demographics created by load_and_prepare_data
+demographic_vars <- c("age", "age_cat", "gender_cat", "race_ethnic_cat", "insurance_cat")
 
-# Insurance and healthcare access
-insurance_vars <- c("insurance_cat", "PCP_visits", "eye_visits")
+# Comorbidity scores (these ARE in the raw data)
+comorbidity_vars <- c("CCI", "DCSI")
 
-# Diabetes-related variables
-diabetes_vars <- c("insulin", "DCSI", "DM_duration")
+# Vision and treatment variables
+vision_vars <- c("baseline_VA_logMAR")
 
-# Comorbidity variables
-comorbidity_vars <- c("CCI", "HTN", "dyslipidemia", "CVD", "CKD_stage")
+# Treatment flags (these ARE in the raw data)
+treatment_vars <- c("other_inject", "anti_VEGF", "focal_laser_flag", "PRP_flag")
 
-# Vision-related variables
-vision_vars <- c("baseline_VA_logMAR", "baseline_VA_cat", "dr_severity", 
-                 "any_treatment", "DME")
+# Other eye conditions
+eye_condition_vars <- c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", 
+                        "catsurg_before_hitplus_cat")
 
-# Treatment/exposure
+# DR severity (created by the function)
+dr_vars <- c("dr_severity")
+
+# Treatment/exposure (created by the function)
 exposure_var <- "ever_lapse_binary"
 
-# Outcome variables
+# Outcome variables (created by the function)
 outcome_vars <- c("outcome_va_logMAR", "outcome_va_vi_binary")
 
 # Combine all variables
-all_vars <- c(demographic_vars, insurance_vars, diabetes_vars, 
-              comorbidity_vars, vision_vars, exposure_var, outcome_vars)
+all_vars <- c(demographic_vars, comorbidity_vars, vision_vars, treatment_vars,
+              eye_condition_vars, dr_vars, exposure_var, outcome_vars)
 
 # Check which variables exist in the data
 available_vars <- intersect(all_vars, names(original_data))
@@ -149,11 +152,10 @@ log_message(paste("Analyzing", length(available_vars), "variables"))
 
 ```{r descriptive-stats}
 # Create Table 1 comparing excluded vs included
-# Specify variable types (using actual column names from formulas)
-factor_vars <- c("age_cat", "gender_cat", "race_ethnic_cat", "insurance_cat", 
-                 "insulin", "HTN", "dyslipidemia", "CVD",
-                 "CKD_stage", "baseline_VA_cat", "dr_severity", "any_treatment",
-                 "DME", "ever_lapse_binary")
+# Specify which variables should be treated as factors
+factor_vars <- c("age_cat", "gender_cat", "race_ethnic_cat", "insurance_cat",
+                 "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", 
+                 "catsurg_before_hitplus_cat", "dr_severity", "ever_lapse_binary")
 
 # Ensure factor variables are factors
 for (var in factor_vars) {
