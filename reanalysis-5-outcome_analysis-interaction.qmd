@@ -176,9 +176,13 @@ kable(lapse_df, align = c('l', 'r', 'r'))
 crosstab <- with(imputed_datasets[[1]], 
                  table(dr_severity, any_treatment, ever_lapse_binary))
 
-# Convert to data frame format
-crosstab_df <- as.data.frame(crosstab)
-names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Count")
+# Convert to data frame format using as.data.frame.table
+crosstab_df <- as.data.frame.table(crosstab)
+names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Freq")
+
+# Rename Freq to Count and ensure it's numeric
+crosstab_df$Count <- as.numeric(crosstab_df$Freq)
+crosstab_df$Freq <- NULL
 
 # Convert numeric lapse status to meaningful labels
 crosstab_df$Lapse_Status <- factor(crosstab_df$Lapse_Status, 
@@ -192,7 +196,7 @@ total_n <- sum(crosstab_df$Count)
 crosstab_wide <- crosstab_df |>
   pivot_wider(names_from = Lapse_Status, 
               values_from = Count,
-              values_fill = list(Count = 0)) |>
+              values_fill = 0) |>
   arrange(DR_Severity, Treatment) |>
   mutate(
     Total = No_Lapse + Lapsed,
