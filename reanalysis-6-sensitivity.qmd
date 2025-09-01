@@ -275,7 +275,7 @@ for (severity in c("No_DR", "NPDR", "PDR")) {
       family = quasibinomial()
     )
     
-    sub_coef <- coef(summary(sub_model))["ever_lapse_binary", ]
+    sub_coef <- coef(summary(sub_model))["ever_lapse_binary1", ]
     
     subgroup_results[[severity]] <- data.frame(
       Subgroup = paste("DR Severity:", severity),
@@ -401,7 +401,7 @@ for (spec_name in names(model_specs)) {
     family = quasibinomial()
   )
   
-  coef_lapse <- coef(summary(model))["ever_lapse_binary", ]
+  coef_lapse <- coef(summary(model))["ever_lapse_binary1", ]
   
   spec_results[[spec_name]] <- data.frame(
     Specification = spec_name,
