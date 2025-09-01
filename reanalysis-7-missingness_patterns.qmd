@@ -211,8 +211,16 @@ smd_data <- data.frame()
 # Process each variable in the table
 for (var in available_vars) {
   if (var %in% names(original_data)) {
-    if (var %in% factor_vars && is.factor(original_data[[var]])) {
-      # For factor variables, calculate SMD for each level
+    # Check if it's a factor or character that should be treated as factor
+    is_factor_var <- (var %in% factor_vars) || is.factor(original_data[[var]]) || is.character(original_data[[var]])
+    
+    if (is_factor_var) {
+      # For factor/categorical variables, calculate SMD for each level
+      # Convert to factor if needed
+      if (!is.factor(original_data[[var]])) {
+        original_data[[var]] <- as.factor(original_data[[var]])
+      }
+      
       var_levels <- levels(original_data[[var]])
       for (level in var_levels) {
         # Calculate proportion in each group
@@ -236,18 +244,28 @@ for (var in available_vars) {
           stringsAsFactors = FALSE
         ))
       }
-    } else {
+    } else if (is.numeric(original_data[[var]])) {
       # For continuous variables, calculate single SMD
       if (sum(!is.na(original_data[[var]])) > 0) {
+        # Calculate means
         mean_excluded <- mean(original_data[[var]][original_data$excluded], na.rm = TRUE)
         mean_included <- mean(original_data[[var]][!original_data$excluded], na.rm = TRUE)
-        sd_pooled <- sqrt((var(original_data[[var]][original_data$excluded], na.rm = TRUE) + 
-                          var(original_data[[var]][!original_data$excluded], na.rm = TRUE)) / 2)
         
-        smd_val <- if (!is.na(sd_pooled) && sd_pooled > 0) {
-          abs(mean_excluded - mean_included) / sd_pooled
+        # Calculate pooled standard deviation
+        var_excluded <- var(original_data[[var]][original_data$excluded], na.rm = TRUE)
+        var_included <- var(original_data[[var]][!original_data$excluded], na.rm = TRUE)
+        
+        # Check if we have valid variances
+        if (!is.na(var_excluded) && !is.na(var_included)) {
+          sd_pooled <- sqrt((var_excluded + var_included) / 2)
+          
+          smd_val <- if (!is.na(sd_pooled) && sd_pooled > 0) {
+            abs(mean_excluded - mean_included) / sd_pooled
+          } else {
+            0
+          }
         } else {
-          0
+          smd_val <- 0
         }
         
         smd_data <- rbind(smd_data, data.frame(
