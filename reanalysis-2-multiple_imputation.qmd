@@ -913,9 +913,18 @@ kable(consistency_df,
 ## Save Imputed Datasets
 
 ```{r save-imputed}
-saveRDS(mice_results, file.path(reanalysis_data_dir, "mice_results.rds"))
+# Only save mice_results if it wasn't loaded from cache (to avoid overwriting good data)
+if (!use_cached_mice || !file.exists(mice_cache_file)) {
+  saveRDS(mice_results, file.path(reanalysis_data_dir, "mice_results.rds"))
+  log_message("Saved fresh MICE results to mice_results.rds")
+} else {
+  log_message("Skipping mice_results.rds save (using cached version)")
+}
+
+# Always save the post-processed imputed datasets (these have our fixes applied)
 saveRDS(imputed_datasets, file.path(reanalysis_data_dir, "imputed_datasets.rds"))
 saveRDS(imputed_datasets[[1]], file.path(reanalysis_data_dir, "imputed_dataset_1.rds"))
+log_message("Saved post-processed imputed datasets")
 ```
 
 **Saved `r n_imputations` imputed datasets to:** `r reanalysis_data_dir`
