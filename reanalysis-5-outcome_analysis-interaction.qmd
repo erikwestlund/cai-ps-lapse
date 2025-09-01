@@ -184,11 +184,6 @@ names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Freq")
 crosstab_df$Count <- as.numeric(crosstab_df$Freq)
 crosstab_df$Freq <- NULL
 
-# Convert numeric lapse status to meaningful labels
-crosstab_df$Lapse_Status <- factor(crosstab_df$Lapse_Status, 
-                                   levels = c("0", "1"),
-                                   labels = c("No_Lapse", "Lapsed"))
-
 # Calculate total for percentages
 total_n <- sum(crosstab_df$Count)
 
