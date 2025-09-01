@@ -571,7 +571,6 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     
     # Get the data for this imputation (needed for emmeans)
     imp_data <- imputed_datasets[[i]]
-    imp_data$weights <- twang_weights[[i]]
     
     # Get marginal means on both log odds and response scales
     emm_logit <- emmeans(models[[i]], 
