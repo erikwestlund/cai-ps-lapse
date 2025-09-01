@@ -66,7 +66,7 @@ if (or_main > 1) {
     est = or_main,
     lo = ci_lower_main,
     hi = ci_upper_main,
-    rare = TRUE  # Assuming rare outcome
+    rare = FALSE  # VI/blindness is not rare in this population
   )
 } else {
   # If OR < 1, we need to take the reciprocal
@@ -74,7 +74,7 @@ if (or_main > 1) {
     est = 1/or_main,
     lo = 1/ci_upper_main,
     hi = 1/ci_lower_main,
-    rare = TRUE
+    rare = FALSE
   )
 }
 
@@ -125,14 +125,14 @@ for (i in 1:nrow(subgroup_effects)) {
       est = or_val,
       lo = ci_lower,
       hi = ci_upper,
-      rare = TRUE
+      rare = FALSE
     )
   } else {
     evalue <- evalues.OR(
       est = 1/or_val,
       lo = 1/ci_upper,
       hi = 1/ci_lower,
-      rare = TRUE
+      rare = FALSE
     )
   }
   

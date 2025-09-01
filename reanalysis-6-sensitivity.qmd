@@ -191,7 +191,7 @@ if (n_complete > 1000) {
   
   # Extract lapse effect
   cc_coef <- coef(summary(cc_model))
-  cc_lapse <- cc_coef["ever_lapse_binary", ]
+  cc_lapse <- cc_coef["ever_lapse_binary1", ]
   
   # Compare with MI results
   comparison_df <- data.frame(
@@ -358,7 +358,7 @@ for (trunc_level in truncation_levels) {
     family = quasibinomial()
   )
   
-  coef_lapse <- coef(summary(model))["ever_lapse_binary", ]
+  coef_lapse <- coef(summary(model))["ever_lapse_binary1", ]
   
   truncation_results[[as.character(trunc_level)]] <- data.frame(
     Truncation = ifelse(trunc_level == Inf, "None", paste("Max =", trunc_level)),
@@ -474,7 +474,7 @@ if (length(influential_idx) > 0 && length(influential_idx) < 100) {
     family = quasibinomial()
   )
   
-  coef_clean <- coef(summary(model_clean))["ever_lapse_binary", ]
+  coef_clean <- coef(summary(model_clean))["ever_lapse_binary1", ]
   
   influence_comparison <- data.frame(
     Model = c("Full data", "Without influential obs"),
