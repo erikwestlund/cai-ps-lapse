@@ -31,7 +31,7 @@ analysis_mode <- "final"  # Should match imputation and PS modes
 
 # CACHE SETTINGS - Set these to TRUE to force recalculation
 force_refit_models <- FALSE  # Set to TRUE to re-fit all models
-force_recalc_emmeans <- TRUE  # Set to TRUE to recalculate marginal means
+force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
@@ -816,121 +816,6 @@ risk_diff_effects_stored <- data.frame(
 
 # Display the risk differences prominently
 log_message("Risk differences (probability scale) calculated")
-```
-
-
-## Manual Calculation of Subgroup Effects (Validation)
-
-```{r manual-effects}
-# Manually calculate effects for each of the 6 subgroups
-# This validates the emmeans results and provides a fallback
-
-coef_vals <- pooled_results$Estimate
-names(coef_vals) <- pooled_results$Term
-vcov_pooled <- diag(pooled_results$SE^2)
-rownames(vcov_pooled) <- colnames(vcov_pooled) <- pooled_results$Term
-
-# Initialize results
-manual_effects <- expand.grid(
-  DR_Severity = c("No_DR", "NPDR", "PDR"),
-  Treatment = c("No_Treatment", "Any_Treatment"),
-  stringsAsFactors = FALSE
-)
-manual_effects$Log_Odds <- NA
-manual_effects$SE <- NA
-
-# Calculate effect for each combination
-# Base effect: ever_lapse_binaryLapsed
-
-# No_DR, No_Treatment (reference group)
-manual_effects[1, "Log_Odds"] <- coef_vals["ever_lapse_binaryLapsed"]
-manual_effects[1, "SE"] <- sqrt(vcov_pooled["ever_lapse_binaryLapsed", "ever_lapse_binaryLapsed"])
-
-# NPDR, No_Treatment
-term_npdr <- "ever_lapse_binaryLapsed:dr_severityNPDR"
-if (term_npdr %in% names(coef_vals)) {
-  manual_effects[2, "Log_Odds"] <- coef_vals["ever_lapse_binaryLapsed"] + coef_vals[term_npdr]
-  # Note: For simplicity, ignoring covariance in this demonstration
-  manual_effects[2, "SE"] <- sqrt(vcov_pooled["ever_lapse_binaryLapsed", "ever_lapse_binaryLapsed"] + 
-                                  vcov_pooled[term_npdr, term_npdr])
-}
-
-# PDR, No_Treatment
-term_pdr <- "ever_lapse_binaryLapsed:dr_severityPDR"
-if (term_pdr %in% names(coef_vals)) {
-  manual_effects[3, "Log_Odds"] <- coef_vals["ever_lapse_binaryLapsed"] + coef_vals[term_pdr]
-  manual_effects[3, "SE"] <- sqrt(vcov_pooled["ever_lapse_binaryLapsed", "ever_lapse_binaryLapsed"] + 
-                                  vcov_pooled[term_pdr, term_pdr])
-}
-
-# No_DR, Any_Treatment
-term_tx <- "ever_lapse_binaryLapsed:any_treatmentAny_Treatment"
-if (term_tx %in% names(coef_vals)) {
-  manual_effects[4, "Log_Odds"] <- coef_vals["ever_lapse_binaryLapsed"] + coef_vals[term_tx]
-  manual_effects[4, "SE"] <- sqrt(vcov_pooled["ever_lapse_binaryLapsed", "ever_lapse_binaryLapsed"] + 
-                                  vcov_pooled[term_tx, term_tx])
-}
-
-# NPDR, Any_Treatment
-term_npdr_tx <- "ever_lapse_binaryLapsed:dr_severityNPDR:any_treatmentAny_Treatment"
-if (all(c(term_npdr, term_tx, term_npdr_tx) %in% names(coef_vals))) {
-  manual_effects[5, "Log_Odds"] <- coef_vals["ever_lapse_binaryLapsed"] + 
-                                   coef_vals[term_npdr] + 
-                                   coef_vals[term_tx] + 
-                                   coef_vals[term_npdr_tx]
-  # Simplified SE (ignoring covariances for demonstration)
-  manual_effects[5, "SE"] <- sqrt(sum(c(
-    vcov_pooled["ever_lapse_binaryLapsed", "ever_lapse_binaryLapsed"],
-    vcov_pooled[term_npdr, term_npdr],
-    vcov_pooled[term_tx, term_tx],
-    vcov_pooled[term_npdr_tx, term_npdr_tx]
-  )))
-}
-
-# PDR, Any_Treatment
-term_pdr_tx <- "ever_lapse_binaryLapsed:dr_severityPDR:any_treatmentAny_Treatment"
-if (all(c(term_pdr, term_tx, term_pdr_tx) %in% names(coef_vals))) {
-  manual_effects[6, "Log_Odds"] <- coef_vals["ever_lapse_binaryLapsed"] + 
-                                   coef_vals[term_pdr] + 
-                                   coef_vals[term_tx] + 
-                                   coef_vals[term_pdr_tx]
-  manual_effects[6, "SE"] <- sqrt(sum(c(
-    vcov_pooled["ever_lapse_binaryLapsed", "ever_lapse_binaryLapsed"],
-    vcov_pooled[term_pdr, term_pdr],
-    vcov_pooled[term_tx, term_tx],
-    vcov_pooled[term_pdr_tx, term_pdr_tx]
-  )))
-}
-
-# Calculate derived statistics for non-NA values
-manual_effects <- manual_effects |>
-  mutate(
-    CI_Lower = ifelse(!is.na(Log_Odds) & !is.na(SE), Log_Odds - 1.96 * SE, NA),
-    CI_Upper = ifelse(!is.na(Log_Odds) & !is.na(SE), Log_Odds + 1.96 * SE, NA),
-    OR = ifelse(!is.na(Log_Odds), exp(Log_Odds), NA),
-    P_Value = ifelse(!is.na(Log_Odds) & !is.na(SE) & SE > 0, 
-                    2 * pnorm(-abs(Log_Odds / SE)), NA)
-  )
-
-# Format the results
-manual_effects <- manual_effects |>
-  mutate(across(c(Log_Odds, SE, CI_Lower, CI_Upper, OR), ~round(., 4))) |>
-  mutate(P_Value = ifelse(!is.na(P_Value), 
-                          format.pval(P_Value, digits = 4, eps = 0.0001), 
-                          NA))
-
-# Check if we have valid results
-n_valid <- sum(!is.na(manual_effects$Log_Odds))
-if (n_valid == 0) {
-  log_message("Warning: No valid manual effect calculations")
-} else if (n_valid < nrow(manual_effects)) {
-  log_message("Warning: Some manual effect calculations contain NA values (", 
-          nrow(manual_effects) - n_valid, " out of ", nrow(manual_effects), ")")
-}
-
-kable(manual_effects,
-      caption = "Manual Calculation of Subgroup Effects (Validation)",
-      row.names = FALSE)
 ```
 
 ## Visualization of Three-Way Interaction
