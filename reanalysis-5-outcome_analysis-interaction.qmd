@@ -594,9 +594,9 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     dr_severity = first_contrast$dr_severity,
     any_treatment = first_contrast$any_treatment,
     contrast = first_contrast$contrast,
-    log_odds = numeric(n_subgroups),
-    SE_log_odds = numeric(n_subgroups),
-    df = numeric(n_subgroups),
+    log_odds = as.numeric(n_subgroups),
+    SE_log_odds = as.numeric(n_subgroups),
+    df = as.numeric(n_subgroups),
     stringsAsFactors = FALSE
   )
   
@@ -604,9 +604,9 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     dr_severity = first_rd$dr_severity,
     any_treatment = first_rd$any_treatment,
     contrast = first_rd$contrast,
-    risk_diff = numeric(n_subgroups),
-    SE_risk_diff = numeric(n_subgroups),
-    df = numeric(n_subgroups),
+    risk_diff = as.numeric(n_subgroups),
+    SE_risk_diff = as.numeric(n_subgroups),
+    df = as.numeric(n_subgroups),
     stringsAsFactors = FALSE
   )
   
@@ -621,23 +621,13 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
   # Pool each subgroup using Rubin's rules
   for (j in 1:n_subgroups) {
     # Pool odds ratio contrasts (log scale)
+    # Extract the j-th estimate from each imputation
     log_odds_estimates <- sapply(all_contrasts, function(x) {
-      if ("estimate" %in% names(x)) {
-        x$estimate[j]
-      } else {
-        # Try other possible column names
-        x[j, which(names(x) %in% c("estimate", "emmean", "contrast"))[1]]
-      }
+      x$estimate[j]
     })
     
     log_odds_SEs <- sapply(all_contrasts, function(x) {
-      if ("SE" %in% names(x)) {
-        x$SE[j]
-      } else if ("std.error" %in% names(x)) {
-        x$std.error[j]
-      } else {
-        x[j, which(names(x) %in% c("SE", "std.error", "se"))[1]]
-      }
+      x$SE[j]
     })
     
     # Convert to numeric and check for validity
@@ -659,29 +649,13 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     pooled_or_results$df[j] <- df_log
     
     # Pool risk differences (probability scale)
-    # Check for column names - emmeans may use 'estimate' or other names
+    # Extract the j-th estimate from each imputation
     rd_estimates <- sapply(all_risk_diffs, function(x) {
-      if ("estimate" %in% names(x)) {
-        x$estimate[j]
-      } else if ("emmean" %in% names(x)) {
-        x$emmean[j]
-      } else if ("prob" %in% names(x)) {
-        x$prob[j]
-      } else {
-        # Try to get the estimate column (might be named differently)
-        x[j, which(names(x) %in% c("estimate", "emmean", "prob", "prediction"))[1]]
-      }
+      x$estimate[j]
     })
     
     rd_SEs <- sapply(all_risk_diffs, function(x) {
-      if ("SE" %in% names(x)) {
-        x$SE[j]
-      } else if ("std.error" %in% names(x)) {
-        x$std.error[j]
-      } else {
-        # Try to get the SE column
-        x[j, which(names(x) %in% c("SE", "std.error", "se"))[1]]
-      }
+      x$SE[j]
     })
     
     # Convert to numeric and check for validity
