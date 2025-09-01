@@ -1,0 +1,484 @@
+---
+title: "Reanalysis Step 7: Missingness Pattern Analysis"
+subtitle: "Comparing characteristics of excluded vs included patients"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+# Setup analysis environment
+source("dependencies.R")
+source("functions.R")
+setup_analysis(seed = 2025)
+
+# Additional packages for this analysis
+library(knitr)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+# Initialize logging
+log_file <- init_log("missingness_pattern_analysis")
+
+# Load the original data before exclusions
+original_data <- readRDS(file.path(reanalysis_data_dir, "cai_lapse_data_processed.rds"))
+
+# Load imputed datasets to get the included sample
+imputed_datasets <- list()
+for (i in 1:20) {
+  imputed_datasets[[i]] <- readRDS(file.path(reanalysis_data_dir, paste0("imputed_dataset_", i, ".rds")))
+}
+
+log_message("Data loaded successfully")
+```
+
+## Motivation
+
+When we performed multiple imputation, the observed treatment effect increased. This suggests that those with missing data (excluded from complete case analysis) may differ systematically from those included. Specifically, those with missing outcomes may be more likely to lapse and have worse health and behavioral characteristics.
+
+This analysis compares baseline characteristics between:
+- **Excluded**: Patients with missing outcome data (excluded from complete case analysis)
+- **Included**: Patients with complete outcome data (included in analysis)
+
+## Identify Excluded vs Included Patients
+
+```{r identify-groups}
+# Get the cohort_id from the first imputed dataset (should be same across all)
+included_ids <- imputed_datasets[[1]]$cohort_id
+
+# Identify excluded patients (those in original but not in imputed)
+all_ids <- original_data$cohort_id
+excluded_ids <- setdiff(all_ids, included_ids)
+
+# Create indicator in original data
+original_data$excluded <- original_data$cohort_id %in% excluded_ids
+
+# Summary counts
+n_total <- nrow(original_data)
+n_included <- sum(!original_data$excluded)
+n_excluded <- sum(original_data$excluded)
+pct_excluded <- round(100 * n_excluded / n_total, 1)
+
+log_message(sprintf("Total patients: %d", n_total))
+log_message(sprintf("Included (complete outcome): %d (%.1f%%)", n_included, 100 - pct_excluded))
+log_message(sprintf("Excluded (missing outcome): %d (%.1f%%)", n_excluded, pct_excluded))
+```
+
+**Sample Size:**
+- Total patients: `r n_total`
+- Included (complete outcome): `r n_included` (`r round(100 - pct_excluded, 1)`%)
+- Excluded (missing outcome): `r n_excluded` (`r pct_excluded`%)
+
+## Variable Selection
+
+```{r variable-selection}
+# Get variables used in outcome and propensity score models
+# Based on the formulas in functions.R
+
+# Core demographic variables
+demographic_vars <- c("age", "age_cat", "gender_cat", "race_recode", "ethnicity_recode")
+
+# Insurance and healthcare access
+insurance_vars <- c("insurance_cat", "PCP_visits", "eye_visits")
+
+# Diabetes-related variables
+diabetes_vars <- c("insulin", "DCSI", "DM_duration")
+
+# Comorbidity variables
+comorbidity_vars <- c("CCI", "HTN", "dyslipidemia", "CVD", "CKD_stage")
+
+# Vision-related variables
+vision_vars <- c("baseline_VA_logMAR", "baseline_VA_cat", "dr_severity", 
+                 "any_treatment", "DME")
+
+# Treatment/exposure
+exposure_var <- "ever_lapse_binary"
+
+# Combine all variables
+all_vars <- c(demographic_vars, insurance_vars, diabetes_vars, 
+              comorbidity_vars, vision_vars, exposure_var)
+
+# Check which variables exist in the data
+available_vars <- intersect(all_vars, names(original_data))
+missing_vars <- setdiff(all_vars, names(original_data))
+
+if (length(missing_vars) > 0) {
+  log_message("Variables not found in data: ", paste(missing_vars, collapse = ", "))
+}
+
+log_message("Analyzing ", length(available_vars), " variables")
+```
+
+## Descriptive Statistics by Exclusion Status
+
+```{r descriptive-stats}
+# Create Table 1 comparing excluded vs included
+# Specify variable types
+factor_vars <- c("age_cat", "gender_cat", "race_recode", "ethnicity_recode",
+                 "insurance_cat", "insulin", "HTN", "dyslipidemia", "CVD",
+                 "CKD_stage", "baseline_VA_cat", "dr_severity", "any_treatment",
+                 "DME", "ever_lapse_binary")
+
+# Ensure factor variables are factors
+for (var in factor_vars) {
+  if (var %in% names(original_data)) {
+    if (!is.factor(original_data[[var]])) {
+      original_data[[var]] <- as.factor(original_data[[var]])
+    }
+  }
+}
+
+# Create Table 1
+table1 <- CreateTableOne(
+  vars = available_vars,
+  strata = "excluded",
+  data = original_data,
+  factorVars = intersect(factor_vars, available_vars),
+  includeNA = TRUE,
+  test = TRUE,
+  smd = TRUE
+)
+
+# Print table with standardized mean differences
+table1_print <- print(table1, 
+                      smd = TRUE, 
+                      showAllLevels = TRUE,
+                      formatOptions = list(big.mark = ","),
+                      printToggle = FALSE)
+
+kable(table1_print, 
+      caption = "Comparison of Baseline Characteristics: Excluded vs Included Patients")
+```
+
+## Key Differences Visualization
+
+```{r key-differences}
+#| fig-height: 10
+#| fig-width: 12
+
+# Extract SMDs for plotting
+smd_data <- ExtractSmd(table1)
+smd_data$Variable <- rownames(smd_data)
+smd_data <- smd_data[order(abs(smd_data$`1 vs 2`), decreasing = TRUE), ]
+
+# Identify variables with substantial differences (SMD > 0.1)
+substantial_diff <- smd_data[abs(smd_data$`1 vs 2`) > 0.1, ]
+
+# Plot 1: SMD plot
+p1 <- ggplot(smd_data, aes(x = reorder(Variable, abs(`1 vs 2`)), y = `1 vs 2`)) +
+  geom_point(size = 3, color = ifelse(abs(smd_data$`1 vs 2`) > 0.1, "red", "blue")) +
+  geom_hline(yintercept = c(-0.1, 0, 0.1), linetype = c(2, 1, 2), alpha = 0.5) +
+  coord_flip() +
+  labs(title = "Standardized Mean Differences: Excluded vs Included",
+       subtitle = "Red points indicate SMD > 0.1 (substantial difference)",
+       x = "Variable",
+       y = "Standardized Mean Difference") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+print(p1)
+```
+
+## Focus on Key Variables
+
+```{r key-variables}
+# Analyze key variables of interest
+key_results <- data.frame(
+  Variable = character(),
+  Included = character(),
+  Excluded = character(),
+  P_value = numeric(),
+  SMD = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Helper function to format results
+format_continuous <- function(data, var, excluded_flag) {
+  subset_data <- data[data$excluded == excluded_flag & !is.na(data[[var]]), var]
+  sprintf("%.2f (%.2f)", mean(subset_data, na.rm = TRUE), sd(subset_data, na.rm = TRUE))
+}
+
+format_binary <- function(data, var, excluded_flag, level = "1") {
+  subset_data <- data[data$excluded == excluded_flag, ]
+  n <- sum(!is.na(subset_data[[var]]))
+  n_level <- sum(subset_data[[var]] == level, na.rm = TRUE)
+  sprintf("%d (%.1f%%)", n_level, 100 * n_level / n)
+}
+
+# Analyze lapsing rate
+if ("ever_lapse_binary" %in% available_vars) {
+  lapse_included <- mean(original_data$ever_lapse_binary[!original_data$excluded] == "Lapsed", na.rm = TRUE)
+  lapse_excluded <- mean(original_data$ever_lapse_binary[original_data$excluded] == "Lapsed", na.rm = TRUE)
+  lapse_p <- chisq.test(table(original_data$excluded, original_data$ever_lapse_binary))$p.value
+  
+  key_results <- rbind(key_results, data.frame(
+    Variable = "Lapsed from care",
+    Included = sprintf("%.1f%%", 100 * lapse_included),
+    Excluded = sprintf("%.1f%%", 100 * lapse_excluded),
+    P_value = lapse_p,
+    SMD = abs(lapse_excluded - lapse_included) / sqrt((lapse_included * (1 - lapse_included) + 
+                                                        lapse_excluded * (1 - lapse_excluded)) / 2)
+  ))
+}
+
+# Analyze baseline VA
+if ("baseline_VA_logMAR" %in% available_vars) {
+  va_included <- mean(original_data$baseline_VA_logMAR[!original_data$excluded], na.rm = TRUE)
+  va_excluded <- mean(original_data$baseline_VA_logMAR[original_data$excluded], na.rm = TRUE)
+  va_p <- t.test(original_data$baseline_VA_logMAR ~ original_data$excluded)$p.value
+  
+  key_results <- rbind(key_results, data.frame(
+    Variable = "Baseline VA (logMAR)",
+    Included = sprintf("%.3f", va_included),
+    Excluded = sprintf("%.3f", va_excluded),
+    P_value = va_p,
+    SMD = abs(va_excluded - va_included) / sd(original_data$baseline_VA_logMAR, na.rm = TRUE)
+  ))
+}
+
+# Analyze CCI
+if ("CCI" %in% available_vars) {
+  cci_included <- mean(original_data$CCI[!original_data$excluded], na.rm = TRUE)
+  cci_excluded <- mean(original_data$CCI[original_data$excluded], na.rm = TRUE)
+  cci_p <- t.test(original_data$CCI ~ original_data$excluded)$p.value
+  
+  key_results <- rbind(key_results, data.frame(
+    Variable = "Charlson Comorbidity Index",
+    Included = sprintf("%.2f", cci_included),
+    Excluded = sprintf("%.2f", cci_excluded),
+    P_value = cci_p,
+    SMD = abs(cci_excluded - cci_included) / sd(original_data$CCI, na.rm = TRUE)
+  ))
+}
+
+# Format and display
+key_results$P_value <- format.pval(key_results$P_value, digits = 3)
+key_results$SMD <- round(key_results$SMD, 3)
+
+kable(key_results,
+      caption = "Key Variable Comparisons",
+      col.names = c("Variable", "Included", "Excluded", "P-value", "SMD"))
+```
+
+## Missingness Patterns by DR Severity
+
+```{r missingness-by-dr}
+#| fig-height: 6
+#| fig-width: 10
+
+if ("dr_severity" %in% available_vars) {
+  # Calculate missingness rate by DR severity
+  miss_by_dr <- original_data %>%
+    group_by(dr_severity) %>%
+    summarise(
+      n_total = n(),
+      n_excluded = sum(excluded),
+      pct_excluded = 100 * n_excluded / n_total,
+      .groups = 'drop'
+    )
+  
+  # Plot missingness by DR severity
+  p2 <- ggplot(miss_by_dr, aes(x = dr_severity, y = pct_excluded)) +
+    geom_col(fill = "steelblue", alpha = 0.7) +
+    geom_text(aes(label = sprintf("%.1f%%", pct_excluded)), 
+              vjust = -0.5, size = 4) +
+    labs(title = "Outcome Missingness by DR Severity",
+         subtitle = "Percentage of patients excluded due to missing outcomes",
+         x = "DR Severity",
+         y = "% Excluded") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"))
+  
+  print(p2)
+  
+  # Table of missingness by DR severity
+  kable(miss_by_dr,
+        caption = "Missingness Patterns by DR Severity",
+        col.names = c("DR Severity", "Total N", "N Excluded", "% Excluded"),
+        digits = 1)
+}
+```
+
+## Missingness Patterns by Treatment and Lapse Status
+
+```{r missingness-by-treatment}
+#| fig-height: 8
+#| fig-width: 12
+
+# Create 2x2 plots for treatment and lapse patterns
+plots <- list()
+
+# Plot 1: Missingness by treatment status
+if ("any_treatment" %in% available_vars) {
+  miss_by_treatment <- original_data %>%
+    group_by(any_treatment) %>%
+    summarise(
+      n_total = n(),
+      n_excluded = sum(excluded),
+      pct_excluded = 100 * n_excluded / n_total,
+      .groups = 'drop'
+    )
+  
+  plots[[1]] <- ggplot(miss_by_treatment, aes(x = any_treatment, y = pct_excluded)) +
+    geom_col(fill = "coral", alpha = 0.7) +
+    geom_text(aes(label = sprintf("%.1f%%", pct_excluded)), 
+              vjust = -0.5, size = 4) +
+    labs(title = "Missingness by Treatment Status",
+         x = "Any Treatment", y = "% Excluded") +
+    theme_minimal()
+}
+
+# Plot 2: Missingness by lapse status
+if ("ever_lapse_binary" %in% available_vars) {
+  miss_by_lapse <- original_data %>%
+    group_by(ever_lapse_binary) %>%
+    summarise(
+      n_total = n(),
+      n_excluded = sum(excluded),
+      pct_excluded = 100 * n_excluded / n_total,
+      .groups = 'drop'
+    )
+  
+  plots[[2]] <- ggplot(miss_by_lapse, aes(x = ever_lapse_binary, y = pct_excluded)) +
+    geom_col(fill = "darkgreen", alpha = 0.7) +
+    geom_text(aes(label = sprintf("%.1f%%", pct_excluded)), 
+              vjust = -0.5, size = 4) +
+    labs(title = "Missingness by Lapse Status",
+         x = "Lapse Status", y = "% Excluded") +
+    theme_minimal()
+}
+
+# Plot 3: Joint distribution
+if ("any_treatment" %in% available_vars && "ever_lapse_binary" %in% available_vars) {
+  miss_joint <- original_data %>%
+    group_by(any_treatment, ever_lapse_binary) %>%
+    summarise(
+      n_total = n(),
+      n_excluded = sum(excluded),
+      pct_excluded = 100 * n_excluded / n_total,
+      .groups = 'drop'
+    )
+  
+  plots[[3]] <- ggplot(miss_joint, aes(x = any_treatment, y = pct_excluded, 
+                                       fill = ever_lapse_binary)) +
+    geom_col(position = position_dodge(width = 0.8), alpha = 0.7) +
+    labs(title = "Missingness by Treatment and Lapse Status",
+         x = "Treatment Status", y = "% Excluded",
+         fill = "Lapse Status") +
+    theme_minimal() +
+    scale_fill_manual(values = c("Not Lapsed" = "blue", "Lapsed" = "red"))
+}
+
+# Arrange plots
+if (length(plots) > 0) {
+  do.call(grid.arrange, c(plots, ncol = 2))
+}
+```
+
+## Comparison Across Imputed Datasets
+
+```{r imputation-comparison}
+# For key variables, compare means across imputed datasets for originally missing vs complete
+# This shows how imputation filled in the missing values
+
+imputation_summary <- data.frame()
+
+for (var in c("baseline_VA_logMAR", "CCI", "DCSI")) {
+  if (var %in% available_vars) {
+    # Get which observations were originally missing
+    originally_missing <- is.na(original_data[[var]])
+    
+    # Calculate mean across imputations for originally missing
+    if (sum(originally_missing) > 0) {
+      means_missing <- sapply(imputed_datasets, function(df) {
+        mean(df[[var]][originally_missing[df$cohort_id %in% included_ids]], na.rm = TRUE)
+      })
+      
+      # Calculate mean for originally complete
+      means_complete <- sapply(imputed_datasets, function(df) {
+        mean(df[[var]][!originally_missing[df$cohort_id %in% included_ids]], na.rm = TRUE)
+      })
+      
+      imputation_summary <- rbind(imputation_summary, data.frame(
+        Variable = var,
+        Originally_Complete = sprintf("%.3f (%.3f)", 
+                                     mean(means_complete), sd(means_complete)),
+        Imputed_for_Missing = sprintf("%.3f (%.3f)", 
+                                      mean(means_missing), sd(means_missing)),
+        Difference = sprintf("%.3f", mean(means_missing) - mean(means_complete))
+      ))
+    }
+  }
+}
+
+if (nrow(imputation_summary) > 0) {
+  kable(imputation_summary,
+        caption = "Comparison of Imputed Values: Originally Missing vs Complete",
+        col.names = c("Variable", "Originally Complete", "Imputed (for Missing)", "Difference"))
+}
+```
+
+## Summary and Implications
+
+```{r summary}
+# Summarize key findings
+significant_differences <- substantial_diff$Variable
+
+# Calculate effect size measures
+lapse_or_excluded_vs_included <- NA
+if ("ever_lapse_binary" %in% available_vars) {
+  # Calculate odds ratio of being excluded for lapsed vs not lapsed
+  lapse_table <- table(original_data$ever_lapse_binary, original_data$excluded)
+  if (ncol(lapse_table) == 2 && nrow(lapse_table) == 2) {
+    lapse_or_excluded_vs_included <- (lapse_table[2,2] * lapse_table[1,1]) / 
+                                     (lapse_table[2,1] * lapse_table[1,2])
+  }
+}
+
+log_message("Analysis completed successfully")
+```
+
+### Key Findings
+
+**Variables with Substantial Differences (SMD > 0.1):**
+```{r}
+#| echo: false
+if (length(significant_differences) > 0) {
+  cat(paste("- ", significant_differences, collapse = "\n"))
+} else {
+  cat("No variables showed substantial differences (SMD > 0.1)")
+}
+```
+
+**Lapse Status and Missingness:**
+```{r}
+#| echo: false
+if (!is.na(lapse_or_excluded_vs_included)) {
+  cat(sprintf("- Odds ratio of exclusion for lapsed vs not lapsed: %.2f\n", 
+              lapse_or_excluded_vs_included))
+  if (lapse_or_excluded_vs_included > 1.5) {
+    cat("- Lapsed patients were substantially more likely to have missing outcomes\n")
+  }
+}
+```
+
+### Implications for Analysis
+
+1. **Selection Bias**: The differences between excluded and included patients suggest potential selection bias in complete case analysis.
+
+2. **Direction of Bias**: If excluded patients are more likely to lapse AND have worse health characteristics, complete case analysis may underestimate the treatment effect.
+
+3. **Multiple Imputation Benefit**: The increase in treatment effect after imputation aligns with recovering information from a sicker, more vulnerable population that was excluded.
+
+4. **Generalizability**: Results from imputed data may better represent the full patient population, including those with incomplete follow-up.
+
+```{r finalize-log}
+#| include: false
+# Finalize logging
+log_message("Missingness pattern analysis completed successfully")
+final_log <- finalize_log(success = TRUE)
+```
