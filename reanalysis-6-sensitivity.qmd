@@ -89,6 +89,11 @@ evalue_result <- evalues.OR(
 evalue_point <- evalue_result["E-values", "point"]
 evalue_ci <- evalue_result["E-values", "lower"]
 
+# Also extract RR values for bias_plot
+rr_point <- evalue_result["RR", "point"]
+rr_lower <- evalue_result["RR", "lower"]
+rr_upper <- evalue_result["RR", "upper"]
+
 evalue_summary <- data.frame(
   Measure = c(
     "Point Estimate E-value",
@@ -129,11 +134,17 @@ cat(paste0(
 #| fig-height: 6
 #| fig-width: 8
 
-# Create E-value plot
-bias_plot <- bias_plot(evalue_point, evalue_ci)
-
-# Display the plot
-print(bias_plot)
+# Create E-value plot using RR values
+# bias_plot expects RR values, not E-values
+tryCatch({
+  # The bias_plot function expects the RR estimate and its bounds
+  bias_plot_obj <- bias_plot(rr_point, rr_lower)
+  print(bias_plot_obj)
+}, error = function(e) {
+  cat("Note: Bias plot could not be generated.\n")
+  cat("Error: ", e$message, "\n")
+  cat("RR point: ", rr_point, ", RR lower: ", rr_lower, "\n")
+})
 ```
 
 ## Sensitivity to Missing Data Assumptions
