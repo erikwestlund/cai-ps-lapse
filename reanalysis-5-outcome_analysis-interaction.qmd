@@ -255,7 +255,7 @@ if (file.exists(models_cache_file) && !force_refit_models) {
   model_progress <- cached_models$model_progress
   models_loaded_from_cache <- TRUE
   cache_location <- models_cache_file
-  message("Models loaded from cache: ", cache_location)
+  log_message("Models loaded from cache: ", cache_location)
 } else {
   # Fit new models
   models_loaded_from_cache <- FALSE
@@ -312,7 +312,7 @@ if (file.exists(models_cache_file) && !force_refit_models) {
   
   saveRDS(cached_models, models_cache_file)
   cache_location <- models_cache_file
-  message("Models fitted and saved to cache: ", cache_location)
+  log_message("Models fitted and saved to cache: ", cache_location)
 }
 
 # Verify we have the expected number of models
@@ -559,7 +559,12 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
   all_contrasts <- list()
   all_risk_diffs <- list()
   
+  # Initialize progress tracking
+  progress <- init_progress(n_imputations, "Calculating contrasts")
+  
   for (i in 1:n_imputations) {
+    # Update progress
+    progress <- update_progress(progress)
     
     # Get marginal means on both log odds and response scales
     emm_logit <- emmeans(models[[i]], 
@@ -584,6 +589,9 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
     all_risk_diffs[[i]] <- as.data.frame(risk_diffs)
   }
+  
+  # Finalize progress
+  finalize_progress(progress)
   
   # Get structure from first imputation
   first_contrast <- all_contrasts[[1]]
@@ -613,14 +621,17 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
   
   # Check column names in first imputation for debugging
   if (length(all_contrasts) > 0) {
-    message("Contrast columns: ", paste(names(all_contrasts[[1]]), collapse = ", "))
+    log_message("Contrast columns: ", paste(names(all_contrasts[[1]]), collapse = ", "))
   }
   if (length(all_risk_diffs) > 0) {
-    message("Risk diff columns: ", paste(names(all_risk_diffs[[1]]), collapse = ", "))
+    log_message("Risk diff columns: ", paste(names(all_risk_diffs[[1]]), collapse = ", "))
   }
   
   # Pool each subgroup using Rubin's rules
+  log_progress(0, n_subgroups, "Pooling subgroup")
+  
   for (j in 1:n_subgroups) {
+    log_progress(j, n_subgroups, "Pooling subgroup")
     # Pool odds ratio contrasts (log scale)
     # Extract the j-th estimate from each imputation
     log_odds_estimates <- sapply(all_contrasts, function(x) {
@@ -708,7 +719,7 @@ if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
   pooled_results <- readRDS(emmeans_cache_file)
   emmeans_loaded_from_cache <- TRUE
   emmeans_cache_location <- emmeans_cache_file
-  message("Emmeans results loaded from cache: ", emmeans_cache_location)
+  log_message("Emmeans results loaded from cache: ", emmeans_cache_location)
 } else {
   # Calculate new emmeans results
   emmeans_loaded_from_cache <- FALSE
@@ -719,7 +730,7 @@ if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
   # Save to cache
   saveRDS(pooled_results, emmeans_cache_file)
   emmeans_cache_location <- emmeans_cache_file
-  message("Emmeans results calculated and saved to cache: ", emmeans_cache_location)
+  log_message("Emmeans results calculated and saved to cache: ", emmeans_cache_location)
 }
 
 # Process odds ratio results
@@ -799,44 +810,11 @@ risk_diff_effects_stored <- data.frame(
 )
 
 # Display the risk differences prominently
-message("\n=== RISK DIFFERENCES (Probability Scale) ===")
-print(rd_table)
+log_message("Risk differences (probability scale) calculated")
 ```
 
-### Understanding the Different Effect Measures
-
-::: {.callout-note}
-## Why are the confidence intervals so different between measures?
-
-The three effect measures presented above capture different aspects of the lapsing effect:
-
-1. **Odds Ratios (OR)**: 
-   - Multiplicative scale comparing odds of outcome
-   - Wider CIs because they incorporate uncertainty from multiple interaction terms
-   - Non-collapsible measure that depends on covariate distribution
-
-2. **Risk Differences (RD)**:
-   - Additive scale showing absolute change in probability
-   - Narrower CIs because probabilities are bounded [0,1]
-   - More intuitive interpretation for clinical decision-making
-
-3. **Average Marginal Effects (AME)** (shown later):
-   - Average of individual-level effects across actual patients
-   - Smallest CIs because averaging reduces variance
-   - Accounts for actual covariate distribution in each subgroup
-
-The OR confidence intervals are wider because:
-- They must account for uncertainty in the main effect plus all relevant interaction terms
-- The log scale amplifies uncertainty when exponentiating
-- Small subgroups have fewer effective degrees of freedom
-:::
 
 ## Manual Calculation of Subgroup Effects (Validation)
-
-::: {.callout-note collapse="true"}
-## Click to expand manual calculations
-
-This section shows the manual calculation of subgroup effects for validation purposes.
 
 ```{r manual-effects}
 # Manually calculate effects for each of the 6 subgroups
@@ -939,9 +917,9 @@ manual_effects <- manual_effects |>
 # Check if we have valid results
 n_valid <- sum(!is.na(manual_effects$Log_Odds))
 if (n_valid == 0) {
-  message("Warning: No valid manual effect calculations")
+  log_message("Warning: No valid manual effect calculations")
 } else if (n_valid < nrow(manual_effects)) {
-  message("Warning: Some manual effect calculations contain NA values (", 
+  log_message("Warning: Some manual effect calculations contain NA values (", 
           nrow(manual_effects) - n_valid, " out of ", nrow(manual_effects), ")")
 }
 
@@ -949,8 +927,6 @@ kable(manual_effects,
       caption = "Manual Calculation of Subgroup Effects (Validation)",
       row.names = FALSE)
 ```
-
-:::
 
 ## Visualization of Three-Way Interaction
 
@@ -1150,7 +1126,7 @@ results_to_save <- list(
 saveRDS(results_to_save, 
         file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
 
-message("Results saved to: ", 
+log_message("Results saved to: ", 
         file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
 ```
 
