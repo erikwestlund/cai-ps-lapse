@@ -457,7 +457,14 @@ if ("any_treatment" %in% available_vars && "ever_lapse_binary" %in% available_va
 
 # Arrange plots
 if (length(plots) > 0) {
-  do.call(grid.arrange, c(plots, ncol = 2))
+  # Remove NULL elements from plots list
+  plots <- plots[!sapply(plots, is.null)]
+  
+  if (length(plots) == 1) {
+    print(plots[[1]])
+  } else if (length(plots) > 1) {
+    do.call(grid.arrange, c(plots, list(ncol = 2)))
+  }
 }
 ```
 
