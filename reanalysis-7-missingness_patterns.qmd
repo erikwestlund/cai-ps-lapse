@@ -45,12 +45,17 @@ This analysis compares baseline characteristics between:
 ## Identify Excluded vs Included Patients
 
 ```{r identify-groups}
-# Check if cohort_id exists, if not use a unique identifier
-id_var <- if("cohort_id" %in% names(original_data)) "cohort_id" else "e_mrn_deidentified"
-
-# Alternative approach: identify excluded based on missing outcome
-# Patients were excluded from imputation if they had missing outcomes
-if ("outcome_va_vi_binary" %in% names(original_data)) {
+# Use cohort_id if it exists to identify excluded vs included
+if ("cohort_id" %in% names(original_data)) {
+  # cohort_id has values "excluded" and "submitted"
+  # "excluded" = patients with missing outcomes who were excluded from complete case analysis
+  # "submitted" = patients with complete outcomes who were included
+  original_data$excluded <- original_data$cohort_id == "excluded"
+  log_message("Using cohort_id to identify excluded patients")
+  log_message(paste("Cohort distribution:", 
+                   sum(original_data$cohort_id == "excluded"), "excluded,",
+                   sum(original_data$cohort_id == "submitted"), "submitted"))
+} else if ("outcome_va_vi_binary" %in% names(original_data)) {
   # Use missing outcome as the exclusion criterion
   original_data$excluded <- is.na(original_data$outcome_va_vi_binary)
   log_message("Using missing outcome_va_vi_binary to identify excluded patients")
@@ -59,21 +64,7 @@ if ("outcome_va_vi_binary" %in% names(original_data)) {
   original_data$excluded <- is.na(original_data$outcome_va_logMAR)
   log_message("Using missing outcome_va_logMAR to identify excluded patients")
 } else {
-  # Fall back to comparing with imputed dataset IDs
-  # Get the IDs from the first imputed dataset (should be same across all)
-  included_ids <- unique(imputed_datasets[[1]][[id_var]])
-  
-  # Get all IDs from original data
-  all_ids <- unique(original_data[[id_var]])
-  
-  # Identify excluded patients (those in original but not in imputed)
-  excluded_ids <- setdiff(all_ids, included_ids)
-  
-  # Create indicator in original data (TRUE = excluded, FALSE = included)
-  original_data$excluded <- original_data[[id_var]] %in% excluded_ids
-  log_message(paste("Using ID comparison to identify excluded patients.",
-                   "Original IDs:", length(all_ids),
-                   "Included IDs:", length(included_ids)))
+  stop("Cannot identify excluded patients - no cohort_id or outcome variables found")
 }
 
 # Verify the excluded variable has two levels
@@ -85,19 +76,29 @@ if (length(unique(original_data$excluded)) < 2) {
 
 # Summary counts
 n_total <- nrow(original_data)
-n_included <- sum(!original_data$excluded)
-n_excluded <- sum(original_data$excluded)
+n_included <- sum(!original_data$excluded)  # FALSE = included
+n_excluded <- sum(original_data$excluded)   # TRUE = excluded
 pct_excluded <- round(100 * n_excluded / n_total, 1)
 
-log_message(sprintf("Total patients: %d", n_total))
-log_message(sprintf("Included (complete outcome): %d (%.1f%%)", n_included, 100 - pct_excluded))
+log_message(sprintf("Total patients (eyes): %d", n_total))
+log_message(sprintf("Included (submitted/complete outcome): %d (%.1f%%)", n_included, 100 - pct_excluded))
 log_message(sprintf("Excluded (missing outcome): %d (%.1f%%)", n_excluded, pct_excluded))
+
+# Create summary table
+summary_df <- data.frame(
+  Group = c("Included (submitted)", "Excluded", "Total"),
+  N = c(n_included, n_excluded, n_total),
+  Percentage = c(round(100 - pct_excluded, 1), pct_excluded, 100)
+)
 ```
 
-**Sample Size:**
-- Total patients: `r n_total`
-- Included (complete outcome): `r n_included` (`r round(100 - pct_excluded, 1)`%)
-- Excluded (missing outcome): `r n_excluded` (`r pct_excluded`%)
+```{r summary-table}
+#| echo: false
+kable(summary_df,
+      caption = "Sample Size Summary",
+      col.names = c("Group", "N (eyes)", "Percentage (%)"),
+      align = c("l", "r", "r"))
+```
 
 ## Variable Selection
 
@@ -178,11 +179,16 @@ table1 <- CreateTableOne(
 )
 
 # Print table with standardized mean differences
+# Label the strata clearly
 table1_print <- print(table1, 
                       smd = TRUE, 
                       showAllLevels = TRUE,
                       formatOptions = list(big.mark = ","),
                       printToggle = FALSE)
+
+# Update column names for clarity
+colnames(table1_print)[colnames(table1_print) == "FALSE"] <- "Included (n)"
+colnames(table1_print)[colnames(table1_print) == "TRUE"] <- "Excluded (n)"
 
 kable(table1_print, 
       caption = "Comparison of Baseline Characteristics: Excluded vs Included Patients")
@@ -195,16 +201,31 @@ kable(table1_print,
 #| fig-width: 12
 
 # Extract SMDs for plotting
-smd_data <- ExtractSmd(table1)
-smd_data$Variable <- rownames(smd_data)
-smd_data <- smd_data[order(abs(smd_data$`1 vs 2`), decreasing = TRUE), ]
+smd_raw <- ExtractSmd(table1)
+
+# Convert to data frame format
+# ExtractSmd returns a list where each element is the SMD for a variable
+smd_values <- unlist(smd_raw[1:(length(smd_raw)-1)])  # Exclude the Variable element
+variable_names <- names(smd_values)
+
+smd_data <- data.frame(
+  Variable = variable_names,
+  SMD = smd_values,
+  stringsAsFactors = FALSE
+)
+
+# Remove NA values
+smd_data <- smd_data[!is.na(smd_data$SMD), ]
+
+# Order by absolute SMD
+smd_data <- smd_data[order(abs(smd_data$SMD), decreasing = TRUE), ]
 
 # Identify variables with substantial differences (SMD > 0.1)
-substantial_diff <- smd_data[abs(smd_data$`1 vs 2`) > 0.1, ]
+substantial_diff <- smd_data[abs(smd_data$SMD) > 0.1, ]
 
 # Plot 1: SMD plot
-p1 <- ggplot(smd_data, aes(x = reorder(Variable, abs(`1 vs 2`)), y = `1 vs 2`)) +
-  geom_point(size = 3, color = ifelse(abs(smd_data$`1 vs 2`) > 0.1, "red", "blue")) +
+p1 <- ggplot(smd_data, aes(x = reorder(Variable, abs(SMD)), y = SMD)) +
+  geom_point(size = 3, color = ifelse(abs(smd_data$SMD) > 0.1, "red", "blue")) +
   geom_hline(yintercept = c(-0.1, 0, 0.1), linetype = c(2, 1, 2), alpha = 0.5) +
   coord_flip() +
   labs(title = "Standardized Mean Differences: Excluded vs Included",
