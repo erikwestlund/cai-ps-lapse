@@ -180,6 +180,11 @@ crosstab <- with(imputed_datasets[[1]],
 crosstab_df <- as.data.frame(crosstab)
 names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Count")
 
+# Convert numeric lapse status to meaningful labels
+crosstab_df$Lapse_Status <- factor(crosstab_df$Lapse_Status, 
+                                   levels = c("0", "1"),
+                                   labels = c("No_Lapse", "Lapsed"))
+
 # Calculate total for percentages
 total_n <- sum(crosstab_df$Count)
 
@@ -188,18 +193,17 @@ library(tidyr)
 crosstab_wide <- crosstab_df |>
   pivot_wider(names_from = Lapse_Status, 
               values_from = Count,
-              values_fill = 0,
-              names_prefix = "Lapse_") |>  # Add prefix to avoid numeric column names
+              values_fill = 0) |>
   arrange(DR_Severity, Treatment) |>
   mutate(
-    Total = Lapse_0 + Lapse_1,
-    No_Lapse_Pct = paste0(round(100 * Lapse_0 / Total, 1), "%"),
-    Lapsed_Pct = paste0(round(100 * Lapse_1 / Total, 1), "%"),
+    Total = No_Lapse + Lapsed,
+    No_Lapse_Pct = paste0(round(100 * No_Lapse / Total, 1), "%"),
+    Lapsed_Pct = paste0(round(100 * Lapsed / Total, 1), "%"),
     Row_Pct = paste0(round(100 * Total / total_n, 1), "%")
   ) |>
   select(DR_Severity, Treatment, 
-         No_Lapse = Lapse_0, No_Lapse_Pct,
-         Lapsed = Lapse_1, Lapsed_Pct,
+         No_Lapse, No_Lapse_Pct,
+         Lapsed, Lapsed_Pct,
          Total, Row_Pct)
 
 kable(crosstab_wide, 
