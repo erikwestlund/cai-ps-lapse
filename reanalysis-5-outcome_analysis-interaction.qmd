@@ -576,8 +576,9 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
                                by = c("dr_severity", "any_treatment"))
     
     # Get pairwise comparisons on response scale (for risk differences)
-    risk_diffs <- pairs(emm_response, reverse = TRUE,
-                       by = c("dr_severity", "any_treatment"))
+    # Use regrid to ensure we get differences not ratios
+    risk_diffs <- regrid(emm_response) |>
+      pairs(reverse = TRUE, by = c("dr_severity", "any_treatment"))
     
     all_emmeans[[i]] <- as.data.frame(emm_response)
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
@@ -650,8 +651,18 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     
     # Pool risk differences (probability scale)
     # Extract the j-th estimate from each imputation
+    # pairs() on response scale may use 'odds.ratio' or 'estimate' depending on emmeans version
     rd_estimates <- sapply(all_risk_diffs, function(x) {
-      x$estimate[j]
+      if ("estimate" %in% names(x)) {
+        x$estimate[j]
+      } else if ("odds.ratio" %in% names(x)) {
+        # This is actually a risk difference despite the column name
+        x$odds.ratio[j]
+      } else {
+        # Try to find the appropriate column
+        stop("Could not find estimate column in risk diff results. Columns are: ", 
+             paste(names(x), collapse = ", "))
+      }
     })
     
     rd_SEs <- sapply(all_risk_diffs, function(x) {
@@ -775,6 +786,21 @@ subgroup_effects_stored <- data.frame(
   OR_CI_Upper = or_effects$OR_CI_Upper,
   P_Value = or_effects$p.value
 )
+
+# Also store risk differences for reporting
+risk_diff_effects_stored <- data.frame(
+  DR_Severity = rd_effects$dr_severity,
+  Treatment = rd_effects$any_treatment,
+  Risk_Diff = rd_effects$risk_diff,
+  SE = rd_effects$SE_risk_diff,
+  CI_Lower = rd_effects$CI_Lower,
+  CI_Upper = rd_effects$CI_Upper,
+  P_Value = rd_effects$p.value
+)
+
+# Display the risk differences prominently
+message("\n=== RISK DIFFERENCES (Probability Scale) ===")
+print(rd_table)
 ```
 
 ### Understanding the Different Effect Measures
@@ -1112,6 +1138,7 @@ kable(convergence_stats,
 results_to_save <- list(
   pooled_coefficients = pooled_results,
   subgroup_effects = subgroup_effects_stored,
+  risk_differences = risk_diff_effects_stored,  # Risk differences on probability scale
   emmeans_results = pooled_results,  # The emmeans-based effects
   probability_table = if(exists("prob_table")) prob_table else NULL,
   model_summaries = model_summaries,
