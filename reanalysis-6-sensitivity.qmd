@@ -191,7 +191,7 @@ if (n_complete > 1000) {
   
   # Extract lapse effect
   cc_coef <- coef(summary(cc_model))
-  cc_lapse <- cc_coef["ever_lapse_binary1", ]
+  cc_lapse <- cc_coef["ever_lapse_binary", ]
   
   # Compare with MI results
   comparison_df <- data.frame(
