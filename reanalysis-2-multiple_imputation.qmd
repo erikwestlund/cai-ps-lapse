@@ -29,6 +29,12 @@ log_file <- init_log("multiple_imputation")
 analysis_mode <- "final"  # Change to "final" for production run
 log_message(paste0("Analysis mode: ", analysis_mode))
 
+# CACHING CONFIGURATION FOR MICE
+# Set to TRUE to use cached MICE results (skip imputation, only run post-processing)
+use_cached_mice <- TRUE
+mice_cache_file <- file.path(reanalysis_data_dir, "mice_results.rds")
+log_message(paste0("MICE caching: ", ifelse(use_cached_mice, "ENABLED", "DISABLED")))
+
 # Set parameters based on mode
 if (analysis_mode == "test") {
   n_imputations <- 2
@@ -497,24 +503,60 @@ time_estimate <- if(analysis_mode == "test") "a few minutes" else "15-30 minutes
 - Imputations: `r n_imputations`
 - Iterations: `r n_iterations`
 - Estimated time: `r time_estimate`
+- MICE caching: `r ifelse(use_cached_mice, "ENABLED", "DISABLED")`
+- Cache file: `r if(use_cached_mice && file.exists(mice_cache_file)) "EXISTS (will load)" else "NOT FOUND (will run fresh)"`
 
 ```{r mice-run}
-log_message("Starting MICE imputation...")
-imp_start <- Sys.time()
-
-mice_results <- mice(
-  df_mice,
-  m = n_imputations,
-  method = custom_methods,
-  predictorMatrix = pred_matrix,
-  visitSequence = visit_sequence,  # Enforce temporal order
-  maxit = n_iterations,  # Uses n_iterations from setup
-  seed = 2025,
-  printFlag = TRUE
-)
-
-imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
-log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
+# Check for cached MICE results
+if (use_cached_mice && file.exists(mice_cache_file)) {
+  log_message("Loading cached MICE results...")
+  log_message(paste0("Cache file: ", mice_cache_file))
+  
+  mice_results <- readRDS(mice_cache_file)
+  
+  # Verify cached results match expected parameters
+  cached_m <- mice_results$m
+  cached_maxit <- mice_results$iteration
+  
+  log_message(paste0("Loaded ", cached_m, " imputations from cache"))
+  log_message(paste0("Original run used ", cached_maxit, " iterations"))
+  
+  if (cached_m != n_imputations) {
+    warning(paste0("Cached imputations (", cached_m, ") differ from requested (", n_imputations, ")"))
+  }
+  
+  imp_time <- 0  # No time spent on imputation
+  log_message("Using cached MICE results - skipping imputation step")
+  
+} else {
+  # Run fresh MICE imputation
+  if (use_cached_mice && !file.exists(mice_cache_file)) {
+    log_message("Cache file not found - running fresh imputation")
+  } else {
+    log_message("Cache disabled - running fresh imputation")
+  }
+  
+  log_message("Starting MICE imputation...")
+  imp_start <- Sys.time()
+  
+  mice_results <- mice(
+    df_mice,
+    m = n_imputations,
+    method = custom_methods,
+    predictorMatrix = pred_matrix,
+    visitSequence = visit_sequence,  # Enforce temporal order
+    maxit = n_iterations,  # Uses n_iterations from setup
+    seed = 2025,
+    printFlag = TRUE
+  )
+  
+  imp_time <- round(as.numeric(difftime(Sys.time(), imp_start, units = "mins")), 2)
+  log_message(paste0("MICE imputation completed in ", imp_time, " minutes"))
+  
+  # Save to cache for future use
+  saveRDS(mice_results, mice_cache_file)
+  log_message(paste0("Saved MICE results to cache: ", mice_cache_file))
+}
 
 # Log person_dr_max imputation status
 if ("person_dr_max" %in% names(mice_results$imp)) {
@@ -536,6 +578,19 @@ imputed_datasets <- complete(mice_results, action = "all")
 
 imputed_datasets <- lapply(1:n_imputations, function(i) {
   imp_data <- imputed_datasets[[i]]
+  
+  # CRITICAL: Copy person_dr_max (imputed) to person_dr for create_dr_severity_variables
+  # person_dr_max is the person-level DR that was imputed
+  # person_dr needs to be set for each eye from person_dr_max
+  if ("person_dr_max" %in% names(imp_data)) {
+    # Convert from factor if needed
+    if (is.factor(imp_data$person_dr_max)) {
+      # Convert factor levels (No_DR=1, NPDR=2, PDR=3) to numeric (0, 1, 2)
+      imp_data$person_dr <- as.numeric(imp_data$person_dr_max) - 1
+    } else {
+      imp_data$person_dr <- imp_data$person_dr_max
+    }
+  }
   
   # Apply transformation functions to recreate all derived variables
   imp_data <- imp_data |>
@@ -653,7 +708,120 @@ completeness_check <- lapply(imputed_datasets, function(d) {
 
 ```
 
-### Completeness Check
+### Comprehensive Completeness Check
+
+```{r comprehensive-completeness}
+# Define key variables that should have been imputed
+key_imputed_vars <- c(
+  # Visual acuity variables
+  "baseline_VA_logMAR",
+  "intermediate_VA_logMAR", 
+  "outcome_VA_logMAR",
+  
+  # DR severity (derived from person_dr)
+  "person_dr",
+  "dr_severity",
+  
+  # Comorbidity indices
+  "CCI",
+  "DCSI",
+  
+  # Treatment variables
+  "catsurg_before_hitplus_cat",
+  "glaucoma_bef_hitplus_cat",
+  "otherretina_bef_hitplus_cat"
+)
+
+# Check completeness for each imputation
+completeness_summary <- lapply(1:min(5, n_imputations), function(i) {
+  imp_data <- imputed_datasets[[i]]
+  
+  # Check each key variable
+  var_status <- lapply(key_imputed_vars, function(v) {
+    if (v %in% names(imp_data)) {
+      n_missing <- sum(is.na(imp_data[[v]]))
+      pct_missing <- round(100 * n_missing / nrow(imp_data), 2)
+      data.frame(
+        Variable = v,
+        Imputation = i,
+        N_Missing = n_missing,
+        Pct_Missing = pct_missing,
+        Status = ifelse(n_missing == 0, "Complete", paste0(n_missing, " missing"))
+      )
+    } else {
+      data.frame(
+        Variable = v,
+        Imputation = i,
+        N_Missing = NA,
+        Pct_Missing = NA,
+        Status = "Variable not found"
+      )
+    }
+  })
+  
+  do.call(rbind, var_status)
+})
+
+# Combine all results
+completeness_df <- do.call(rbind, completeness_summary)
+
+# Create summary table by variable across imputations
+completeness_wide <- completeness_df |>
+  select(Variable, Imputation, N_Missing) |>
+  pivot_wider(names_from = Imputation, 
+              values_from = N_Missing,
+              names_prefix = "Imp_")
+
+kable(completeness_wide, 
+      caption = "Missing values by variable across first 5 imputations (should all be 0)",
+      align = c('l', rep('r', min(5, n_imputations))))
+
+# Flag any variables with remaining missing data
+problem_vars <- completeness_df |>
+  filter(N_Missing > 0) |>
+  select(Variable, Imputation, N_Missing) |>
+  unique()
+
+if (nrow(problem_vars) > 0) {
+  cat("\n⚠️ WARNING: The following variables still have missing data after imputation:\n")
+  kable(problem_vars)
+} else {
+  cat("\n✓ All key variables are complete across all checked imputations\n")
+}
+
+# Compare before and after imputation
+cat("\n### Before vs After Imputation Summary\n")
+
+original_missing <- mice_results$nmis[key_imputed_vars[key_imputed_vars %in% names(mice_results$nmis)]]
+post_imp_missing <- completeness_df |>
+  filter(Imputation == 1) |>
+  group_by(Variable) |>
+  summarise(Post_Missing = sum(N_Missing, na.rm = TRUE)) |>
+  filter(Variable %in% names(original_missing))
+
+comparison_df <- data.frame(
+  Variable = names(original_missing),
+  Original_Missing = original_missing,
+  Post_Imputation_Missing = 0  # Will be updated if any found
+)
+
+# Update with actual post-imputation values if available
+for (v in comparison_df$Variable) {
+  if (v %in% post_imp_missing$Variable) {
+    comparison_df[comparison_df$Variable == v, "Post_Imputation_Missing"] <- 
+      post_imp_missing[post_imp_missing$Variable == v, "Post_Missing"]
+  }
+}
+
+comparison_df$Status <- ifelse(comparison_df$Post_Imputation_Missing == 0, 
+                               "✓ Complete", 
+                               "⚠️ Still missing")
+
+kable(comparison_df,
+      caption = "Imputation effectiveness: Original vs Post-imputation missing counts",
+      col.names = c("Variable", "Original Missing", "After Imputation", "Status"),
+      row.names = FALSE)
+```
 
 **Number of incomplete cases in PS model variables per imputed dataset:**
 ```{r completeness-results}
