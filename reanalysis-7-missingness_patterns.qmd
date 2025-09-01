@@ -16,7 +16,6 @@ source("functions.R")
 setup_analysis(seed = 2025)
 
 # Additional packages for this analysis
-library(readr)
 library(knitr)
 library(tableone)
 library(ggplot2)
@@ -26,8 +25,8 @@ library(gridExtra)
 log_file <- init_log("missingness_pattern_analysis")
 
 # Load the original data before exclusions
-# This is the combined data file that includes all patients before any exclusions
-original_data <- read_csv(reanalysis_data_file_path, show_col_types = FALSE)
+# Use the load_and_prepare_data function to get processed variables
+original_data <- load_and_prepare_data(reanalysis_data_file_path)
 
 # Load imputed datasets (this is a list of 20 imputed dataframes)
 imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
@@ -76,10 +75,11 @@ log_message(sprintf("Excluded (missing outcome): %d (%.1f%%)", n_excluded, pct_e
 
 ```{r variable-selection}
 # Get variables used in outcome and propensity score models
-# First, check what columns exist in the original data
-cat("Columns in original data:\n")
-cat(paste(names(original_data)[1:30], collapse = "\n"))
+# First, check what columns exist in the processed data
+cat("Sample of columns in processed data:\n")
+cat(paste(names(original_data)[1:min(30, length(names(original_data)))], collapse = "\n"))
 cat("\n...\n")
+cat("Total columns:", length(names(original_data)), "\n\n")
 
 # Based on the actual column names used in functions.R formulas
 # Core demographic variables
