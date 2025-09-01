@@ -30,6 +30,11 @@ library(marginaleffects)  # For proper AME calculation with correct SEs
 # ANALYSIS MODE: Use same as imputation/PS
 analysis_mode <- "final"  # Should match imputation and PS modes
 
+# CACHE SETTINGS - Set these to TRUE to force recalculation
+force_refit_models <- FALSE  # Set to TRUE to re-fit all models
+force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
+force_recalc_ame <- FALSE  # Set to TRUE to recalculate AMEs with marginaleffects
+
 # Set parameters based on mode
 if (analysis_mode == "test") {
   max_imputations_to_process <- 2  # Process only 2 imputations in test mode
@@ -241,16 +246,31 @@ print(interaction_formula)
 ## Fit Models to Each Imputed Dataset
 
 ```{r fit-models}
-models <- list()
-model_summaries <- list()
+# Check if models are already cached
+models_cache_file <- file.path(reanalysis_data_dir, "fitted_models_interaction.rds")
 
-model_progress <- data.frame(
-  Imputation = integer(),
-  Converged = logical(),
-  ThreeWay_Terms = integer()
-)
-
-for (i in 1:n_imputations) {
+if (file.exists(models_cache_file) && !force_refit_models) {
+  # Load cached models
+  cached_models <- readRDS(models_cache_file)
+  models <- cached_models$models
+  model_summaries <- cached_models$model_summaries
+  model_progress <- cached_models$model_progress
+  models_loaded_from_cache <- TRUE
+  cache_location <- models_cache_file
+  message("Models loaded from cache: ", cache_location)
+} else {
+  # Fit new models
+  models_loaded_from_cache <- FALSE
+  models <- list()
+  model_summaries <- list()
+  
+  model_progress <- data.frame(
+    Imputation = integer(),
+    Converged = logical(),
+    ThreeWay_Terms = integer()
+  )
+  
+  for (i in 1:n_imputations) {
   
   design_weighted <- svydesign(
     ids = ~e_mrn_deidentified,
@@ -280,6 +300,21 @@ for (i in 1:n_imputations) {
   ))
   
   model_summaries[[i]] <- coef_summary
+  }
+  
+  # Save to cache
+  cached_models <- list(
+    models = models,
+    model_summaries = model_summaries,
+    model_progress = model_progress,
+    formula_used = interaction_formula,
+    n_imputations = n_imputations,
+    timestamp = Sys.time()
+  )
+  
+  saveRDS(cached_models, models_cache_file)
+  cache_location <- models_cache_file
+  message("Models fitted and saved to cache: ", cache_location)
 }
 
 # Verify we have the expected number of models
@@ -623,8 +658,27 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
   ))
 }
 
-# Pool contrasts across all imputations
-pooled_results <- pool_emmeans_subgroup_effects(models, n_imputations)
+# Check if emmeans results are cached
+emmeans_cache_file <- file.path(reanalysis_data_dir, "emmeans_results_interaction.rds")
+
+if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
+  # Load cached results
+  pooled_results <- readRDS(emmeans_cache_file)
+  emmeans_loaded_from_cache <- TRUE
+  emmeans_cache_location <- emmeans_cache_file
+  message("Emmeans results loaded from cache: ", emmeans_cache_location)
+} else {
+  # Calculate new emmeans results
+  emmeans_loaded_from_cache <- FALSE
+  
+  # Pool contrasts across all imputations
+  pooled_results <- pool_emmeans_subgroup_effects(models, n_imputations)
+  
+  # Save to cache
+  saveRDS(pooled_results, emmeans_cache_file)
+  emmeans_cache_location <- emmeans_cache_file
+  message("Emmeans results calculated and saved to cache: ", emmeans_cache_location)
+}
 
 # Process odds ratio results
 or_effects <- pooled_results$odds_ratios |>
@@ -1155,8 +1209,27 @@ calculate_pooled_ames <- function(imputed_datasets, models, n_imputations) {
   return(pooled_ame)
 }
 
-# Calculate pooled AMEs
-ame_results <- calculate_pooled_ames(imputed_datasets, models, n_imputations)
+# Check if AME results are cached
+ame_cache_file <- file.path(reanalysis_data_dir, "ame_results_interaction.rds")
+
+if (file.exists(ame_cache_file) && !force_recalc_ame) {
+  # Load cached results
+  ame_results <- readRDS(ame_cache_file)
+  ame_loaded_from_cache <- TRUE
+  ame_cache_location <- ame_cache_file
+  message("AME results loaded from cache: ", ame_cache_location)
+} else {
+  # Calculate new AME results
+  ame_loaded_from_cache <- FALSE
+  
+  # Calculate pooled AMEs
+  ame_results <- calculate_pooled_ames(imputed_datasets, models, n_imputations)
+  
+  # Save to cache
+  saveRDS(ame_results, ame_cache_file)
+  ame_cache_location <- ame_cache_file
+  message("AME results calculated and saved to cache: ", ame_cache_location)
+}
 
 # Format for display
 ame_display <- ame_results |>
