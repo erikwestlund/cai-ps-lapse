@@ -22,7 +22,7 @@ library(parallel)
 library(doParallel)
 
 # ANALYSIS MODE: Use same as imputation
-analysis_mode <- "final"  # Should match imputation mode
+analysis_mode <- "test"  # Should match imputation mode
 
 # PARALLEL PROCESSING CONFIGURATION
 max_cores_for_ps <- 2  # Maximum cores to use for propensity score estimation (reduced for memory management)

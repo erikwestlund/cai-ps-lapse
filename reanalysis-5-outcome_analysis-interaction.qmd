@@ -27,7 +27,7 @@ library(mice)  # For pool() function with Barnard-Rubin df adjustment
 library(mitools)  # For additional MI utilities if needed
 
 # ANALYSIS MODE: Use same as imputation/PS
-analysis_mode <- "final"  # Should match imputation and PS modes
+analysis_mode <- "test"  # Should match imputation and PS modes
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
