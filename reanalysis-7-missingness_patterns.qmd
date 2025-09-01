@@ -645,16 +645,6 @@ if (!is.na(lapse_or_excluded_vs_included)) {
 }
 ```
 
-### Implications for Analysis
-
-1. **Selection Bias**: The differences between excluded and included patients suggest potential selection bias in complete case analysis.
-
-2. **Direction of Bias**: If excluded patients are more likely to lapse AND have worse health characteristics, complete case analysis may underestimate the treatment effect.
-
-3. **Multiple Imputation Benefit**: The increase in treatment effect after imputation aligns with recovering information from a sicker, more vulnerable population that was excluded.
-
-4. **Generalizability**: Results from imputed data may better represent the full patient population, including those with incomplete follow-up.
-
 ```{r finalize-log}
 #| include: false
 # Finalize logging
