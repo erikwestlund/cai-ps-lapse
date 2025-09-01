@@ -611,10 +611,6 @@ get_analysis_formulas_reanalysis_interaction <- function() {
       age_cat +
       CCI +
       DCSI +
-      other_inject +
-      anti_VEGF +
-      focal_laser_flag +
-      PRP_flag +
       glaucoma_bef_hitplus_cat +
       otherretina_bef_hitplus_cat +
       catsurg_before_hitplus_cat")
