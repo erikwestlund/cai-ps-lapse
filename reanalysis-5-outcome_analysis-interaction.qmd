@@ -30,8 +30,8 @@ library(mitools)  # For additional MI utilities if needed
 analysis_mode <- "final"  # Should match imputation and PS modes
 
 # CACHE SETTINGS - Set these to TRUE to force recalculation
-force_refit_models <- TRUE  # Set to TRUE to re-fit all models
-force_recalc_emmeans <- TRUE  # Set to TRUE to recalculate marginal means
+force_refit_models <- FALSE  # Set to TRUE to re-fit all models
+force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
@@ -610,16 +610,44 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     stringsAsFactors = FALSE
   )
   
+  # Check column names in first imputation for debugging
+  if (length(all_contrasts) > 0) {
+    message("Contrast columns: ", paste(names(all_contrasts[[1]]), collapse = ", "))
+  }
+  if (length(all_risk_diffs) > 0) {
+    message("Risk diff columns: ", paste(names(all_risk_diffs[[1]]), collapse = ", "))
+  }
+  
   # Pool each subgroup using Rubin's rules
   for (j in 1:n_subgroups) {
     # Pool odds ratio contrasts (log scale)
-    log_odds_estimates <- sapply(all_contrasts, function(x) x$estimate[j])
-    log_odds_SEs <- sapply(all_contrasts, function(x) x$SE[j])
+    log_odds_estimates <- sapply(all_contrasts, function(x) {
+      if ("estimate" %in% names(x)) {
+        x$estimate[j]
+      } else {
+        # Try other possible column names
+        x[j, which(names(x) %in% c("estimate", "emmean", "contrast"))[1]]
+      }
+    })
+    
+    log_odds_SEs <- sapply(all_contrasts, function(x) {
+      if ("SE" %in% names(x)) {
+        x$SE[j]
+      } else if ("std.error" %in% names(x)) {
+        x$std.error[j]
+      } else {
+        x[j, which(names(x) %in% c("SE", "std.error", "se"))[1]]
+      }
+    })
+    
+    # Convert to numeric and check for validity
+    log_odds_estimates <- as.numeric(log_odds_estimates)
+    log_odds_SEs <- as.numeric(log_odds_SEs)
     
     # Apply Rubin's rules for log odds
-    Q_bar_log <- mean(log_odds_estimates)
-    U_bar_log <- mean(log_odds_SEs^2)
-    B_log <- var(log_odds_estimates)
+    Q_bar_log <- mean(log_odds_estimates, na.rm = TRUE)
+    U_bar_log <- mean(log_odds_SEs^2, na.rm = TRUE)
+    B_log <- var(log_odds_estimates, na.rm = TRUE)
     T_log <- U_bar_log + (1 + 1/n_imputations) * B_log
     
     # Degrees of freedom (Barnard-Rubin)
@@ -631,13 +659,44 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     pooled_or_results$df[j] <- df_log
     
     # Pool risk differences (probability scale)
-    rd_estimates <- sapply(all_risk_diffs, function(x) x$estimate[j])
-    rd_SEs <- sapply(all_risk_diffs, function(x) x$SE[j])
+    # Check for column names - emmeans may use 'estimate' or other names
+    rd_estimates <- sapply(all_risk_diffs, function(x) {
+      if ("estimate" %in% names(x)) {
+        x$estimate[j]
+      } else if ("emmean" %in% names(x)) {
+        x$emmean[j]
+      } else if ("prob" %in% names(x)) {
+        x$prob[j]
+      } else {
+        # Try to get the estimate column (might be named differently)
+        x[j, which(names(x) %in% c("estimate", "emmean", "prob", "prediction"))[1]]
+      }
+    })
+    
+    rd_SEs <- sapply(all_risk_diffs, function(x) {
+      if ("SE" %in% names(x)) {
+        x$SE[j]
+      } else if ("std.error" %in% names(x)) {
+        x$std.error[j]
+      } else {
+        # Try to get the SE column
+        x[j, which(names(x) %in% c("SE", "std.error", "se"))[1]]
+      }
+    })
+    
+    # Convert to numeric and check for validity
+    rd_estimates <- as.numeric(rd_estimates)
+    rd_SEs <- as.numeric(rd_SEs)
+    
+    # Check if we got valid numeric values
+    if (any(is.na(rd_estimates)) || any(is.na(rd_SEs))) {
+      warning(paste("Missing values in risk difference pooling for subgroup", j))
+    }
     
     # Apply Rubin's rules for risk differences
-    Q_bar_rd <- mean(rd_estimates)
-    U_bar_rd <- mean(rd_SEs^2)
-    B_rd <- var(rd_estimates)
+    Q_bar_rd <- mean(rd_estimates, na.rm = TRUE)
+    U_bar_rd <- mean(rd_SEs^2, na.rm = TRUE)
+    B_rd <- var(rd_estimates, na.rm = TRUE)
     T_rd <- U_bar_rd + (1 + 1/n_imputations) * B_rd
     
     # Degrees of freedom
