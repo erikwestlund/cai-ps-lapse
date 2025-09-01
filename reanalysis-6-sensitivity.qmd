@@ -134,16 +134,14 @@ cat(paste0(
 #| fig-height: 6
 #| fig-width: 8
 
-# Create E-value plot using RR values
-# bias_plot expects RR values, not E-values
+# Create E-value plot
+# bias_plot expects RR point estimate and x-axis max
 tryCatch({
-  # The bias_plot function expects the RR estimate and its bounds
-  bias_plot_obj <- bias_plot(rr_point, rr_lower)
+  bias_plot_obj <- bias_plot(rr_point, 10)
   print(bias_plot_obj)
 }, error = function(e) {
   cat("Note: Bias plot could not be generated.\n")
   cat("Error: ", e$message, "\n")
-  cat("RR point: ", rr_point, ", RR lower: ", rr_lower, "\n")
 })
 ```
 
