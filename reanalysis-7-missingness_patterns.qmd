@@ -200,59 +200,90 @@ kable(table1_print,
 #| fig-height: 10
 #| fig-width: 12
 
-# Extract SMDs for plotting
-smd_raw <- ExtractSmd(table1)
+# Extract SMDs with more detail for factor variables
+# Get the table itself to access all SMD information
+table1_matrix <- print(table1, smd = TRUE, printToggle = FALSE)
 
-# ExtractSmd returns a list - extract just the numeric SMD values
-# The list has one element per variable, plus a "Variable" element with names
-if (is.list(smd_raw) && "Variable" %in% names(smd_raw)) {
-  # Get variable names from the Variable element
-  var_names <- smd_raw$Variable
-  # Get SMD values (all elements except Variable)
-  smd_values <- unlist(smd_raw[names(smd_raw) != "Variable"])
-  
-  smd_data <- data.frame(
-    Variable = var_names,
-    SMD = smd_values,
-    stringsAsFactors = FALSE
-  )
-} else if (is.data.frame(smd_raw)) {
-  # If it's a data frame, use rownames as variable names
-  smd_data <- data.frame(
-    Variable = rownames(smd_raw),
-    SMD = smd_raw[, 1],
-    stringsAsFactors = FALSE
-  )
-} else {
-  # Fallback: use available_vars as variable names
-  smd_values <- unlist(smd_raw)
-  smd_values <- smd_values[!is.na(suppressWarnings(as.numeric(smd_values)))]
-  
-  smd_data <- data.frame(
-    Variable = available_vars[1:length(smd_values)],
-    SMD = as.numeric(smd_values),
-    stringsAsFactors = FALSE
-  )
+# Extract SMDs manually from the table for each row
+# This will give us SMDs for each level of factor variables
+smd_data <- data.frame()
+
+# Process each variable in the table
+for (var in available_vars) {
+  if (var %in% names(original_data)) {
+    if (var %in% factor_vars && is.factor(original_data[[var]])) {
+      # For factor variables, calculate SMD for each level
+      var_levels <- levels(original_data[[var]])
+      for (level in var_levels) {
+        # Calculate proportion in each group
+        prop_excluded <- mean(original_data[[var]][original_data$excluded] == level, na.rm = TRUE)
+        prop_included <- mean(original_data[[var]][!original_data$excluded] == level, na.rm = TRUE)
+        
+        # Calculate SMD for this level
+        # SMD for proportions = (p1 - p2) / sqrt((p1*(1-p1) + p2*(1-p2))/2)
+        pooled_var <- (prop_excluded * (1 - prop_excluded) + prop_included * (1 - prop_included)) / 2
+        smd_val <- if (pooled_var > 0) {
+          abs(prop_excluded - prop_included) / sqrt(pooled_var)
+        } else {
+          0
+        }
+        
+        smd_data <- rbind(smd_data, data.frame(
+          Variable = paste0(var, ": ", level),
+          SMD = smd_val,
+          VarType = "Factor",
+          BaseVar = var,
+          stringsAsFactors = FALSE
+        ))
+      }
+    } else {
+      # For continuous variables, calculate single SMD
+      if (sum(!is.na(original_data[[var]])) > 0) {
+        mean_excluded <- mean(original_data[[var]][original_data$excluded], na.rm = TRUE)
+        mean_included <- mean(original_data[[var]][!original_data$excluded], na.rm = TRUE)
+        sd_pooled <- sqrt((var(original_data[[var]][original_data$excluded], na.rm = TRUE) + 
+                          var(original_data[[var]][!original_data$excluded], na.rm = TRUE)) / 2)
+        
+        smd_val <- if (!is.na(sd_pooled) && sd_pooled > 0) {
+          abs(mean_excluded - mean_included) / sd_pooled
+        } else {
+          0
+        }
+        
+        smd_data <- rbind(smd_data, data.frame(
+          Variable = var,
+          SMD = smd_val,
+          VarType = "Continuous",
+          BaseVar = var,
+          stringsAsFactors = FALSE
+        ))
+      }
+    }
+  }
 }
 
-# Remove NA values
+# Remove NA values and order by absolute SMD
 smd_data <- smd_data[!is.na(smd_data$SMD), ]
-
-# Order by absolute SMD
 smd_data <- smd_data[order(abs(smd_data$SMD), decreasing = TRUE), ]
+
+# Get top differences (for display purposes, limit to top 20)
+smd_data_top <- head(smd_data, 20)
 
 # Identify variables with substantial differences (SMD > 0.1)
 substantial_diff <- smd_data[abs(smd_data$SMD) > 0.1, ]
 
-# Plot 1: SMD plot
-p1 <- ggplot(smd_data, aes(x = reorder(Variable, abs(SMD)), y = SMD)) +
-  geom_point(size = 3, color = ifelse(abs(smd_data$SMD) > 0.1, "red", "blue")) +
+# Plot 1: SMD plot (showing top 20 differences)
+p1 <- ggplot(smd_data_top, aes(x = reorder(Variable, abs(SMD)), y = SMD)) +
+  geom_point(aes(color = VarType), size = 3) +
+  geom_point(data = smd_data_top[abs(smd_data_top$SMD) > 0.1, ],
+             color = "red", size = 3.5) +
   geom_hline(yintercept = c(-0.1, 0, 0.1), linetype = c(2, 1, 2), alpha = 0.5) +
   coord_flip() +
-  labs(title = "Standardized Mean Differences: Excluded vs Included",
-       subtitle = "Red points indicate SMD > 0.1 (substantial difference)",
+  labs(title = "Standardized Mean Differences: Excluded vs Included (Top 20)",
+       subtitle = "Red overlay indicates SMD > 0.1; Factor levels shown separately",
        x = "Variable",
-       y = "Standardized Mean Difference") +
+       y = "Standardized Mean Difference",
+       color = "Variable Type") +
   theme_minimal() +
   theme(plot.title = element_text(size = 14, face = "bold"))
 
