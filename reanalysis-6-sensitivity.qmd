@@ -85,6 +85,10 @@ evalue_result <- evalues.OR(
 )
 
 # Format E-value results
+# evalues.OR returns a matrix with rows "RR" and "E-values"
+evalue_point <- evalue_result["E-values", "point"]
+evalue_ci <- evalue_result["E-values", "lower"]
+
 evalue_summary <- data.frame(
   Measure = c(
     "Point Estimate E-value",
@@ -94,8 +98,8 @@ evalue_summary <- data.frame(
     "CI Upper"
   ),
   Value = c(
-    round(evalue_result$E.values[1], 2),
-    round(evalue_result$E.values[2], 2),
+    round(evalue_point, 2),
+    round(evalue_ci, 2),
     round(main_or, 3),
     round(main_ci_lower, 3),
     round(main_ci_upper, 3)
@@ -109,12 +113,12 @@ kable(evalue_summary,
 cat("\nInterpretation:\n")
 cat(paste0(
   "An unmeasured confounder would need to have an association of at least ",
-  round(evalue_result$E.values[1], 2),
+  round(evalue_point, 2),
   " with both lapsing and VI/blindness (on the OR scale) to fully explain the observed association.\n\n"
 ))
 cat(paste0(
   "To shift the confidence interval to include the null, an unmeasured confounder would need an association of at least ",
-  round(evalue_result$E.values[2], 2),
+  round(evalue_ci, 2),
   " with both exposure and outcome.\n"
 ))
 ```
@@ -126,7 +130,7 @@ cat(paste0(
 #| fig-width: 8
 
 # Create E-value plot
-bias_plot <- bias_plot(evalue_result$E.values[1], evalue_result$E.values[2])
+bias_plot <- bias_plot(evalue_point, evalue_ci)
 
 # Display the plot
 print(bias_plot)
@@ -504,8 +508,8 @@ sensitivity_summary <- data.frame(
   ),
   Interpretation = c(
     "Primary analysis result",
-    paste0("Unmeasured confounding needed: OR = ", round(evalue_result$E.values[1], 2)),
-    paste0("To include null: OR = ", round(evalue_result$E.values[2], 2)),
+    paste0("Unmeasured confounding needed: OR = ", round(evalue_point, 2)),
+    paste0("To include null: OR = ", round(evalue_ci, 2)),
     "Missing data sensitivity",
     "Extreme weight sensitivity",
     "Model specification sensitivity",
@@ -527,7 +531,7 @@ kable(sensitivity_summary,
 
 The sensitivity analyses demonstrate:
 
-1. **E-value**: The observed association is robust to unmeasured confounding. An unmeasured confounder would need to be strongly associated (OR ≥ `r round(evalue_result$E.values[1], 2)`) with both lapsing and VI/blindness to explain away the effect.
+1. **E-value**: The observed association is robust to unmeasured confounding. An unmeasured confounder would need to be strongly associated (OR ≥ `r round(evalue_point, 2)`) with both lapsing and VI/blindness to explain away the effect.
 
 2. **Missing data**: Results are consistent between multiple imputation and complete case analysis, suggesting robustness to missing data assumptions.
 
