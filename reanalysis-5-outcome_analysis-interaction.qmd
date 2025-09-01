@@ -514,93 +514,210 @@ kable(joint_tests, caption = "Pooled joint hypothesis tests (Li-Raghunathan-Rubi
 ## Calculate Effects Within Each Subgroup Using emmeans
 
 ```{r emmeans-analysis}
-# Function to pool emmeans results across imputations
-pool_emmeans_contrasts <- function(models, n_imputations) {
+# Function to pool emmeans results across imputations (matching main effects approach)
+pool_emmeans_subgroup_effects <- function(models, n_imputations) {
   
-  emm_options(rg.limit = 500000)
+  # Set emmeans options to handle larger reference grids (matching main effects)
+  emm_options(rg.limit = 130000)
   
+  # Store results from each imputation
+  all_emmeans <- list()
   all_contrasts <- list()
+  all_risk_diffs <- list()
   
   for (i in 1:n_imputations) {
     
-    emm <- emmeans(models[[i]], 
-                   ~ ever_lapse_binary | dr_severity * any_treatment,
-                   weights = "proportional")
+    # Get marginal means on both log odds and response scales
+    emm_logit <- emmeans(models[[i]], 
+                         ~ ever_lapse_binary | dr_severity * any_treatment,
+                         weights = "proportional")
     
-    lapse_contrasts <- contrast(emm, method = "revpairwise", 
+    emm_response <- emmeans(models[[i]], 
+                           ~ ever_lapse_binary | dr_severity * any_treatment,
+                           weights = "proportional",
+                           type = "response")
+    
+    # Get contrasts on log odds scale (for odds ratios)
+    lapse_contrasts <- contrast(emm_logit, method = "revpairwise", 
                                by = c("dr_severity", "any_treatment"))
     
+    # Get pairwise comparisons on response scale (for risk differences)
+    risk_diffs <- pairs(emm_response, reverse = TRUE,
+                       by = c("dr_severity", "any_treatment"))
+    
+    all_emmeans[[i]] <- as.data.frame(emm_response)
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
+    all_risk_diffs[[i]] <- as.data.frame(risk_diffs)
   }
   
-  first_df <- all_contrasts[[1]]
-  n_contrasts <- nrow(first_df)
+  # Get structure from first imputation
+  first_contrast <- all_contrasts[[1]]
+  first_rd <- all_risk_diffs[[1]]
+  n_subgroups <- nrow(first_contrast)
   
-  pooled_contrasts <- data.frame(
-    dr_severity = first_df$dr_severity,
-    any_treatment = first_df$any_treatment,
-    contrast = first_df$contrast,
-    estimate = numeric(n_contrasts),
-    SE = numeric(n_contrasts),
-    df = numeric(n_contrasts),
+  # Initialize pooled results data frames
+  pooled_or_results <- data.frame(
+    dr_severity = first_contrast$dr_severity,
+    any_treatment = first_contrast$any_treatment,
+    contrast = first_contrast$contrast,
+    log_odds = numeric(n_subgroups),
+    SE_log_odds = numeric(n_subgroups),
+    df = numeric(n_subgroups),
     stringsAsFactors = FALSE
   )
   
-  # Pool each contrast using Rubin's rules
-  for (j in 1:n_contrasts) {
-    # Extract estimates and SEs for this contrast across imputations
-    estimates <- sapply(all_contrasts, function(x) x$estimate[j])
-    SEs <- sapply(all_contrasts, function(x) x$SE[j])
+  pooled_rd_results <- data.frame(
+    dr_severity = first_rd$dr_severity,
+    any_treatment = first_rd$any_treatment,
+    contrast = first_rd$contrast,
+    risk_diff = numeric(n_subgroups),
+    SE_risk_diff = numeric(n_subgroups),
+    df = numeric(n_subgroups),
+    stringsAsFactors = FALSE
+  )
+  
+  # Pool each subgroup using Rubin's rules
+  for (j in 1:n_subgroups) {
+    # Pool odds ratio contrasts (log scale)
+    log_odds_estimates <- sapply(all_contrasts, function(x) x$estimate[j])
+    log_odds_SEs <- sapply(all_contrasts, function(x) x$SE[j])
     
-    # Apply Rubin's rules
-    Q_bar <- mean(estimates)
-    U_bar <- mean(SEs^2)  # Average of variances
-    B <- var(estimates)   # Between-imputation variance
-    T <- U_bar + (1 + 1/n_imputations) * B
+    # Apply Rubin's rules for log odds
+    Q_bar_log <- mean(log_odds_estimates)
+    U_bar_log <- mean(log_odds_SEs^2)
+    B_log <- var(log_odds_estimates)
+    T_log <- U_bar_log + (1 + 1/n_imputations) * B_log
+    
+    # Degrees of freedom (Barnard-Rubin)
+    lambda_log <- (B_log + B_log/n_imputations) / T_log
+    df_log <- (n_imputations - 1) / (lambda_log^2)
+    
+    pooled_or_results$log_odds[j] <- Q_bar_log
+    pooled_or_results$SE_log_odds[j] <- sqrt(T_log)
+    pooled_or_results$df[j] <- df_log
+    
+    # Pool risk differences (probability scale)
+    rd_estimates <- sapply(all_risk_diffs, function(x) x$estimate[j])
+    rd_SEs <- sapply(all_risk_diffs, function(x) x$SE[j])
+    
+    # Apply Rubin's rules for risk differences
+    Q_bar_rd <- mean(rd_estimates)
+    U_bar_rd <- mean(rd_SEs^2)
+    B_rd <- var(rd_estimates)
+    T_rd <- U_bar_rd + (1 + 1/n_imputations) * B_rd
     
     # Degrees of freedom
-    r <- (1 + 1/n_imputations) * B / U_bar
-    df_mi <- (n_imputations - 1) / (r^2)
+    lambda_rd <- (B_rd + B_rd/n_imputations) / T_rd
+    df_rd <- (n_imputations - 1) / (lambda_rd^2)
     
-    pooled_contrasts$estimate[j] <- Q_bar
-    pooled_contrasts$SE[j] <- sqrt(T)
-    pooled_contrasts$df[j] <- df_mi
+    pooled_rd_results$risk_diff[j] <- Q_bar_rd
+    pooled_rd_results$SE_risk_diff[j] <- sqrt(T_rd)
+    pooled_rd_results$df[j] <- df_rd
   }
   
-  return(pooled_contrasts)
+  return(list(
+    odds_ratios = pooled_or_results,
+    risk_differences = pooled_rd_results,
+    emmeans_list = all_emmeans
+  ))
 }
 
 # Pool contrasts across all imputations
-pooled_lapse_effects <- pool_emmeans_contrasts(models, n_imputations)
+pooled_results <- pool_emmeans_subgroup_effects(models, n_imputations)
 
-# Calculate additional statistics
-lapse_effects <- pooled_lapse_effects |>
+# Process odds ratio results
+or_effects <- pooled_results$odds_ratios |>
   mutate(
-    t_stat = estimate / SE,
+    t_stat = log_odds / SE_log_odds,
     p.value = 2 * pt(-abs(t_stat), df = df),
-    CI_Lower = estimate - qt(0.975, df = df) * SE,
-    CI_Upper = estimate + qt(0.975, df = df) * SE
+    CI_Lower_log = log_odds - qt(0.975, df = df) * SE_log_odds,
+    CI_Upper_log = log_odds + qt(0.975, df = df) * SE_log_odds,
+    OR = exp(log_odds),
+    OR_CI_Lower = exp(CI_Lower_log),
+    OR_CI_Upper = exp(CI_Upper_log)
   )
 
-# Create clean results table using lapse_effects which has all the calculated columns
-subgroup_effects <- data.frame(
-  DR_Severity = lapse_effects$dr_severity,
-  Treatment = lapse_effects$any_treatment,
-  Log_Odds = round(lapse_effects$estimate, 4),
-  SE = round(lapse_effects$SE, 4),
-  CI_Lower = round(lapse_effects$CI_Lower, 4),
-  CI_Upper = round(lapse_effects$CI_Upper, 4),
-  OR = round(exp(lapse_effects$estimate), 4),
-  P_Value = format.pval(lapse_effects$p.value, digits = 4, eps = 0.0001)
+# Process risk difference results
+rd_effects <- pooled_results$risk_differences |>
+  mutate(
+    t_stat = risk_diff / SE_risk_diff,
+    p.value = 2 * pt(-abs(t_stat), df = df),
+    CI_Lower = risk_diff - qt(0.975, df = df) * SE_risk_diff,
+    CI_Upper = risk_diff + qt(0.975, df = df) * SE_risk_diff
+  )
+
+# Create odds ratio table
+or_table <- data.frame(
+  DR_Severity = or_effects$dr_severity,
+  Treatment = or_effects$any_treatment,
+  OR = round(or_effects$OR, 3),
+  `OR_95CI` = paste0("(", round(or_effects$OR_CI_Lower, 3), ", ", 
+                     round(or_effects$OR_CI_Upper, 3), ")"),
+  P_Value = format.pval(or_effects$p.value, digits = 4, eps = 0.0001)
 )
 
-kable(subgroup_effects,
-      caption = "Effect of Lapsing Within Each DR Severity × Treatment Subgroup",
+# Create risk difference table
+rd_table <- data.frame(
+  DR_Severity = rd_effects$dr_severity,
+  Treatment = rd_effects$any_treatment,
+  Risk_Diff = round(rd_effects$risk_diff, 4),
+  `RD_95CI` = paste0("(", round(rd_effects$CI_Lower, 4), ", ", 
+                     round(rd_effects$CI_Upper, 4), ")"),
+  P_Value = format.pval(rd_effects$p.value, digits = 4, eps = 0.0001)
+)
+
+kable(or_table,
+      caption = "Odds Ratios for Lapsing Effect Within Each Subgroup",
+      col.names = c("DR Severity", "Treatment", "Odds Ratio", "95% CI", "P-value"),
       row.names = FALSE)
 
-# Store for visualization
-subgroup_effects_stored <- subgroup_effects
+kable(rd_table,
+      caption = "Risk Differences for Lapsing Effect Within Each Subgroup",
+      col.names = c("DR Severity", "Treatment", "Risk Diff", "95% CI", "P-value"),
+      row.names = FALSE)
+
+# Store for visualization (use OR results for compatibility)
+subgroup_effects_stored <- data.frame(
+  DR_Severity = or_effects$dr_severity,
+  Treatment = or_effects$any_treatment,
+  Log_Odds = or_effects$log_odds,
+  SE = or_effects$SE_log_odds,
+  CI_Lower = or_effects$CI_Lower_log,
+  CI_Upper = or_effects$CI_Upper_log,
+  OR = or_effects$OR,
+  OR_CI_Lower = or_effects$OR_CI_Lower,
+  OR_CI_Upper = or_effects$OR_CI_Upper,
+  P_Value = or_effects$p.value
+)
 ```
+
+### Understanding the Different Effect Measures
+
+::: {.callout-note}
+## Why are the confidence intervals so different between measures?
+
+The three effect measures presented above capture different aspects of the lapsing effect:
+
+1. **Odds Ratios (OR)**: 
+   - Multiplicative scale comparing odds of outcome
+   - Wider CIs because they incorporate uncertainty from multiple interaction terms
+   - Non-collapsible measure that depends on covariate distribution
+
+2. **Risk Differences (RD)**:
+   - Additive scale showing absolute change in probability
+   - Narrower CIs because probabilities are bounded [0,1]
+   - More intuitive interpretation for clinical decision-making
+
+3. **Average Marginal Effects (AME)** (shown later):
+   - Average of individual-level effects across actual patients
+   - Smallest CIs because averaging reduces variance
+   - Accounts for actual covariate distribution in each subgroup
+
+The OR confidence intervals are wider because:
+- They must account for uncertainty in the main effect plus all relevant interaction terms
+- The log scale amplifies uncertainty when exponentiating
+- Small subgroups have fewer effective degrees of freedom
+:::
 
 ## Manual Calculation of Subgroup Effects (Validation)
 
@@ -816,6 +933,87 @@ p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR_display,
 
 # Arrange plots
 grid.arrange(p1, p2, ncol = 2)
+```
+
+## Convergence Diagnostics
+
+```{r convergence-diagnostics}
+# Extract estimates across imputations for key subgroups
+convergence_data <- data.frame()
+
+for (i in 1:n_imputations) {
+  # Get log odds estimates from each imputation for each subgroup
+  contrast_df <- pooled_results$odds_ratios
+  
+  # Track No_DR + No_Treatment as reference
+  ref_estimates <- sapply(1:n_imputations, function(imp) {
+    df <- as.data.frame(pooled_results$emmeans_list[[imp]])
+    subset_df <- df[df$dr_severity == "No_DR" & 
+                   df$any_treatment == "No_Treatment" & 
+                   df$ever_lapse_binary == "Lapsed", ]
+    if (nrow(subset_df) > 0) {
+      return(qlogis(subset_df$prob[1]))  # Convert prob to log odds
+    } else {
+      return(NA)
+    }
+  })
+  
+  # Track PDR + Any_Treatment as most complex interaction
+  complex_estimates <- sapply(1:n_imputations, function(imp) {
+    df <- as.data.frame(pooled_results$emmeans_list[[imp]])
+    subset_df <- df[df$dr_severity == "PDR" & 
+                   df$any_treatment == "Any_Treatment" & 
+                   df$ever_lapse_binary == "Lapsed", ]
+    if (nrow(subset_df) > 0) {
+      return(qlogis(subset_df$prob[1]))
+    } else {
+      return(NA)
+    }
+  })
+}
+
+# Calculate running averages
+running_avg_ref <- cumsum(ref_estimates) / seq_along(ref_estimates)
+running_avg_complex <- cumsum(complex_estimates) / seq_along(complex_estimates)
+
+# Create convergence plot
+convergence_df <- data.frame(
+  Imputation = rep(1:n_imputations, 2),
+  Estimate = c(ref_estimates, complex_estimates),
+  Running_Average = c(running_avg_ref, running_avg_complex),
+  Subgroup = factor(rep(c("No_DR + No_Treatment", "PDR + Any_Treatment"), 
+                        each = n_imputations))
+)
+
+# Plot convergence
+library(ggplot2)
+convergence_plot <- ggplot(convergence_df, aes(x = Imputation)) +
+  geom_point(aes(y = Estimate, color = Subgroup), alpha = 0.5) +
+  geom_line(aes(y = Running_Average, color = Subgroup), size = 1.2) +
+  labs(title = "Convergence of Subgroup Effect Estimates",
+       subtitle = "Points show individual estimates, lines show running averages",
+       x = "Imputation Number",
+       y = "Log Odds of Outcome (Lapsed)",
+       color = "Subgroup") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(convergence_plot)
+
+# Summary statistics
+convergence_stats <- data.frame(
+  Subgroup = c("No_DR + No_Treatment", "PDR + Any_Treatment"),
+  Mean = c(mean(ref_estimates), mean(complex_estimates)),
+  SD = c(sd(ref_estimates), sd(complex_estimates)),
+  CV = c(sd(ref_estimates)/abs(mean(ref_estimates)) * 100,
+         sd(complex_estimates)/abs(mean(complex_estimates)) * 100),
+  Final_Running_Avg = c(tail(running_avg_ref, 1), tail(running_avg_complex, 1))
+) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+kable(convergence_stats,
+      caption = "Convergence Statistics for Key Subgroups",
+      col.names = c("Subgroup", "Mean", "SD", "CV (%)", "Final Running Avg"))
 ```
 
 ## Average Marginal Effects by Subgroup

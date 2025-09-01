@@ -27,6 +27,12 @@ library(mice)
 library(survey)
 library(ggplot2)
 library(gridExtra)
+library(parallel)
+library(doParallel)
+library(forestplot)
+
+# Initialize logging
+log_file <- init_log("alternative_ps_methods")
 
 # Check for required files
 required_files <- c(
@@ -64,35 +70,48 @@ ps_formula <- as.formula(paste("ever_lapse_binary ~",
 analysis_mode <- "final"  # Should match imputation mode
 max_imputations_to_process <- ifelse(analysis_mode == "test", 5, n_imputations)
 
-cat(paste0("Running ", max_imputations_to_process, " of ", n_imputations, " imputations\n"))
+# Caching configuration
+use_cache <- TRUE
+cache_dir <- file.path(reanalysis_data_dir, "ps_alternative_methods")
+if (!dir.exists(cache_dir)) {
+  dir.create(cache_dir, recursive = TRUE)
+  log_message(paste0("Created cache directory: ", cache_dir))
+}
+
+# Parallel processing configuration
+max_cores_for_ps <- 2  # Limit cores for memory management
+
+log_message(paste0("Analysis mode: ", analysis_mode))
+log_message(paste0("Processing ", max_imputations_to_process, " of ", n_imputations, " imputations"))
+log_message(paste0("Caching: ", ifelse(use_cache, "ENABLED", "DISABLED")))
 ```
 
 ## Define Propensity Score Methods
 
 ```{r define-methods}
-# Define all PS methods to compare
+# Define all PS methods to compare (excluding twang_gbm which we'll load from reanalysis-4)
 ps_methods <- list(
-  # MatchIt Methods - Nearest Neighbor
+  # MatchIt Methods - Nearest Neighbor with replacement
   list(name = "nearest_glm", package = "matchit", method = "nearest", 
-       distance = "glm", estimand = "ATT", ratio = 1),
+       distance = "glm", estimand = "ATT", replace = TRUE),
   
   list(name = "nearest_gam", package = "matchit", method = "nearest", 
-       distance = "gam", estimand = "ATT", ratio = 1),
+       distance = "gam", estimand = "ATT", replace = TRUE),
   
   list(name = "nearest_gbm", package = "matchit", method = "nearest", 
-       distance = "gbm", estimand = "ATT", ratio = 1,
+       distance = "gbm", estimand = "ATT", replace = TRUE,
        distance.options = list(n.trees = 1000, interaction.depth = 3)),
   
   list(name = "nearest_lasso", package = "matchit", method = "nearest", 
-       distance = "lasso", estimand = "ATT", ratio = 1),
+       distance = "lasso", estimand = "ATT", replace = TRUE),
   
   list(name = "nearest_rpart", package = "matchit", method = "nearest", 
-       distance = "rpart", estimand = "ATT", ratio = 1),
+       distance = "rpart", estimand = "ATT", replace = TRUE),
   
-  list(name = "mahalanobis", package = "matchit", method = "nearest", 
-       distance = "mahalanobis", estimand = "ATT", ratio = 1),
+  list(name = "nearest_mahalanobis", package = "matchit", method = "nearest", 
+       distance = "mahalanobis", estimand = "ATT", replace = TRUE),
   
-  # MatchIt - Subclassification
+  # MatchIt - Subclassification  
   list(name = "subclass_glm", package = "matchit", method = "subclass", 
        distance = "glm", estimand = "ATT", subclass = 5),
   
@@ -104,722 +123,483 @@ ps_methods <- list(
        estimand = "ATT"),
   
   list(name = "bart", package = "weightit", method = "bart", 
-       estimand = "ATT"),
-  
-  # twang Method (already run, load results)
-  list(name = "twang_gbm", package = "twang", method = "gbm", 
-       estimand = "ATT", precomputed = TRUE)
+       estimand = "ATT")
 )
 
-# Create summary table of methods
-methods_summary <- data.frame(
-  Method = sapply(ps_methods, function(x) x$name),
-  Package = sapply(ps_methods, function(x) x$package),
-  Type = ifelse(grepl("nearest|mahalanobis", sapply(ps_methods, function(x) x$name)), 
-                "Matching", 
-                ifelse(grepl("subclass", sapply(ps_methods, function(x) x$name)),
-                       "Subclassification", "IPTW")),
-  stringsAsFactors = FALSE
-)
+# Note: twang_gbm results will be loaded from reanalysis-4
 
-kable(methods_summary, caption = "Propensity score methods to compare")
+log_message(paste0("Defined ", length(ps_methods), " PS methods to compare"))
 ```
 
-## Run Alternative Specifications
+## Propensity Score Estimation Functions
 
-```{r run-alternatives}
-#| warning: false
-#| message: false
-
-# Initialize results storage
-all_results <- list()
-balance_results <- list()
-computation_times <- list()
-
-# Load pre-computed twang results
-twang_weights <- readRDS(file.path(reanalysis_data_dir, "twang_weights.rds"))
-
-# Process each imputation
-for (imp_num in 1:max_imputations_to_process) {
-  cat(paste0("\n--- Processing Imputation ", imp_num, " ---\n"))
+```{r ps-functions}
+# Function to process a single PS method for one imputation
+process_ps_method <- function(imputation_id, data, method_params, ps_formula, cache_dir, use_cache = TRUE) {
+  method_name <- method_params$name
+  cache_file <- file.path(cache_dir, paste0(method_name, "_imp", imputation_id, ".rds"))
   
-  imp_data <- imputed_datasets[[imp_num]]
-  
-  # Store results for this imputation
-  imp_results <- list()
-  
-  # Process each method
-  for (method_spec in ps_methods) {
-    cat(paste0("  Method: ", method_spec$name, "... "))
-    
-    start_time <- Sys.time()
-    
-    tryCatch({
-      if (method_spec$name == "twang_gbm") {
-        # Use pre-computed twang weights
-        weights <- twang_weights[[imp_num]]
-        matched_data <- imp_data
-        matched_data$weights <- weights
-        balance_obj <- NULL  # Will calculate balance separately
-        
-      } else if (method_spec$package == "matchit") {
-        # MatchIt methods
-        match_args <- list(
-          formula = ps_formula,
-          data = imp_data,
-          method = method_spec$method,
-          estimand = method_spec$estimand
-        )
-        
-        # Add distance specification if not Mahalanobis
-        if (method_spec$name != "mahalanobis") {
-          match_args$distance <- method_spec$distance
-        }
-        
-        # Add method-specific options
-        if (!is.null(method_spec$ratio)) {
-          match_args$ratio <- method_spec$ratio
-        }
-        if (!is.null(method_spec$subclass)) {
-          match_args$subclass <- method_spec$subclass
-        }
-        if (!is.null(method_spec$distance.options)) {
-          match_args$distance.options <- method_spec$distance.options
-        }
-        
-        # Run matching
-        match_obj <- do.call(matchit, match_args)
-        
-        # Extract matched data and weights
-        if (method_spec$method == "subclass") {
-          matched_data <- match.data(match_obj, subclass = "subclass")
-          matched_data$weights <- matched_data$weights * matched_data$subclass.weights
-        } else {
-          matched_data <- match.data(match_obj)
-        }
-        
-        # Get balance statistics
-        balance_obj <- bal.tab(match_obj, stats = c("m", "v"), thresholds = c(m = 0.1))
-        
-      } else if (method_spec$package == "weightit") {
-        # WeightIt methods
-        weight_obj <- weightit(
-          formula = ps_formula,
-          data = imp_data,
-          method = method_spec$method,
-          estimand = method_spec$estimand,
-          over = ifelse(is.null(method_spec$over), FALSE, method_spec$over)
-        )
-        
-        # Extract weights
-        weights <- weight_obj$weights
-        matched_data <- imp_data
-        matched_data$weights <- weights
-        
-        # Get balance statistics
-        balance_obj <- bal.tab(weight_obj, stats = c("m", "v"), thresholds = c(m = 0.1))
-      }
-      
-      end_time <- Sys.time()
-      comp_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
-      
-      # Store results
-      imp_results[[method_spec$name]] <- list(
-        data = matched_data,
-        weights = matched_data$weights,
-        balance = balance_obj,
-        computation_time = comp_time
-      )
-      
-      cat(paste0("done (", round(comp_time, 2), "s)\n"))
-      
-    }, error = function(e) {
-      cat(paste0("FAILED - ", e$message, "\n"))
-      imp_results[[method_spec$name]] <- list(
-        data = NULL,
-        weights = NULL,
-        balance = NULL,
-        error = e$message,
-        computation_time = NA
-      )
-    })
+  # Check cache
+  if (use_cache && file.exists(cache_file)) {
+    cat(paste0("  Loading cached results for ", method_name, " (imp ", imputation_id, ")\n"))
+    return(readRDS(cache_file))
   }
   
-  # Store imputation results
-  all_results[[paste0("imp_", imp_num)]] <- imp_results
+  cat(paste0("  Estimating ", method_name, " for imputation ", imputation_id, "\n"))
+  
+  result <- tryCatch({
+    if (method_params$package == "matchit") {
+      # MatchIt methods
+      args <- list(
+        formula = ps_formula,
+        data = data,
+        method = method_params$method,
+        estimand = method_params$estimand
+      )
+      
+      # Add method-specific parameters
+      if (!is.null(method_params$distance)) args$distance <- method_params$distance
+      if (!is.null(method_params$replace)) args$replace <- method_params$replace
+      if (!is.null(method_params$subclass)) args$subclass <- method_params$subclass
+      if (!is.null(method_params$distance.options)) args$distance.options <- method_params$distance.options
+      
+      do.call(matchit, args)
+      
+    } else if (method_params$package == "weightit") {
+      # WeightIt methods
+      args <- list(
+        formula = ps_formula,
+        data = data,
+        method = method_params$method,
+        estimand = method_params$estimand
+      )
+      
+      # Add method-specific parameters
+      if (!is.null(method_params$over)) args$over <- method_params$over
+      
+      do.call(weightit, args)
+      
+    } else {
+      stop(paste("Unknown package:", method_params$package))
+    }
+  }, error = function(e) {
+    cat(paste0("  ERROR in ", method_name, " (imp ", imputation_id, "): ", e$message, "\n"))
+    return(NULL)
+  })
+  
+  # Save to cache
+  if (!is.null(result) && use_cache) {
+    saveRDS(result, cache_file)
+  }
+  
+  return(result)
 }
 
-cat("\n✓ All methods processed\n")
+# Function to process all imputations for a single method
+process_method_all_imputations <- function(method_params, imputed_datasets, ps_formula, 
+                                          cache_dir, use_cache = TRUE, n_cores = 1) {
+  n_imp <- length(imputed_datasets)
+  method_name <- method_params$name
+  
+  log_message(paste0("Processing method: ", method_name, " across ", n_imp, " imputations"))
+  
+  if (n_cores > 1 && .Platform$OS.type == "unix") {
+    # Parallel processing for Unix/Mac
+    results <- mclapply(
+      1:n_imp,
+      function(i) process_ps_method(i, imputed_datasets[[i]], method_params, ps_formula, cache_dir, use_cache),
+      mc.cores = n_cores
+    )
+  } else if (n_cores > 1 && .Platform$OS.type != "unix") {
+    # Parallel processing for Windows
+    cl <- makeCluster(n_cores)
+    clusterExport(cl, c("process_ps_method", "ps_formula", "cache_dir", "use_cache", "method_params"),
+                  envir = environment())
+    clusterEvalQ(cl, {
+      library(MatchIt)
+      library(WeightIt)
+    })
+    
+    results <- parLapply(cl, 1:n_imp, function(i) {
+      process_ps_method(i, imputed_datasets[[i]], method_params, ps_formula, cache_dir, use_cache)
+    })
+    
+    stopCluster(cl)
+  } else {
+    # Sequential processing
+    results <- lapply(
+      1:n_imp,
+      function(i) process_ps_method(i, imputed_datasets[[i]], method_params, ps_formula, cache_dir, use_cache)
+    )
+  }
+  
+  return(results)
+}
 ```
 
-## Fit Outcome Models
+## Run Propensity Score Methods
 
-```{r fit-outcomes}
-# Get the interaction formulas from functions.R
-interaction_formulas <- get_analysis_formulas_reanalysis_interaction()
+```{r run-ps-methods}
+# Process only the specified number of imputations
+imputed_datasets_subset <- imputed_datasets[1:min(max_imputations_to_process, length(imputed_datasets))]
 
-# Use the full formula which includes three-way interaction
-outcome_formula <- interaction_formulas$full
+# Initialize results storage
+all_ps_results <- list()
 
-# Store outcome model results
+# Process each method sequentially (to manage memory)
+for (method_params in ps_methods) {
+  method_name <- method_params$name
+  log_message(paste0("\n", paste(rep("=", 50), collapse = "")))
+  log_message(paste0("Starting method: ", method_name))
+  
+  # Process all imputations for this method
+  method_results <- process_method_all_imputations(
+    method_params = method_params,
+    imputed_datasets = imputed_datasets_subset,
+    ps_formula = ps_formula,
+    cache_dir = cache_dir,
+    use_cache = use_cache,
+    n_cores = max_cores_for_ps
+  )
+  
+  all_ps_results[[method_name]] <- method_results
+  
+  # Clean up memory after each method
+  gc()
+  
+  log_message(paste0("Completed method: ", method_name))
+}
+
+log_message("All PS methods completed")
+```
+
+## Load twang_gbm Results from Reanalysis-4
+
+```{r load-twang}
+# Load pre-computed twang_gbm results
+twang_cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
+twang_results <- list()
+
+for (i in 1:max_imputations_to_process) {
+  twang_file <- file.path(twang_cache_dir, paste0("ps_imp_", i, ".rds"))
+  if (file.exists(twang_file)) {
+    twang_results[[i]] <- readRDS(twang_file)
+    log_message(paste0("Loaded twang_gbm results for imputation ", i))
+  } else {
+    log_message(paste0("WARNING: twang_gbm results not found for imputation ", i))
+    twang_results[[i]] <- NULL
+  }
+}
+
+# Add to all results
+all_ps_results[["twang_gbm"]] <- twang_results
+
+log_message(paste0("Loaded twang_gbm results for ", sum(!sapply(twang_results, is.null)), " imputations"))
+```
+
+## Outcome Analysis
+
+```{r outcome-analysis}
+# Get outcome formula from functions.R
+outcome_formulas <- get_analysis_formulas_reanalysis()
+outcome_formula <- outcome_formulas$full
+
+log_message("Starting outcome analysis for all methods")
+
+# Function to fit outcome model for a single method and imputation
+fit_outcome_model <- function(ps_result, data, formula, method_name) {
+  if (is.null(ps_result)) {
+    return(NULL)
+  }
+  
+  tryCatch({
+    if (method_name == "twang_gbm") {
+      # twang weights
+      weights <- ps_result$w[, "es.mean.ATT"]
+      data$weights <- weights
+      design <- svydesign(ids = ~e_mrn_deidentified, weights = ~weights, data = data)
+      
+    } else if (inherits(ps_result, "matchit")) {
+      # MatchIt results
+      if (grepl("subclass", method_name)) {
+        # Subclassification
+        matched_data <- match.data(ps_result, subclass = "subclass")
+        design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights = ~weights)
+        design <- postStratify(design, ~subclass, xtabs(~subclass, data = matched_data))
+      } else {
+        # Matching
+        matched_data <- get_matches(ps_result)
+        design <- svydesign(ids = ~e_mrn_deidentified, data = matched_data, weights = ~1)
+      }
+      
+    } else if (inherits(ps_result, "weightit")) {
+      # WeightIt results
+      weights <- ps_result$weights
+      data$weights <- weights
+      design <- svydesign(ids = ~e_mrn_deidentified, weights = ~weights, data = data)
+      
+    } else {
+      stop("Unknown result type")
+    }
+    
+    # Fit the model
+    model <- svyglm(formula, design = design, family = quasibinomial())
+    
+    # Extract coefficient for lapse
+    coef_lapse <- coef(summary(model))["ever_lapse_binary", ]
+    
+    return(list(
+      estimate = coef_lapse["Estimate"],
+      se = coef_lapse["Std. Error"],
+      model = model
+    ))
+    
+  }, error = function(e) {
+    cat(paste0("  Error fitting model for ", method_name, ": ", e$message, "\n"))
+    return(NULL)
+  })
+}
+
+# Process outcome models for all methods and imputations
 outcome_results <- list()
 
-for (imp_num in 1:max_imputations_to_process) {
-  imp_outcome_results <- list()
+for (method_name in names(all_ps_results)) {
+  log_message(paste0("Fitting outcome models for ", method_name))
   
-  for (method_name in names(all_results[[paste0("imp_", imp_num)]])) {
-    method_result <- all_results[[paste0("imp_", imp_num)]][[method_name]]
-    
-    if (!is.null(method_result$data)) {
-      # Fit weighted outcome model
-      design <- svydesign(
-        ids = ~ e_mrn_deidentified,
-        weights = ~ weights,
-        data = method_result$data
+  method_outcomes <- list()
+  ps_results <- all_ps_results[[method_name]]
+  
+  for (i in 1:length(ps_results)) {
+    if (!is.null(ps_results[[i]])) {
+      outcome <- fit_outcome_model(
+        ps_result = ps_results[[i]],
+        data = imputed_datasets_subset[[i]],
+        formula = outcome_formula,
+        method_name = method_name
       )
-      
-      model <- svyglm(
-        outcome_formula,
-        design = design,
-        family = quasibinomial()
-      )
-      
-      # Extract lapse coefficient
-      coef_summary <- coef(summary(model))
-      lapse_coef <- coef_summary["ever_lapse_binary", ]
-      
-      imp_outcome_results[[method_name]] <- data.frame(
-        method = method_name,
-        imputation = imp_num,
-        estimate = lapse_coef["Estimate"],
-        se = lapse_coef["Std. Error"],
-        or = exp(lapse_coef["Estimate"]),
-        ci_lower = exp(lapse_coef["Estimate"] - 1.96 * lapse_coef["Std. Error"]),
-        ci_upper = exp(lapse_coef["Estimate"] + 1.96 * lapse_coef["Std. Error"]),
-        p_value = lapse_coef["Pr(>|t|)"]
-      )
+      method_outcomes[[i]] <- outcome
     }
   }
   
-  outcome_results[[paste0("imp_", imp_num)]] <- do.call(rbind, imp_outcome_results)
+  outcome_results[[method_name]] <- method_outcomes
 }
 
-# Combine all outcome results
-all_outcome_results <- do.call(rbind, outcome_results)
-row.names(all_outcome_results) <- NULL
+log_message("Outcome analysis completed")
 ```
 
-## Pool Results Across Imputations
+## Pool Results Using Rubin's Rules
 
 ```{r pool-results}
-# Pool results using Rubin's rules for each method
-pooled_results <- list()
-
-for (method_name in unique(all_outcome_results$method)) {
-  method_data <- all_outcome_results[all_outcome_results$method == method_name, ]
+# Function to pool results across imputations using Rubin's rules
+pool_results <- function(method_outcomes) {
+  # Filter out NULL results
+  valid_outcomes <- method_outcomes[!sapply(method_outcomes, is.null)]
   
-  # Calculate pooled estimate (Rubin's rules)
-  m <- nrow(method_data)  # Number of imputations
+  if (length(valid_outcomes) == 0) {
+    return(NULL)
+  }
   
-  # Pooled estimate
-  q_bar <- mean(method_data$estimate)
+  # Extract estimates and SEs
+  estimates <- sapply(valid_outcomes, function(x) x$estimate)
+  ses <- sapply(valid_outcomes, function(x) x$se)
   
-  # Within-imputation variance
-  u_bar <- mean(method_data$se^2)
+  # Remove any NA values
+  valid_idx <- !is.na(estimates) & !is.na(ses)
+  estimates <- estimates[valid_idx]
+  ses <- ses[valid_idx]
+  
+  if (length(estimates) == 0) {
+    return(NULL)
+  }
+  
+  m <- length(estimates)  # Number of imputations
+  
+  # Pooled estimate (average of estimates)
+  pooled_estimate <- mean(estimates)
+  
+  # Within-imputation variance (average of squared SEs)
+  within_var <- mean(ses^2)
   
   # Between-imputation variance
-  b <- var(method_data$estimate)
+  between_var <- var(estimates)
   
-  # Total variance
-  t_var <- u_bar + (1 + 1/m) * b
+  # Total variance using Rubin's rules
+  total_var <- within_var + between_var + (between_var / m)
+  pooled_se <- sqrt(total_var)
   
-  # Standard error
-  se_pooled <- sqrt(t_var)
-  
-  # Degrees of freedom (Barnard-Rubin)
-  lambda <- (1 + 1/m) * b / t_var
+  # Degrees of freedom (Barnard-Rubin adjustment)
+  lambda <- (between_var + between_var/m) / total_var
   df_old <- (m - 1) / lambda^2
-  df_obs <- 90000  # Large sample approximation
-  df_adj <- df_old * df_obs / (df_old + df_obs)
   
-  # Confidence intervals
-  t_crit <- qt(0.975, df_adj)
-  ci_lower <- q_bar - t_crit * se_pooled
-  ci_upper <- q_bar + t_crit * se_pooled
+  # For large samples, use df_old
+  df <- df_old
   
-  # P-value
-  t_stat <- q_bar / se_pooled
-  p_value <- 2 * pt(-abs(t_stat), df_adj)
+  # Calculate confidence intervals and p-value
+  t_stat <- pooled_estimate / pooled_se
+  p_value <- 2 * pt(abs(t_stat), df = df, lower.tail = FALSE)
+  ci_lower <- pooled_estimate - qt(0.975, df) * pooled_se
+  ci_upper <- pooled_estimate + qt(0.975, df) * pooled_se
   
-  pooled_results[[method_name]] <- data.frame(
-    method = method_name,
-    estimate = q_bar,
-    se = se_pooled,
-    or = exp(q_bar),
-    ci_lower = exp(ci_lower),
-    ci_upper = exp(ci_upper),
+  # Convert to odds ratio scale
+  or <- exp(pooled_estimate)
+  or_ci_lower <- exp(ci_lower)
+  or_ci_upper <- exp(ci_upper)
+  
+  return(list(
+    estimate = pooled_estimate,
+    se = pooled_se,
+    or = or,
+    or_ci_lower = or_ci_lower,
+    or_ci_upper = or_ci_upper,
     p_value = p_value,
-    fmi = lambda,
-    n_imputations = m
-  )
+    n_imputations = m,
+    df = df
+  ))
 }
 
-# Combine pooled results
-pooled_df <- do.call(rbind, pooled_results)
-row.names(pooled_df) <- NULL
+# Pool results for each method
+pooled_results <- list()
 
-# Sort by OR
-pooled_df <- pooled_df[order(pooled_df$or), ]
+for (method_name in names(outcome_results)) {
+  pooled <- pool_results(outcome_results[[method_name]])
+  if (!is.null(pooled)) {
+    pooled$method <- method_name
+    pooled_results[[method_name]] <- pooled
+    log_message(paste0("Pooled results for ", method_name, ": OR = ", 
+                      round(pooled$or, 3), " (", round(pooled$or_ci_lower, 3), 
+                      ", ", round(pooled$or_ci_upper, 3), ")"))
+  } else {
+    log_message(paste0("WARNING: Could not pool results for ", method_name))
+  }
+}
 
-# Add method type
-pooled_df <- merge(pooled_df, methods_summary[, c("Method", "Type", "Package")], 
-                   by.x = "method", by.y = "Method", all.x = TRUE)
-
-# Display pooled results
-kable(pooled_df[, c("method", "Type", "or", "ci_lower", "ci_upper", "p_value")],
-      caption = "Pooled results across all methods",
-      digits = 3,
-      col.names = c("Method", "Type", "OR", "CI Lower", "CI Upper", "P-value"))
+# Save pooled results
+saveRDS(pooled_results, file.path(reanalysis_data_dir, "alternative_ps_results_pooled.rds"))
+log_message("Saved pooled results")
 ```
 
-## Forest Plot Comparison
+## Create Forest Plot
 
 ```{r forest-plot}
-#| fig-height: 10
-#| fig-width: 12
-
 # Prepare data for forest plot
-forest_data <- pooled_df
+forest_data <- do.call(rbind, lapply(names(pooled_results), function(method) {
+  res <- pooled_results[[method]]
+  data.frame(
+    method = method,
+    or = res$or,
+    lower = res$or_ci_lower,
+    upper = res$or_ci_upper,
+    p_value = res$p_value,
+    stringsAsFactors = FALSE
+  )
+}))
 
-# Create method labels
-forest_data$method_label <- paste0(
-  forest_data$method, " (", forest_data$Package, ")"
-)
-
-# Order by OR
+# Order by odds ratio
 forest_data <- forest_data[order(forest_data$or), ]
-forest_data$method_label <- factor(forest_data$method_label, 
-                                  levels = forest_data$method_label)
 
-# Define colors by package
-forest_data$color <- case_when(
-  forest_data$Package == "matchit" ~ "#2E86AB",
-  forest_data$Package == "weightit" ~ "#A23B72",
-  forest_data$Package == "twang" ~ "#F18F01",
-  TRUE ~ "black"
-)
+# Create more readable method names
+forest_data$method_label <- gsub("_", " ", forest_data$method)
+forest_data$method_label <- gsub("nearest ", "NN-", forest_data$method_label)
+forest_data$method_label <- gsub("subclass ", "Subclass-", forest_data$method_label)
+forest_data$method_label <- tools::toTitleCase(forest_data$method_label)
 
-# Create forest plot
-forest_plot <- ggplot(forest_data, aes(x = method_label, y = or)) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50", size = 0.5) +
-  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper, color = color),
-                  size = 0.8, linewidth = 0.8) +
-  geom_point(aes(color = color), size = 3) +
-  scale_color_identity() +
-  coord_flip() +
-  scale_y_continuous(
-    breaks = seq(0.8, max(forest_data$ci_upper) + 0.2, by = 0.2),
-    limits = c(0.8, max(forest_data$ci_upper) + 0.2)
+# Create forest plot using ggplot2
+library(ggplot2)
+
+forest_plot <- ggplot(forest_data, aes(x = or, y = reorder(method_label, or))) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.2) +
+  geom_point(size = 3, shape = 18) +
+  scale_x_continuous(
+    trans = "log",
+    breaks = c(0.5, 0.75, 1, 1.5, 2, 3),
+    labels = c("0.5", "0.75", "1.0", "1.5", "2.0", "3.0")
   ) +
   labs(
-    x = NULL,
-    y = "Odds Ratio (95% CI)",
-    title = "Comparison of Propensity Score Methods",
-    subtitle = paste0("Effect of Lapsing on Vision Impairment/Blindness (", 
-                     max_imputations_to_process, " imputations)"),
-    caption = "Doubly robust estimation with ATT weights\nColors: Blue=MatchIt, Purple=WeightIt, Orange=twang"
+    x = "Odds Ratio (95% CI)",
+    y = "Propensity Score Method",
+    title = "Effect of Lapse on Vision Loss Across PS Methods",
+    subtitle = paste0("Based on ", max_imputations_to_process, " imputations with Rubin's pooling")
   ) +
-  theme_minimal(base_size = 12) +
+  theme_minimal() +
   theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
-    plot.subtitle = element_text(hjust = 0.5, size = 12),
-    axis.text.y = element_text(size = 11),
-    axis.text.x = element_text(size = 11),
-    axis.title.x = element_text(size = 12, margin = margin(t = 10)),
-    panel.grid.major.y = element_line(color = "gray90"),
+    panel.grid.major.y = element_blank(),
     panel.grid.minor = element_blank(),
-    plot.margin = margin(20, 20, 20, 20),
-    plot.caption = element_text(size = 9, hjust = 0.5, margin = margin(t = 15))
+    axis.text.y = element_text(hjust = 0)
   )
-
-# Add OR values as text
-forest_plot <- forest_plot +
-  geom_text(aes(label = sprintf("%.2f", or)), 
-            hjust = -0.3, size = 3.5)
 
 print(forest_plot)
 
 # Save plot
-ggsave(file.path(reanalysis_data_dir, "forest_plot_all_methods.png"),
-       forest_plot, width = 12, height = 10, dpi = 300)
-```
-
-## Balance Assessment Across Methods
-
-```{r balance-assessment}
-#| fig-height: 8
-#| fig-width: 12
-
-# Extract balance statistics for first imputation (as example)
-balance_stats <- list()
-
-for (method_name in names(all_results$imp_1)) {
-  method_result <- all_results$imp_1[[method_name]]
-  
-  if (!is.null(method_result$balance)) {
-    bal_obj <- method_result$balance
-    
-    # Extract standardized mean differences
-    smd_data <- bal_obj$Balance
-    
-    # Get max absolute SMD
-    max_smd <- max(abs(smd_data$Diff.Adj), na.rm = TRUE)
-    mean_smd <- mean(abs(smd_data$Diff.Adj), na.rm = TRUE)
-    
-    balance_stats[[method_name]] <- data.frame(
-      method = method_name,
-      max_smd = max_smd,
-      mean_smd = mean_smd,
-      n_balanced = sum(abs(smd_data$Diff.Adj) < 0.1, na.rm = TRUE),
-      n_total = nrow(smd_data)
-    )
-  } else if (method_name == "twang_gbm") {
-    # Calculate balance for twang manually
-    imp_data <- imputed_datasets[[1]]
-    imp_data$weights <- twang_weights[[1]]
-    
-    bal_obj <- bal.tab(
-      ps_formula,
-      data = imp_data,
-      weights = imp_data$weights,
-      estimand = "ATT",
-      stats = c("m", "v"),
-      thresholds = c(m = 0.1)
-    )
-    
-    smd_data <- bal_obj$Balance
-    max_smd <- max(abs(smd_data$Diff.Adj), na.rm = TRUE)
-    mean_smd <- mean(abs(smd_data$Diff.Adj), na.rm = TRUE)
-    
-    balance_stats[[method_name]] <- data.frame(
-      method = method_name,
-      max_smd = max_smd,
-      mean_smd = mean_smd,
-      n_balanced = sum(abs(smd_data$Diff.Adj) < 0.1, na.rm = TRUE),
-      n_total = nrow(smd_data)
-    )
-  }
-}
-
-# Combine balance statistics
-balance_df <- do.call(rbind, balance_stats)
-row.names(balance_df) <- NULL
-
-# Add package info
-balance_df <- merge(balance_df, methods_summary[, c("Method", "Package")],
-                    by.x = "method", by.y = "Method", all.x = TRUE)
-
-# Sort by mean SMD
-balance_df <- balance_df[order(balance_df$mean_smd), ]
-
-# Display balance table
-kable(balance_df[, c("method", "max_smd", "mean_smd", "n_balanced", "n_total")],
-      caption = "Balance statistics across methods (Imputation 1)",
-      digits = 3,
-      col.names = c("Method", "Max |SMD|", "Mean |SMD|", "N Balanced", "N Covariates"))
-
-# Create balance comparison plot
-balance_df$method <- factor(balance_df$method, levels = balance_df$method)
-
-balance_plot <- ggplot(balance_df, aes(x = method)) +
-  geom_col(aes(y = mean_smd, fill = Package), alpha = 0.7) +
-  geom_point(aes(y = max_smd), size = 3, color = "red", shape = 17) +
-  geom_hline(yintercept = 0.1, linetype = "dashed", color = "red", alpha = 0.5) +
-  coord_flip() +
-  scale_fill_manual(values = c(matchit = "#2E86AB", weightit = "#A23B72", twang = "#F18F01")) +
-  labs(
-    x = NULL,
-    y = "Standardized Mean Difference",
-    title = "Covariate Balance Across Methods",
-    subtitle = "Bars = Mean |SMD|, Red triangles = Max |SMD|, Dashed line = 0.1 threshold",
-    fill = "Package"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold"),
-    plot.subtitle = element_text(hjust = 0.5, size = 10),
-    legend.position = "bottom"
-  )
-
-print(balance_plot)
-```
-
-## Love Plots for Selected Methods
-
-```{r love-plots}
-#| fig-height: 10
-#| fig-width: 14
-
-# Create Love plots for best performing methods from each package
-selected_methods <- c("nearest_gbm", "entropy", "twang_gbm")
-
-love_plots <- list()
-
-for (method_name in selected_methods) {
-  if (method_name %in% names(all_results$imp_1)) {
-    
-    # Get the data and weights
-    method_data <- all_results$imp_1[[method_name]]$data
-    
-    if (!is.null(method_data)) {
-      # Create Love plot
-      love <- love.plot(
-        bal.tab(ps_formula, 
-                data = method_data,
-                weights = method_data$weights,
-                estimand = "ATT",
-                s.d.denom = "treated"),
-        thresholds = c(m = 0.1),
-        title = paste("Love Plot:", method_name),
-        colors = c("darkblue", "lightblue"),
-        shapes = c(16, 17),
-        line = TRUE
-      ) +
-        theme_minimal() +
-        theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-      
-      love_plots[[method_name]] <- love
-    }
-  }
-}
-
-# Arrange Love plots
-if (length(love_plots) > 0) {
-  grid.arrange(grobs = love_plots, ncol = 2)
-}
-```
-
-## Weight Distribution Comparison
-
-```{r weight-distribution}
-#| fig-height: 8
-#| fig-width: 12
-
-# Compare weight distributions for IPTW methods
-iptw_methods <- c("cbps", "entropy", "bart", "twang_gbm")
-
-weight_data <- list()
-
-for (method_name in iptw_methods) {
-  if (method_name %in% names(all_results$imp_1)) {
-    weights <- all_results$imp_1[[method_name]]$weights
-    
-    if (!is.null(weights)) {
-      weight_data[[method_name]] <- data.frame(
-        method = method_name,
-        weights = weights,
-        treated = imputed_datasets[[1]]$ever_lapse_binary
-      )
-    }
-  }
-}
-
-if (length(weight_data) > 0) {
-  # Combine weight data
-  weight_df <- do.call(rbind, weight_data)
-  
-  # Create weight distribution plot
-  weight_dist_plot <- ggplot(weight_df, aes(x = weights, fill = factor(treated))) +
-    geom_histogram(alpha = 0.6, position = "identity", bins = 50) +
-    facet_wrap(~ method, scales = "free", ncol = 2) +
-    scale_fill_manual(values = c("0" = "blue", "1" = "red"),
-                     labels = c("0" = "Control", "1" = "Treated"),
-                     name = "Group") +
-    labs(
-      x = "Weight",
-      y = "Count",
-      title = "Weight Distributions for IPTW Methods",
-      subtitle = "Comparison across different weighting approaches"
-    ) +
-    theme_minimal(base_size = 11) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5),
-      legend.position = "bottom"
-    )
-  
-  print(weight_dist_plot)
-  
-  # Weight statistics table
-  weight_stats <- weight_df %>%
-    group_by(method) %>%
-    summarise(
-      Mean = mean(weights),
-      SD = sd(weights),
-      Min = min(weights),
-      Max = max(weights),
-      `95th Pct` = quantile(weights, 0.95),
-      `99th Pct` = quantile(weights, 0.99)
-    )
-  
-  kable(weight_stats,
-        caption = "Weight distribution statistics for IPTW methods",
-        digits = 3)
-}
-```
-
-## Computation Time Comparison
-
-```{r computation-time}
-# Extract computation times
-comp_times <- list()
-
-for (imp_num in 1:min(5, max_imputations_to_process)) {
-  for (method_name in names(all_results[[paste0("imp_", imp_num)]])) {
-    if (method_name != "twang_gbm") {  # Exclude pre-computed
-      comp_time <- all_results[[paste0("imp_", imp_num)]][[method_name]]$computation_time
-      
-      if (!is.na(comp_time)) {
-        comp_times[[paste0(method_name, "_", imp_num)]] <- data.frame(
-          method = method_name,
-          imputation = imp_num,
-          time_seconds = comp_time
-        )
-      }
-    }
-  }
-}
-
-if (length(comp_times) > 0) {
-  comp_time_df <- do.call(rbind, comp_times)
-  row.names(comp_time_df) <- NULL
-  
-  # Summary by method
-  time_summary <- comp_time_df %>%
-    group_by(method) %>%
-    summarise(
-      mean_time = mean(time_seconds),
-      sd_time = sd(time_seconds),
-      total_time = sum(time_seconds)
-    ) %>%
-    arrange(mean_time)
-  
-  kable(time_summary,
-        caption = "Computation time by method (seconds)",
-        digits = 2,
-        col.names = c("Method", "Mean Time", "SD", "Total Time"))
-  
-  # Time plot
-  time_plot <- ggplot(time_summary, aes(x = reorder(method, mean_time), y = mean_time)) +
-    geom_col(fill = "steelblue", alpha = 0.7) +
-    geom_errorbar(aes(ymin = mean_time - sd_time, ymax = mean_time + sd_time),
-                  width = 0.2) +
-    coord_flip() +
-    labs(
-      x = NULL,
-      y = "Time (seconds)",
-      title = "Computation Time by Method",
-      subtitle = "Mean ± SD across imputations"
-    ) +
-    theme_minimal(base_size = 12) +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  
-  print(time_plot)
-}
-```
-
-## Summary and Recommendations
-
-```{r summary}
-# Create summary table
-summary_table <- pooled_df %>%
-  select(method, Type, Package, or, ci_lower, ci_upper, p_value) %>%
-  left_join(balance_df[, c("method", "mean_smd", "max_smd")], by = "method") %>%
-  arrange(or)
-
-# Identify best methods by criteria
-best_or <- summary_table$method[which.min(abs(summary_table$or - median(summary_table$or)))]
-best_balance <- summary_table$method[which.min(summary_table$mean_smd)]
-most_conservative <- summary_table$method[which.max(summary_table$or)]
-most_liberal <- summary_table$method[which.min(summary_table$or)]
-
-recommendations <- data.frame(
-  Criterion = c(
-    "Most balanced covariates",
-    "Median effect size",
-    "Most conservative (highest OR)",
-    "Most liberal (lowest OR)",
-    "Primary analysis (twang)"
-  ),
-  Method = c(
-    best_balance,
-    best_or,
-    most_conservative,
-    most_liberal,
-    "twang_gbm"
-  ),
-  OR = c(
-    summary_table$or[summary_table$method == best_balance],
-    summary_table$or[summary_table$method == best_or],
-    summary_table$or[summary_table$method == most_conservative],
-    summary_table$or[summary_table$method == most_liberal],
-    summary_table$or[summary_table$method == "twang_gbm"]
-  )
+ggsave(
+  filename = file.path(reanalysis_data_dir, "forest_plot_ps_methods.png"),
+  plot = forest_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
 )
 
-kable(recommendations,
-      caption = "Method recommendations by criterion",
-      digits = 3)
-
-# Range of estimates
-or_range <- range(summary_table$or)
-cat("\n### Key Findings:\n\n")
-cat(paste0("- **Range of OR estimates**: ", round(or_range[1], 3), " to ", round(or_range[2], 3), "\n"))
-cat(paste0("- **All methods show significant effect**: ", 
-          sum(summary_table$p_value < 0.05), " of ", nrow(summary_table), " methods\n"))
-cat(paste0("- **Best balance achieved by**: ", best_balance, 
-          " (mean |SMD| = ", round(balance_df$mean_smd[balance_df$method == best_balance], 3), ")\n"))
-cat(paste0("- **Primary method (twang) OR**: ", 
-          round(summary_table$or[summary_table$method == "twang_gbm"], 3), "\n"))
+log_message("Forest plot saved")
 ```
 
-## Save Results
+## Summary Tables
 
-```{r save-results}
-# Save all results
-alternative_spec_results <- list(
-  pooled_results = pooled_df,
-  balance_stats = balance_df,
-  summary_table = summary_table,
-  recommendations = recommendations,
-  all_results = all_results,
-  outcome_results = all_outcome_results,
-  timestamp = Sys.time(),
-  n_imputations_used = max_imputations_to_process
-)
+```{r summary-tables}
+# Create detailed summary table
+summary_table <- do.call(rbind, lapply(names(pooled_results), function(method) {
+  res <- pooled_results[[method]]
+  data.frame(
+    Method = method,
+    `OR` = sprintf("%.3f", res$or),
+    `95% CI` = sprintf("(%.3f, %.3f)", res$or_ci_lower, res$or_ci_upper),
+    `P-value` = sprintf("%.4f", res$p_value),
+    `N Imputations` = res$n_imputations,
+    stringsAsFactors = FALSE
+  )
+}))
 
-saveRDS(alternative_spec_results, 
-        file.path(reanalysis_data_dir, "alternative_specifications_results.rds"))
+# Sort by OR
+summary_table <- summary_table[order(as.numeric(gsub("([0-9.]+)", "\\1", summary_table$OR))), ]
 
-# Save forest plot
-ggsave(file.path(reanalysis_data_dir, "forest_plot_all_methods.pdf"),
-       forest_plot, width = 12, height = 10)
+kable(summary_table, 
+      caption = "Pooled Effect Estimates Across Propensity Score Methods",
+      col.names = c("Method", "Odds Ratio", "95% CI", "P-value", "N Imputations"),
+      align = c("l", "r", "r", "r", "r"))
 
-message("Results saved to: ", reanalysis_data_dir)
+# Save to CSV
+write.csv(summary_table, 
+          file.path(reanalysis_data_dir, "ps_methods_comparison_table.csv"),
+          row.names = FALSE)
+
+log_message("Summary table saved")
+
+# Create comparison with twang_gbm as reference
+if ("twang_gbm" %in% names(pooled_results)) {
+  ref_or <- pooled_results[["twang_gbm"]]$or
+  
+  comparison_table <- do.call(rbind, lapply(names(pooled_results), function(method) {
+    res <- pooled_results[[method]]
+    data.frame(
+      Method = method,
+      OR = res$or,
+      `Relative to twang` = sprintf("%.1f%%", 100 * (res$or / ref_or - 1)),
+      stringsAsFactors = FALSE
+    )
+  }))
+  
+  kable(comparison_table,
+        caption = "Comparison of Methods Relative to twang_gbm",
+        col.names = c("Method", "Odds Ratio", "% Difference from twang_gbm"),
+        align = c("l", "r", "r"))
+}
 ```
 
-## Conclusions
+## Summary
 
-The comprehensive comparison of propensity score methods demonstrates:
+This analysis compared `r length(pooled_results)` different propensity score methods across `r max_imputations_to_process` multiply imputed datasets. Results were pooled using Rubin's rules to account for between-imputation variability.
 
-1. **Robustness of main finding**: All `r nrow(summary_table)` methods show a significant positive association between lapsing and vision impairment/blindness.
+Key findings:
+- Method with smallest effect: `r names(pooled_results)[which.min(sapply(pooled_results, function(x) x$or))]`
+- Method with largest effect: `r names(pooled_results)[which.max(sapply(pooled_results, function(x) x$or))]`
+- Range of odds ratios: `r sprintf("%.3f to %.3f", min(sapply(pooled_results, function(x) x$or)), max(sapply(pooled_results, function(x) x$or)))`
 
-2. **Effect size consistency**: ORs range from `r round(or_range[1], 2)` to `r round(or_range[2], 2)`, indicating the finding is not sensitive to PS specification.
-
-3. **Balance quality**: IPTW methods generally achieve better balance than matching methods, with `r best_balance` achieving the best overall balance.
-
-4. **Primary analysis validation**: The twang GBM method used in the primary analysis produces results consistent with the median of all methods.
-
-5. **Computational efficiency**: Simpler methods (GLM-based) are fastest while maintaining comparable performance to more complex approaches.
-
-This comprehensive sensitivity analysis strengthens confidence in the main finding that lapsing from care increases the risk of vision impairment/blindness in diabetic patients.
