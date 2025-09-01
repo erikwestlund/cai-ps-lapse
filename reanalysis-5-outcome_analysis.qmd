@@ -479,14 +479,20 @@ if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
     # Get the fitted model for this imputation
     model <- fitted_models[[i]]
     
+    # Get the data for this imputation (needed for emmeans)
+    imp_data <- imputed_datasets[[i]]
+    imp_data$weights <- twang_weights[[i]]
+    
     # Set emmeans options to handle larger reference grids
     emm_options(rg.limit = 130000)
     
     # Calculate emmeans on the response scale
+    # Provide data explicitly for svyglm models
     emm <- emmeans(model, 
                    ~ ever_lapse_binary,
                    type = "response",
-                   weights = "proportional")
+                   weights = "proportional",
+                   data = imp_data)
     
     # Get contrast (difference in probabilities)
     contrast <- pairs(emm, reverse = TRUE)  # Lapsed - Not Lapsed
