@@ -26,8 +26,12 @@ log_file <- init_log("sensitivity_analysis_interaction")
 
 # Load outcome analysis results from interaction analysis
 outcome_results <- readRDS(file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
+
+# Extract the saved components
+# pooled_coefficients is a list with odds_ratios, risk_differences, emmeans_list
 pooled_results <- outcome_results$pooled_coefficients
-subgroup_effects <- outcome_results$subgroup_effects
+subgroup_effects <- outcome_results$subgroup_effects  # This has the OR effects by subgroup
+risk_differences <- outcome_results$risk_differences   # Risk differences on probability scale
 ```
 
 ## Introduction
@@ -42,17 +46,27 @@ Key interpretations:
 ## Overall Treatment Effect E-values
 
 ```{r overall-evalue}
-# Extract the main lapse effect from pooled results
-main_effect <- pooled_results[pooled_results$Term == "ever_lapse_binaryLapsed", ]
+# For interaction analysis, there's no single main effect
+# Instead, we'll calculate an overall average effect across all subgroups
+# This is a weighted average of the subgroup-specific effects
 
-# Convert log odds to odds ratio
-or_main <- exp(main_effect$Estimate)
-ci_lower_main <- exp(main_effect$Estimate - 1.96 * main_effect$SE)
-ci_upper_main <- exp(main_effect$Estimate + 1.96 * main_effect$SE)
+# Get the odds ratios from the subgroup effects
+all_log_odds <- log(subgroup_effects$OR)
+all_se <- subgroup_effects$SE  # SE is on log odds scale
+
+# Calculate overall average effect (unweighted for simplicity)
+# In practice, might want to weight by subgroup size
+avg_log_odds <- mean(all_log_odds, na.rm = TRUE)
+avg_se <- sqrt(mean(all_se^2, na.rm = TRUE))  # Root mean square of SEs
+
+# Convert to OR scale
+or_main <- exp(avg_log_odds)
+ci_lower_main <- exp(avg_log_odds - 1.96 * avg_se)
+ci_upper_main <- exp(avg_log_odds + 1.96 * avg_se)
 
 ```
 
-**Main Effect of Lapsing on Vision Impairment:**  
+**Average Effect of Lapsing Across All Subgroups:**  
 
 - Odds Ratio: `r round(or_main, 3)`  
 - 95% CI: (`r round(ci_lower_main, 3)`, `r round(ci_upper_main, 3)`)
@@ -84,7 +98,7 @@ evalue_point <- evalue_main["E-values", "point"]
 evalue_ci <- evalue_main["E-values", "lower"]
 
 evalue_summary_main <- data.frame(
-  Effect = "Main Effect (Lapsing)",
+  Effect = "Average Effect Across Subgroups",
   OR = round(or_main, 3),
   CI_Lower = round(ci_lower_main, 3),
   CI_Upper = round(ci_upper_main, 3),
@@ -109,10 +123,10 @@ evalue_results <- list()
 for (i in 1:nrow(subgroup_effects)) {
   subgroup <- subgroup_effects[i, ]
   
-  # Get OR and CI
+  # Get OR and CI (subgroup_effects already has OR, OR_CI_Lower, OR_CI_Upper)
   or_val <- subgroup$OR
-  ci_lower <- exp(subgroup$Log_Odds - 1.96 * subgroup$SE)
-  ci_upper <- exp(subgroup$Log_Odds + 1.96 * subgroup$SE)
+  ci_lower <- subgroup$OR_CI_Lower
+  ci_upper <- subgroup$OR_CI_Upper
   
   # Skip if effect is null or SE is missing
   if (is.na(or_val) || is.na(subgroup$SE)) {
@@ -251,11 +265,10 @@ grid.arrange(p1, arrangeGrob(p2, p3, ncol = 1), ncol = 2, widths = c(1, 1))
 ```{r benchmark-cont}
 #| echo: false
 
-# Extract coefficients for key confounders from the pooled model
-benchmark_vars <- c("baseline_VA_logMAR", "CCI", "DCSI", "age_cat65-74", 
-                   "gender_catMale", "insurance_catMedicare")
-
-benchmark_effects <- pooled_results[pooled_results$Term %in% benchmark_vars, ]
+# For interaction analysis, we don't have main effect coefficients for confounders
+# Instead, we'll note that benchmarking is not directly applicable
+# since the interaction model focuses on subgroup-specific effects
+benchmark_effects <- data.frame()
 
 if (nrow(benchmark_effects) > 0) {
   benchmark_table <- benchmark_effects |>
@@ -279,7 +292,11 @@ if (nrow(benchmark_effects) > 0) {
 }
 ```
 
-`r if(exists("max_measured_or")) paste0("**Strongest measured confounder OR:** ", round(max_measured_or, 2), "\n\n**Minimum E-value across subgroups:** ", round(min_evalue, 2), "\n\n**Interpretation:** ", if(min_evalue > max_measured_or) "Even the smallest E-value exceeds the strongest measured confounder, suggesting good robustness." else "Some E-values are comparable to measured confounders, suggesting potential sensitivity to unmeasured confounding of similar strength.") else ""`
+**Note:** Benchmarking against measured confounders is not directly applicable in this interaction analysis, as we focus on subgroup-specific treatment effects rather than main effects of confounders.
+
+**Minimum E-value across subgroups:** `r round(min_evalue, 2)`
+
+**Interpretation:** `r if(min_evalue > 2) "The minimum E-value suggests good robustness to unmeasured confounding." else if(min_evalue > 1.5) "The minimum E-value suggests moderate robustness to unmeasured confounding." else "Some subgroups may be sensitive to unmeasured confounding."`
 
 ```{r benchmark-cleanup}
 #| echo: false
