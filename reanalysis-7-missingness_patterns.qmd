@@ -16,6 +16,7 @@ source("functions.R")
 setup_analysis(seed = 2025)
 
 # Additional packages for this analysis
+library(readr)
 library(knitr)
 library(tableone)
 library(ggplot2)
@@ -25,7 +26,8 @@ library(gridExtra)
 log_file <- init_log("missingness_pattern_analysis")
 
 # Load the original data before exclusions
-original_data <- readRDS(file.path(reanalysis_data_dir, "cai_lapse_data_processed.rds"))
+# This is the combined data file that includes all patients before any exclusions
+original_data <- read_csv(reanalysis_data_file_path, show_col_types = FALSE)
 
 # Load imputed datasets to get the included sample
 imputed_datasets <- list()

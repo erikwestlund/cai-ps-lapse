@@ -48,6 +48,7 @@ install_dependencies <- function() {
     "gt",
     "flextable",
     "gtsummary",
+    "tableone",
     
     # Balance checking and diagnostics
     "cobalt",
@@ -133,6 +134,7 @@ load_required_libraries <- function() {
     "flextable",
     "gt",
     "kableExtra",
+    "tableone",
     "EValue",
     "doParallel"
   )
