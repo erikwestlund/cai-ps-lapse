@@ -569,24 +569,29 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     # Update progress
     progress <- update_progress(progress)
     
+    # Get the data for this imputation (needed for emmeans)
+    imp_data <- imputed_datasets[[i]]
+    imp_data$weights <- twang_weights[[i]]
+    
     # Get marginal means on both log odds and response scales
     emm_logit <- emmeans(models[[i]], 
                          ~ ever_lapse_binary | dr_severity * any_treatment,
-                         weights = "proportional")
+                         weights = "proportional",
+                         data = imp_data)
     
     emm_response <- emmeans(models[[i]], 
                            ~ ever_lapse_binary | dr_severity * any_treatment,
                            weights = "proportional",
-                           type = "response")
+                           type = "response",
+                           data = imp_data)
     
     # Get contrasts on log odds scale (for odds ratios)
     lapse_contrasts <- contrast(emm_logit, method = "revpairwise", 
                                by = c("dr_severity", "any_treatment"))
     
     # Get pairwise comparisons on response scale (for risk differences)
-    # Use regrid to ensure we get differences not ratios
-    risk_diffs <- regrid(emm_response) |>
-      pairs(reverse = TRUE, by = c("dr_severity", "any_treatment"))
+    risk_diffs <- pairs(emm_response, reverse = TRUE, 
+                       by = c("dr_severity", "any_treatment"))
     
     all_emmeans[[i]] <- as.data.frame(emm_response)
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
