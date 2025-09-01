@@ -589,8 +589,9 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
                                by = c("dr_severity", "any_treatment"))
     
     # Get pairwise comparisons on response scale (for risk differences)
-    risk_diffs <- pairs(emm_response, reverse = TRUE, 
-                       by = c("dr_severity", "any_treatment"))
+    # Use regrid to ensure we get differences not ratios
+    risk_diffs <- regrid(emm_response) |>
+      pairs(reverse = TRUE, by = c("dr_severity", "any_treatment"))
     
     all_emmeans[[i]] <- as.data.frame(emm_response)
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
