@@ -40,54 +40,18 @@ if (analysis_mode == "test") {
 **Analysis mode:** `r analysis_mode`  
 **Imputations to process:** `r if(!is.null(max_imputations_to_process)) max_imputations_to_process else "all available"`
 
-## Pooling Methodology for Survey-Weighted Multiple Imputation
+## Analysis Overview
 
-This analysis combines:
-1. **Multiple Imputation** to handle missing data
-2. **IPTW weighting** from propensity scores to handle confounding
-3. **Survey methods** to handle clustering (multiple eyes per patient)
+This analysis examines the three-way interaction between:
+- **Lapse status** (primary exposure)
+- **DR severity** (effect modifier)
+- **Treatment status** (effect modifier)
 
-### Rubin's Rules for Combining Results
-
-Following Rubin (1987) and Barnard & Rubin (1999), for each parameter θ, we combine estimates across m imputations:
-
-1. **Point estimate**: $\bar{Q} = \frac{1}{m}\sum_{i=1}^{m} \hat{\theta}_i$
-
-2. **Within-imputation variance**: $\bar{U} = \frac{1}{m}\sum_{i=1}^{m} \hat{SE}_i^2$
-
-3. **Between-imputation variance**: $B = \frac{1}{m-1}\sum_{i=1}^{m} (\hat{\theta}_i - \bar{Q})^2$
-
-4. **Total variance**: $T = \bar{U} + (1 + \frac{1}{m})B$
-
-5. **Degrees of freedom** (Barnard-Rubin adjustment for finite samples):
-   - $r = (1 + \frac{1}{m}) \frac{B}{\bar{U}}$ (relative increase in variance)
-   - $df_{old} = (m-1) \times (1 + \frac{1}{r})^2$ (large sample df)
-   - $\lambda = \frac{r + 2/(df_{com} + 3)}{r + 1}$ (fraction of missing information)
-   - $df_{obs} = \frac{df_{com} + 1}{df_{com} + 3} \times df_{com} \times (1 - \lambda)$ (observed df)
-   - $df_{adj} = \frac{df_{old} \times df_{obs}}{df_{old} + df_{obs}}$ (adjusted df)
-   
-Where $df_{com}$ is the complete-data degrees of freedom.
-
-**References:**
-- Rubin, D.B. (1987). *Multiple Imputation for Nonresponse in Surveys*. Wiley.
-- Barnard, J. & Rubin, D.B. (1999). Small-sample degrees of freedom with multiple imputation. *Biometrika*, 86(4), 948-955.
-
-### Implementation Using mitools
-
-The `mitools` package (Lumley, 2020) provides robust implementations of Rubin's rules and extensions for survey data:
-
-- **`MIcombine()`**: Implements standard Rubin's rules with Barnard-Rubin adjustment
-- **`with.imputationList()`**: Applies analyses across imputations
-- **`pool.scalar()`**: Combines scalar quantities (e.g., R²)
-- **`MIextract()`**: Extracts results from fitted models
-
-This analysis uses `mitools` rather than manual implementation to ensure accuracy and handle edge cases properly.
-
-### Special Considerations for Survey Weights
-
-- Standard errors from `svyglm` already account for IPTW weights
-- Pooling preserves the design-based variance estimation
-- Joint tests use Li-Raghunathan-Rubin method for χ² statistics (Li et al., 1991)
+The model uses:
+- Multiple imputation to handle missing data
+- IPTW weights from propensity scores
+- Survey methods for clustered data (multiple eyes per patient)
+- Pooling via Rubin's rules across imputations
 
 ## Load Data and Weights
 
@@ -224,17 +188,18 @@ library(tidyr)
 crosstab_wide <- crosstab_df |>
   pivot_wider(names_from = Lapse_Status, 
               values_from = Count,
-              values_fill = 0) |>
+              values_fill = 0,
+              names_prefix = "Lapse_") |>  # Add prefix to avoid numeric column names
   arrange(DR_Severity, Treatment) |>
   mutate(
-    Total = `0` + `1`,
-    No_Lapse_Pct = paste0(round(100 * `0` / Total, 1), "%"),
-    Lapsed_Pct = paste0(round(100 * `1` / Total, 1), "%"),
+    Total = Lapse_0 + Lapse_1,
+    No_Lapse_Pct = paste0(round(100 * Lapse_0 / Total, 1), "%"),
+    Lapsed_Pct = paste0(round(100 * Lapse_1 / Total, 1), "%"),
     Row_Pct = paste0(round(100 * Total / total_n, 1), "%")
   ) |>
   select(DR_Severity, Treatment, 
-         No_Lapse = `0`, No_Lapse_Pct,
-         Lapsed = `1`, Lapsed_Pct,
+         No_Lapse = Lapse_0, No_Lapse_Pct,
+         Lapsed = Lapse_1, Lapsed_Pct,
          Total, Row_Pct)
 
 kable(crosstab_wide, 
