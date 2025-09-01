@@ -20,10 +20,10 @@ library(knitr)
 library(ggplot2)
 library(gridExtra)
 
-# Load results from previous steps
-ps_results <- readRDS(file.path(reanalysis_data_dir, "ps_results_twang.rds"))
+# Initialize logging
+log_file <- init_log("sensitivity_analysis_interaction")
 
-# Load outcome analysis results (from step 4)
+# Load outcome analysis results from interaction analysis
 outcome_results <- readRDS(file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
 pooled_results <- outcome_results$pooled_coefficients
 subgroup_effects <- outcome_results$subgroup_effects
@@ -388,3 +388,10 @@ Based on the E-value analysis:
 ### References
 - VanderWeele TJ, Ding P. Sensitivity Analysis in Observational Research: Introducing the E-Value. Ann Intern Med. 2017;167(4):268-274.
 - Mathur MB, Ding P, Riddell CA, VanderWeele TJ. Website and R package for computing E-values. Epidemiology. 2018;29(5):e45-e47.
+
+```{r finalize-log}
+#| include: false
+# Finalize logging
+log_message("Sensitivity analysis with E-values completed successfully")
+final_log <- finalize_log(success = TRUE)
+```
