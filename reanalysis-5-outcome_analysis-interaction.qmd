@@ -189,11 +189,10 @@ crosstab_df$Lapse_Status <- factor(crosstab_df$Lapse_Status,
 total_n <- sum(crosstab_df$Count)
 
 # Pivot to wide format for better readability with percentages
-library(tidyr)
 crosstab_wide <- crosstab_df |>
   pivot_wider(names_from = Lapse_Status, 
               values_from = Count,
-              values_fill = 0) |>
+              values_fill = list(Count = 0)) |>
   arrange(DR_Severity, Treatment) |>
   mutate(
     Total = No_Lapse + Lapsed,
