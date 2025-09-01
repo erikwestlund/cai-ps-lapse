@@ -45,15 +45,43 @@ This analysis compares baseline characteristics between:
 ## Identify Excluded vs Included Patients
 
 ```{r identify-groups}
-# Get the cohort_id from the first imputed dataset (should be same across all)
-included_ids <- imputed_datasets[[1]]$cohort_id
+# Check if cohort_id exists, if not use a unique identifier
+id_var <- if("cohort_id" %in% names(original_data)) "cohort_id" else "e_mrn_deidentified"
 
-# Identify excluded patients (those in original but not in imputed)
-all_ids <- original_data$cohort_id
-excluded_ids <- setdiff(all_ids, included_ids)
+# Alternative approach: identify excluded based on missing outcome
+# Patients were excluded from imputation if they had missing outcomes
+if ("outcome_va_vi_binary" %in% names(original_data)) {
+  # Use missing outcome as the exclusion criterion
+  original_data$excluded <- is.na(original_data$outcome_va_vi_binary)
+  log_message("Using missing outcome_va_vi_binary to identify excluded patients")
+} else if ("outcome_va_logMAR" %in% names(original_data)) {
+  # Use missing outcome VA
+  original_data$excluded <- is.na(original_data$outcome_va_logMAR)
+  log_message("Using missing outcome_va_logMAR to identify excluded patients")
+} else {
+  # Fall back to comparing with imputed dataset IDs
+  # Get the IDs from the first imputed dataset (should be same across all)
+  included_ids <- unique(imputed_datasets[[1]][[id_var]])
+  
+  # Get all IDs from original data
+  all_ids <- unique(original_data[[id_var]])
+  
+  # Identify excluded patients (those in original but not in imputed)
+  excluded_ids <- setdiff(all_ids, included_ids)
+  
+  # Create indicator in original data (TRUE = excluded, FALSE = included)
+  original_data$excluded <- original_data[[id_var]] %in% excluded_ids
+  log_message(paste("Using ID comparison to identify excluded patients.",
+                   "Original IDs:", length(all_ids),
+                   "Included IDs:", length(included_ids)))
+}
 
-# Create indicator in original data
-original_data$excluded <- original_data$cohort_id %in% excluded_ids
+# Verify the excluded variable has two levels
+if (length(unique(original_data$excluded)) < 2) {
+  log_message(paste("Warning: All patients are", 
+                   ifelse(all(original_data$excluded), "excluded", "included")))
+  log_message("Check data processing - there should be both excluded and included patients")
+}
 
 # Summary counts
 n_total <- nrow(original_data)
@@ -75,11 +103,9 @@ log_message(sprintf("Excluded (missing outcome): %d (%.1f%%)", n_excluded, pct_e
 
 ```{r variable-selection}
 # Get variables used in outcome and propensity score models
-# First, check what columns exist in the processed data
-cat("Sample of columns in processed data:\n")
-cat(paste(names(original_data)[1:min(30, length(names(original_data)))], collapse = "\n"))
-cat("\n...\n")
-cat("Total columns:", length(names(original_data)), "\n\n")
+# Log what columns exist in the processed data
+log_message(paste("Total columns in processed data:", length(names(original_data))))
+log_message(paste("Sample columns:", paste(names(original_data)[1:min(10, length(names(original_data)))], collapse = ", ")))
 
 # Based on the actual column names used in functions.R formulas
 # Core demographic variables
@@ -463,21 +489,31 @@ log_message("Analysis completed successfully")
 ```{r}
 #| echo: false
 if (length(significant_differences) > 0) {
-  cat(paste("- ", significant_differences, collapse = "\n"))
+  for (var in significant_differences) {
+    cat("- ", var, "\n")
+  }
 } else {
-  cat("No variables showed substantial differences (SMD > 0.1)")
+  cat("No variables showed substantial differences (SMD > 0.1)\n")
 }
 ```
 
-**Lapse Status and Missingness:**
-```{r}
+```{r lapse-missingness-summary}
 #| echo: false
+# Create summary of lapse status and missingness relationship
 if (!is.na(lapse_or_excluded_vs_included)) {
-  cat(sprintf("- Odds ratio of exclusion for lapsed vs not lapsed: %.2f\n", 
-              lapse_or_excluded_vs_included))
-  if (lapse_or_excluded_vs_included > 1.5) {
-    cat("- Lapsed patients were substantially more likely to have missing outcomes\n")
-  }
+  lapse_summary <- data.frame(
+    Measure = c("Odds ratio of exclusion (lapsed vs not lapsed)",
+                "Interpretation"),
+    Value = c(sprintf("%.2f", lapse_or_excluded_vs_included),
+              ifelse(lapse_or_excluded_vs_included > 1.5,
+                     "Lapsed patients were substantially more likely to have missing outcomes",
+                     "No substantial difference in missingness by lapse status"))
+  )
+  kable(lapse_summary, 
+        caption = "Lapse Status and Missingness Relationship",
+        col.names = c("Measure", "Value"))
+} else {
+  cat("Lapse status and missingness relationship could not be calculated.\n")
 }
 ```
 
