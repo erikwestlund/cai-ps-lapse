@@ -30,7 +30,7 @@ library(mitools)  # For additional MI utilities if needed
 analysis_mode <- "final"  # Should match imputation and PS modes
 
 # CACHE SETTINGS - Set these to TRUE to force recalculation
-force_refit_models <- TRUE  # Set to TRUE to re-fit all models
+force_refit_models <- FALSE  # Set to TRUE to re-fit all models
 force_recalc_emmeans <- TRUE  # Set to TRUE to recalculate marginal means
 
 # Set parameters based on mode
@@ -39,6 +39,9 @@ if (analysis_mode == "test") {
 } else {
   max_imputations_to_process <- NULL  # Process all available imputations
 }
+
+# Initialize logging
+log_file <- init_log("outcome_analysis_interaction")
 ```
 
 **Analysis mode:** `r analysis_mode`  
@@ -589,9 +592,6 @@ pool_emmeans_subgroup_effects <- function(models, n_imputations) {
     all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
     all_risk_diffs[[i]] <- as.data.frame(risk_diffs)
   }
-  
-  # Finalize progress
-  finalize_progress(progress)
   
   # Get structure from first imputation
   first_contrast <- all_contrasts[[1]]
