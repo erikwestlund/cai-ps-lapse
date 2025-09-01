@@ -203,16 +203,37 @@ kable(table1_print,
 # Extract SMDs for plotting
 smd_raw <- ExtractSmd(table1)
 
-# Convert to data frame format
-# ExtractSmd returns a list where each element is the SMD for a variable
-smd_values <- unlist(smd_raw[1:(length(smd_raw)-1)])  # Exclude the Variable element
-variable_names <- names(smd_values)
-
-smd_data <- data.frame(
-  Variable = variable_names,
-  SMD = smd_values,
-  stringsAsFactors = FALSE
-)
+# ExtractSmd returns a list - extract just the numeric SMD values
+# The list has one element per variable, plus a "Variable" element with names
+if (is.list(smd_raw) && "Variable" %in% names(smd_raw)) {
+  # Get variable names from the Variable element
+  var_names <- smd_raw$Variable
+  # Get SMD values (all elements except Variable)
+  smd_values <- unlist(smd_raw[names(smd_raw) != "Variable"])
+  
+  smd_data <- data.frame(
+    Variable = var_names,
+    SMD = smd_values,
+    stringsAsFactors = FALSE
+  )
+} else if (is.data.frame(smd_raw)) {
+  # If it's a data frame, use rownames as variable names
+  smd_data <- data.frame(
+    Variable = rownames(smd_raw),
+    SMD = smd_raw[, 1],
+    stringsAsFactors = FALSE
+  )
+} else {
+  # Fallback: use available_vars as variable names
+  smd_values <- unlist(smd_raw)
+  smd_values <- smd_values[!is.na(suppressWarnings(as.numeric(smd_values)))]
+  
+  smd_data <- data.frame(
+    Variable = available_vars[1:length(smd_values)],
+    SMD = as.numeric(smd_values),
+    stringsAsFactors = FALSE
+  )
+}
 
 # Remove NA values
 smd_data <- smd_data[!is.na(smd_data$SMD), ]
