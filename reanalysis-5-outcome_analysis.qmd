@@ -26,7 +26,7 @@ library(tidyr)
 library(ggplot2)
 
 # ANALYSIS MODE: Use same as imputation
-analysis_mode <- "test"  # Should match imputation mode
+analysis_mode <- "final"  # Should match imputation mode
 
 # Check for required files
 required_files <- c(
