@@ -36,9 +36,10 @@ log_message("Data loaded successfully")
 
 ## Motivation
 
-When we performed multiple imputation, the observed treatment effect increased. This suggests that those with missing data (excluded from complete case analysis) may differ systematically from those included. Specifically, those with missing outcomes may be more likely to lapse and have worse health and behavioral characteristics.
+When we performed multiple imputation, the observed treatment effect increased. This suggests that those with missing data (excluded from complete case analysis) may differ systematically from those included.
 
 This analysis compares baseline characteristics between:
+
 - **Excluded**: Patients with missing outcome data (excluded from complete case analysis)
 - **Included**: Patients with complete outcome data (included in analysis)
 
