@@ -476,30 +476,58 @@ if (length(plots) > 0) {
 
 imputation_summary <- data.frame()
 
+# Get IDs of included patients (those not excluded)
+id_var <- if("cohort_id" %in% names(original_data)) "cohort_id" else "e_mrn_deidentified"
+included_data <- original_data[!original_data$excluded, ]
+included_ids <- unique(included_data[[id_var]])
+
 for (var in c("baseline_VA_logMAR", "CCI", "DCSI")) {
-  if (var %in% available_vars) {
+  if (var %in% names(original_data)) {  # Check if variable exists in original data
     # Get which observations were originally missing
     originally_missing <- is.na(original_data[[var]])
     
     # Calculate mean across imputations for originally missing
-    if (sum(originally_missing) > 0) {
+    if (sum(originally_missing, na.rm = TRUE) > 0) {
       means_missing <- sapply(imputed_datasets, function(df) {
-        mean(df[[var]][originally_missing[df$cohort_id %in% included_ids]], na.rm = TRUE)
+        # Match IDs to find corresponding rows in imputed data
+        imputed_ids <- df[[id_var]]
+        matching_rows <- imputed_ids %in% included_ids
+        missing_and_included <- originally_missing[match(imputed_ids, original_data[[id_var]])] & matching_rows
+        
+        if (sum(missing_and_included, na.rm = TRUE) > 0) {
+          mean(df[[var]][missing_and_included], na.rm = TRUE)
+        } else {
+          NA
+        }
       })
       
       # Calculate mean for originally complete
       means_complete <- sapply(imputed_datasets, function(df) {
-        mean(df[[var]][!originally_missing[df$cohort_id %in% included_ids]], na.rm = TRUE)
+        imputed_ids <- df[[id_var]]
+        matching_rows <- imputed_ids %in% included_ids
+        complete_and_included <- !originally_missing[match(imputed_ids, original_data[[id_var]])] & matching_rows
+        
+        if (sum(complete_and_included, na.rm = TRUE) > 0) {
+          mean(df[[var]][complete_and_included], na.rm = TRUE)
+        } else {
+          NA
+        }
       })
       
-      imputation_summary <- rbind(imputation_summary, data.frame(
-        Variable = var,
-        Originally_Complete = sprintf("%.3f (%.3f)", 
-                                     mean(means_complete), sd(means_complete)),
-        Imputed_for_Missing = sprintf("%.3f (%.3f)", 
-                                      mean(means_missing), sd(means_missing)),
-        Difference = sprintf("%.3f", mean(means_missing) - mean(means_complete))
-      ))
+      # Remove NAs before calculating statistics
+      means_missing <- means_missing[!is.na(means_missing)]
+      means_complete <- means_complete[!is.na(means_complete)]
+      
+      if (length(means_missing) > 0 && length(means_complete) > 0) {
+        imputation_summary <- rbind(imputation_summary, data.frame(
+          Variable = var,
+          Originally_Complete = sprintf("%.3f (%.3f)", 
+                                       mean(means_complete), sd(means_complete)),
+          Imputed_for_Missing = sprintf("%.3f (%.3f)", 
+                                        mean(means_missing), sd(means_missing)),
+          Difference = sprintf("%.3f", mean(means_missing) - mean(means_complete))
+        ))
+      }
     }
   }
 }
