@@ -28,6 +28,10 @@ library(ggplot2)
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "final"  # Should match imputation mode
 
+# CACHE SETTINGS - Set these to TRUE to force recalculation
+force_refit_models <- FALSE  # Set to TRUE to re-fit all models
+force_recalc_emmeans <- TRUE  # Set to TRUE to recalculate marginal means
+
 # Check for required files
 required_files <- c(
   "imputed_datasets.rds",
@@ -160,9 +164,8 @@ print(main_effects_formula)
 ```{r fit-models}
 # Check if models are already cached
 models_cache_file <- file.path(reanalysis_data_dir, "fitted_models_main_effects.rds")
-force_refit <- TRUE  # Set to TRUE if you want to force re-fitting
 
-if (file.exists(models_cache_file) && !force_refit) {
+if (file.exists(models_cache_file) && !force_refit_models) {
   # Load cached models
   cached_models <- readRDS(models_cache_file)
   fitted_models <- cached_models$fitted_models
@@ -452,7 +455,6 @@ kable(key_results,
 ```{r marginal-effects}
 # Check if marginal means are cached
 emmeans_cache_file <- file.path(reanalysis_data_dir, "emmeans_results_main_effects.rds")
-force_recalc_emmeans <- TRUE  # Set to TRUE to force recalculation
 
 if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
   # Load cached results
