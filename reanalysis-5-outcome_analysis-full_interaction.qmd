@@ -47,6 +47,13 @@ log_file <- init_log("outcome_analysis_full_interaction")
 MAX_SE_THRESHOLD <- 10  # Maximum acceptable standard error
 MIN_N_PER_CELL <- 5    # Minimum observations per interaction cell
 TEST_SINGLE_IMPUTATION <- TRUE  # Test on single imputation first
+
+# Treatment categorization approach
+# Option 1: "hierarchical" - assigns to highest priority treatment (focal > anti_VEGF > PRP > other)
+#           NOTE: focal_laser now has highest priority to preserve all 36 cases
+# Option 2: "collapsed" - combines focal_laser with other_inject due to small n
+# Option 3: "first_only" - uses only the first/primary treatment
+TREATMENT_APPROACH <- "hierarchical"  # Using hierarchical with focal priority
 ```
 
 **Analysis mode:** `r analysis_mode`  
@@ -137,18 +144,35 @@ if (TEST_SINGLE_IMPUTATION) {
 for (i in 1:n_imputations) {
   imputed_datasets[[i]] <- imputed_datasets[[i]] |>
     mutate(
-      # Create 4-level treatment factor (hierarchical priority)
-      # Priority: anti_VEGF > PRP > focal_laser > other_inject > none
+      # First, check treatment overlaps for diagnostic purposes
+      n_treatments = other_inject + anti_VEGF + focal_laser_flag + PRP_flag,
+      
+      # Create treatment factor based on chosen approach
       treatment_type = case_when(
-        anti_VEGF == 1 ~ "anti_VEGF",
-        PRP_flag == 1 ~ "PRP",
-        focal_laser_flag == 1 ~ "focal_laser",
-        other_inject == 1 ~ "other_inject",
-        TRUE ~ "none"
+        TREATMENT_APPROACH == "hierarchical" ~ case_when(
+          focal_laser_flag == 1 ~ "focal_laser",  # Highest priority to preserve all 36 cases
+          anti_VEGF == 1 ~ "anti_VEGF",
+          PRP_flag == 1 ~ "PRP",
+          other_inject == 1 ~ "other_inject",
+          TRUE ~ "none"
+        ),
+        TREATMENT_APPROACH == "collapsed" ~ case_when(
+          anti_VEGF == 1 ~ "anti_VEGF",
+          PRP_flag == 1 ~ "PRP",
+          focal_laser_flag == 1 | other_inject == 1 ~ "other_or_focal",
+          TRUE ~ "none"
+        ),
+        TRUE ~ "none"  # fallback
       ),
-      treatment_type = factor(treatment_type, 
-                              levels = c("none", "other_inject", "focal_laser", 
-                                       "PRP", "anti_VEGF")),
+      
+      # Set factor levels based on approach
+      treatment_type = if (TREATMENT_APPROACH == "collapsed") {
+        factor(treatment_type, 
+               levels = c("none", "other_or_focal", "PRP", "anti_VEGF"))
+      } else {
+        factor(treatment_type,
+               levels = c("none", "other_inject", "focal_laser", "PRP", "anti_VEGF"))
+      },
       
       # Keep binary for comparison
       any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
@@ -166,12 +190,44 @@ for (i in 1:n_imputations) {
     )
 }
 
-# Check treatment distribution
-treatment_dist <- table(imputed_datasets[[1]]$treatment_type)
-log_message("Treatment type distribution in first imputation:")
+# Check treatment distribution and overlaps
+first_data <- imputed_datasets[[1]]
+
+log_message(paste0("Using treatment approach: ", TREATMENT_APPROACH))
+if (TREATMENT_APPROACH == "collapsed") {
+  log_message("Combining focal_laser and other_inject into 'other_or_focal' category")
+}
+
+# Check how many patients have multiple treatments
+multi_treatment <- table(first_data$n_treatments)
+log_message("Number of treatments per patient:")
+for (n in names(multi_treatment)) {
+  log_message(paste0("  ", n, " treatment(s): ", multi_treatment[n]))
+}
+
+# Check specific overlaps with focal laser
+if (sum(first_data$focal_laser_flag) > 0) {
+  focal_patients <- first_data[first_data$focal_laser_flag == 1, ]
+  log_message(paste0("Total focal laser patients: ", nrow(focal_patients)))
+  log_message(paste0("  Focal only: ", sum(focal_patients$n_treatments == 1)))
+  log_message(paste0("  Focal + anti_VEGF: ", sum(focal_patients$anti_VEGF == 1)))
+  log_message(paste0("  Focal + PRP: ", sum(focal_patients$PRP_flag == 1)))
+  log_message(paste0("  Focal + other: ", sum(focal_patients$other_inject == 1)))
+}
+
+treatment_dist <- table(first_data$treatment_type)
+log_message("Treatment type distribution (hierarchical assignment):")
 for (tx in names(treatment_dist)) {
   log_message(paste0("  ", tx, ": ", treatment_dist[tx]))
 }
+
+# Create a cross-tab to show the hierarchical effect
+focal_assignment <- table(
+  focal_laser = first_data$focal_laser_flag,
+  assigned_treatment = first_data$treatment_type
+)
+log_message("Where focal laser patients were assigned:")
+print(focal_assignment)
 ```
 
 ## Check Cell Sizes for Full Interaction
