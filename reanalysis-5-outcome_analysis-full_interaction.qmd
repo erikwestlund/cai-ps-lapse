@@ -233,7 +233,7 @@ for (tx in names(treatment_dist)) {
 
 # Create a cross-tab to show the hierarchical effect
 focal_assignment <- table(
-  focal_laser = first_data$focal_laser_flag,
+  focal_laser_flag = first_data$focal_laser_flag,
   assigned_treatment = first_data$treatment_type
 )
 log_message("Where focal laser patients were assigned:")
