@@ -25,13 +25,13 @@ log_file <- init_log("multiple_imputation")
 
 # ANALYSIS MODE: "test" or "final"
 # test = 2 imputations, 2 iterations (fast)
-# final = 30 imputations, 20 iterations (slow but thorough)
+# final = 50 imputations, 20 iterations (slow but thorough)
 analysis_mode <- "final"  # Change to "final" for production run
 log_message(paste0("Analysis mode: ", analysis_mode))
 
 # CACHING CONFIGURATION FOR MICE
 # Set to TRUE to use cached MICE results (skip imputation, only run post-processing)
-use_cached_mice <- TRUE
+use_cached_mice <- FALSE
 mice_cache_file <- file.path(reanalysis_data_dir, "mice_results.rds")
 log_message(paste0("MICE caching: ", ifelse(use_cached_mice, "ENABLED", "DISABLED")))
 
@@ -40,7 +40,7 @@ if (analysis_mode == "test") {
   n_imputations <- 2
   n_iterations <- 2
 } else if (analysis_mode == "final") {
-  n_imputations <- 30
+  n_imputations <- 50
   n_iterations <- 20
 } else {
   stop("Invalid analysis_mode. Must be 'test' or 'final'")
