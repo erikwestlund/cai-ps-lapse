@@ -206,13 +206,13 @@ for (n in names(multi_treatment)) {
 }
 
 # Check specific overlaps with focal laser
-if (sum(first_data$focal_laser_flag) > 0) {
-  focal_patients <- first_data[first_data$focal_laser_flag == 1, ]
+if (sum(as.numeric(as.character(first_data$focal_laser_flag))) > 0) {
+  focal_patients <- first_data[as.numeric(as.character(first_data$focal_laser_flag)) == 1, ]
   log_message(paste0("Total focal laser patients: ", nrow(focal_patients)))
   log_message(paste0("  Focal only: ", sum(focal_patients$n_treatments == 1)))
-  log_message(paste0("  Focal + anti_VEGF: ", sum(focal_patients$anti_VEGF == 1)))
-  log_message(paste0("  Focal + PRP: ", sum(focal_patients$PRP_flag == 1)))
-  log_message(paste0("  Focal + other: ", sum(focal_patients$other_inject == 1)))
+  log_message(paste0("  Focal + anti_VEGF: ", sum(as.numeric(as.character(focal_patients$anti_VEGF)))))
+  log_message(paste0("  Focal + PRP: ", sum(as.numeric(as.character(focal_patients$PRP_flag)))))
+  log_message(paste0("  Focal + other: ", sum(as.numeric(as.character(focal_patients$other_inject)))))
 }
 
 treatment_dist <- table(first_data$treatment_type)
