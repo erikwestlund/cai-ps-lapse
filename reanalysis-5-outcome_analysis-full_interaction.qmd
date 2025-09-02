@@ -1,0 +1,1145 @@
+---
+title: "Reanalysis Step 5: Outcome Analysis with Full Four-Treatment Interaction"
+subtitle: "IPTW-weighted analysis of lapse × DR severity × 4-level treatment interactions"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")  # Load formulas and helper functions
+setup_analysis(seed = 2025)
+
+# Additional packages
+library(emmeans)
+library(margins)
+library(survey)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(tidyr)
+library(dplyr)
+library(mice)  # For pool() function with Barnard-Rubin df adjustment
+library(mitools)  # For additional MI utilities if needed
+
+# ANALYSIS MODE: Use same as imputation/PS
+analysis_mode <- "final"  # Should match imputation and PS modes
+
+# CACHE SETTINGS - Set these to TRUE to force recalculation
+force_refit_models <- FALSE  # Set to TRUE to re-fit all models
+force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
+
+# Set parameters based on mode
+if (analysis_mode == "test") {
+  max_imputations_to_process <- 2  # Process only 2 imputations in test mode
+} else {
+  max_imputations_to_process <- NULL  # Process all available imputations
+}
+
+# Initialize logging
+log_file <- init_log("outcome_analysis_full_interaction")
+
+# Configuration for stability checking
+MAX_SE_THRESHOLD <- 10  # Maximum acceptable standard error
+MIN_N_PER_CELL <- 5    # Minimum observations per interaction cell
+TEST_SINGLE_IMPUTATION <- TRUE  # Test on single imputation first
+```
+
+**Analysis mode:** `r analysis_mode`  
+**Imputations to process:** `r if(!is.null(max_imputations_to_process)) max_imputations_to_process else "all available"`
+
+## Analysis Overview
+
+This analysis examines the three-way interaction between:
+- **Lapse status** (primary exposure)
+- **DR severity** (effect modifier)
+- **Treatment status** (effect modifier)
+
+The model uses:
+- Multiple imputation to handle missing data
+- IPTW weights from propensity scores
+- Survey methods for clustered data (multiple eyes per patient)
+- Pooling via Rubin's rules across imputations
+
+## Load Data and Weights
+
+```{r load-data}
+# Load the imputed datasets
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_available <- length(imputed_datasets)
+
+# Load the twang PS results
+ps_results <- readRDS(file.path(reanalysis_data_dir, "ps_results_twang.rds"))
+n_ps_available <- length(ps_results$twang_results)
+
+# Determine how many imputations to actually process
+if (!is.null(max_imputations_to_process)) {
+  n_imputations <- min(max_imputations_to_process, n_available, n_ps_available)
+  # Subset the datasets if needed
+  if (n_imputations < n_available) {
+    imputed_datasets <- imputed_datasets[1:n_imputations]
+  }
+} else {
+  n_imputations <- min(n_available, n_ps_available)
+}
+
+# Extract weights for each imputation
+# Ensure we don't exceed available PS results
+n_ps_weights <- length(ps_results$twang_results)
+if (n_ps_weights < n_imputations) {
+  warning("Only ", n_ps_weights, " PS weight sets available for ", n_imputations, " imputations")
+  stop("Mismatch between imputations and PS results. Ensure PS analysis was run with same number of imputations.")
+}
+
+for (i in 1:n_imputations) {
+  imputed_datasets[[i]]$iptw_weight <- ps_results$twang_results[[i]]$weights
+}
+```
+
+**Available imputed datasets:** `r n_available`  
+**Available PS results:** `r n_ps_available`  
+**Processing:** `r n_imputations` **datasets** `r if(analysis_mode == "test") "(test mode limit)" else "(all available)"`
+
+```{r continue-load}
+# Summary of first dataset for verification
+first_data <- imputed_datasets[[1]]
+
+dataset_summary <- data.frame(
+  Metric = c("Imputed datasets loaded", "N observations", "N unique patients", 
+             "Mean IPTW weight", "Weight range"),
+  Value = c(n_imputations,
+            nrow(first_data),
+            length(unique(first_data$e_mrn_deidentified)),
+            round(mean(first_data$iptw_weight), 3),
+            paste0("[", round(min(first_data$iptw_weight), 3), ", ",
+                   round(max(first_data$iptw_weight), 3), "]"))
+)
+
+kable(dataset_summary, caption = "Dataset Summary")
+```
+
+## Create Analysis Variables
+
+```{r create-variables}
+# Test on single imputation first if configured
+if (TEST_SINGLE_IMPUTATION) {
+  n_test <- 1
+  log_message("TESTING MODE: Will run on single imputation first")
+} else {
+  n_test <- n_imputations
+}
+
+# Create consistent analysis variables across all imputed datasets
+for (i in 1:n_imputations) {
+  imputed_datasets[[i]] <- imputed_datasets[[i]] |>
+    mutate(
+      # Create 4-level treatment factor (hierarchical priority)
+      # Priority: anti_VEGF > PRP > focal_laser > other_inject > none
+      treatment_type = case_when(
+        anti_VEGF == 1 ~ "anti_VEGF",
+        PRP_flag == 1 ~ "PRP",
+        focal_laser_flag == 1 ~ "focal_laser",
+        other_inject == 1 ~ "other_inject",
+        TRUE ~ "none"
+      ),
+      treatment_type = factor(treatment_type, 
+                              levels = c("none", "other_inject", "focal_laser", 
+                                       "PRP", "anti_VEGF")),
+      
+      # Keep binary for comparison
+      any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
+                                 other_inject == 1 | focal_laser_flag == 1),
+      any_treatment = factor(any_treatment, levels = c(0, 1), 
+                            labels = c("No_Treatment", "Any_Treatment")),
+      
+      # Ensure DR severity is properly factored
+      dr_severity = factor(dr_severity,
+                          levels = c("No_DR", "NPDR", "PDR")),
+      
+      # Ensure lapse is properly coded
+      ever_lapse_binary = factor(ever_lapse_binary, levels = c(0, 1),
+                                 labels = c("No_Lapse", "Lapsed"))
+    )
+}
+
+# Check treatment distribution
+treatment_dist <- table(imputed_datasets[[1]]$treatment_type)
+log_message("Treatment type distribution in first imputation:")
+for (tx in names(treatment_dist)) {
+  log_message(paste0("  ", tx, ": ", treatment_dist[tx]))
+}
+```
+
+## Check Cell Sizes for Full Interaction
+
+```{r check-cells}
+# Check cell sizes for the three-way interaction
+first_data <- imputed_datasets[[1]]
+cell_counts <- first_data |>
+  count(ever_lapse_binary, dr_severity, treatment_type) |>
+  arrange(n)
+
+# Identify problematic cells
+small_cells <- cell_counts |> filter(n < MIN_N_PER_CELL)
+
+if (nrow(small_cells) > 0) {
+  log_message(paste0("WARNING: ", nrow(small_cells), 
+                    " cells have fewer than ", MIN_N_PER_CELL, " observations"))
+  
+  print(kable(small_cells, 
+              caption = paste("Cells with < ", MIN_N_PER_CELL, " observations")))
+  
+  # Decide whether to proceed
+  if (nrow(small_cells) > length(unique(first_data$treatment_type))) {
+    warning("Many small cells detected. Model may be unstable.")
+    # Could stop here or collapse categories
+  }
+}
+
+# Display full interaction table
+interaction_table <- cell_counts |>
+  pivot_wider(
+    names_from = treatment_type,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  arrange(ever_lapse_binary, dr_severity)
+
+kable(interaction_table,
+      caption = "Cell sizes for Lapse × DR Severity × Treatment Type (4 levels)")
+```
+
+### Variable Distributions in First Imputed Dataset
+
+**DR Severity:**
+```{r dr-severity-dist}
+dr_table <- table(imputed_datasets[[1]]$dr_severity)
+dr_df <- data.frame(
+  Category = names(dr_table),
+  Count = as.numeric(dr_table),
+  Percentage = paste0(round(100 * as.numeric(dr_table) / sum(dr_table), 1), "%")
+)
+kable(dr_df, align = c('l', 'r', 'r'))
+```
+
+**Treatment Status:**
+```{r treatment-dist}
+treatment_table <- table(imputed_datasets[[1]]$any_treatment)
+treatment_df <- data.frame(
+  Treatment = c("No Treatment", "Treatment"),
+  Count = as.numeric(treatment_table),
+  Percentage = paste0(round(100 * as.numeric(treatment_table) / sum(treatment_table), 1), "%")
+)
+kable(treatment_df, align = c('l', 'r', 'r'))
+```
+
+**Lapse Status:**
+```{r lapse-dist}
+lapse_table <- table(imputed_datasets[[1]]$ever_lapse_binary)
+lapse_df <- data.frame(
+  Lapse_Status = c("No Lapse", "Lapsed"),
+  Count = as.numeric(lapse_table),
+  Percentage = paste0(round(100 * as.numeric(lapse_table) / sum(lapse_table), 1), "%")
+)
+kable(lapse_df, align = c('l', 'r', 'r'))
+```
+
+**Three-way Cross-tabulation:**
+```{r crosstab}
+# Create cross-tabulation and convert to data frame for proper display
+crosstab <- with(imputed_datasets[[1]], 
+                 table(dr_severity, any_treatment, ever_lapse_binary))
+
+# Convert to data frame format using as.data.frame.table
+crosstab_df <- as.data.frame.table(crosstab)
+names(crosstab_df) <- c("DR_Severity", "Treatment", "Lapse_Status", "Freq")
+
+# Rename Freq to Count and ensure it's numeric
+crosstab_df$Count <- as.numeric(crosstab_df$Freq)
+crosstab_df$Freq <- NULL
+
+# Calculate total for percentages
+total_n <- sum(crosstab_df$Count)
+
+# Pivot to wide format for better readability with percentages
+crosstab_wide <- crosstab_df |>
+  pivot_wider(names_from = Lapse_Status, 
+              values_from = Count,
+              values_fill = 0) |>
+  arrange(DR_Severity, Treatment) |>
+  mutate(
+    Total = No_Lapse + Lapsed,
+    No_Lapse_Pct = paste0(round(100 * No_Lapse / Total, 1), "%"),
+    Lapsed_Pct = paste0(round(100 * Lapsed / Total, 1), "%"),
+    Row_Pct = paste0(round(100 * Total / total_n, 1), "%")
+  ) |>
+  select(DR_Severity, Treatment, 
+         No_Lapse, No_Lapse_Pct,
+         Lapsed, Lapsed_Pct,
+         Total, Row_Pct)
+
+kable(crosstab_wide, 
+      caption = "Distribution of patients by DR severity, treatment, and lapse status",
+      col.names = c("DR Severity", "Treatment", 
+                    "No Lapse (n)", "No Lapse (%)",
+                    "Lapsed (n)", "Lapsed (%)",
+                    "Total (n)", "Row %"),
+      align = c('l', 'l', 'r', 'r', 'r', 'r', 'r', 'r'))
+```
+
+## Define Model Formula
+
+```{r define-formula}
+# Define the full interaction formula with 4-level treatment
+# This creates a much more complex model than the binary treatment version
+full_interaction_formula <- as.formula(
+  "outcome_va_vi_binary ~ 
+    ever_lapse_binary * dr_severity * treatment_type +  # Full 3-way with 4-level treatment
+    baseline_VA_logMAR +
+    gender_cat + race_ethnic_cat + insurance_cat + age_cat +
+    CCI + DCSI +
+    glaucoma_bef_hitplus_cat + otherretina_bef_hitplus_cat + 
+    catsurg_before_hitplus_cat"
+)
+```
+
+### Model Specification
+
+**Formula:**
+```{r show-formula}
+print(full_interaction_formula)
+
+# Calculate expected number of terms
+# Main effects: 1 (lapse) + 2 (DR) + 4 (treatment) = 7
+# Two-way: 1*2 + 1*4 + 2*4 = 2 + 4 + 8 = 14  
+# Three-way: 1*2*4 = 8
+# Total interaction terms = 7 + 14 + 8 = 29 (plus covariates)
+expected_terms <- 29
+log_message(paste0("Expected interaction terms: ", expected_terms))
+```
+
+**Interaction Structure:**
+- Main effects: 3 (lapse, DR severity [2 df], treatment)
+- Two-way interactions: 3 (lapse×DR [2 df], lapse×treatment [1 df], DR×treatment [2 df])
+- Three-way interaction: 1 (lapse×DR×treatment [2 df])
+- Total interaction df: 7
+
+## Fit Models to Each Imputed Dataset
+
+```{r fit-models}
+# Check if models are already cached
+models_cache_file <- file.path(reanalysis_data_dir, "fitted_models_full_interaction.rds")
+
+# Determine how many models to fit
+n_to_fit <- if (TEST_SINGLE_IMPUTATION) 1 else n_imputations
+
+if (file.exists(models_cache_file) && !force_refit_models && !TEST_SINGLE_IMPUTATION) {
+  # Load cached models
+  cached_models <- readRDS(models_cache_file)
+  models <- cached_models$models
+  model_summaries <- cached_models$model_summaries
+  model_progress <- cached_models$model_progress
+  models_loaded_from_cache <- TRUE
+  cache_location <- models_cache_file
+  log_message("Models loaded from cache: ", cache_location)
+} else {
+  # Fit new models
+  models_loaded_from_cache <- FALSE
+  models <- list()
+  model_summaries <- list()
+  
+  model_progress <- data.frame(
+    Imputation = integer(),
+    Converged = logical(),
+    ThreeWay_Terms = integer(),
+    Max_SE = numeric(),
+    Warning = character()
+  )
+  
+  for (i in 1:n_to_fit) {
+    log_message(paste0("Fitting model for imputation ", i, " of ", n_to_fit))
+    
+    design_weighted <- svydesign(
+      ids = ~e_mrn_deidentified,
+      data = imputed_datasets[[i]],
+      weights = ~iptw_weight
+    )
+    
+    # Fit with error handling
+    fit_success <- FALSE
+    warning_msg <- ""
+    
+    tryCatch({
+      model <- svyglm(
+        formula = full_interaction_formula,
+        design = design_weighted,
+        family = quasibinomial()
+      )
+      
+      fit_success <- TRUE
+      
+      # Check model stability
+      coef_summary <- summary(model)$coefficients
+      max_se <- max(coef_summary[, "Std. Error"], na.rm = TRUE)
+      
+      if (max_se > MAX_SE_THRESHOLD) {
+        warning_msg <- paste0("High SE: ", round(max_se, 2))
+        problem_terms <- rownames(coef_summary)[coef_summary[, "Std. Error"] > MAX_SE_THRESHOLD]
+        log_message(paste0("WARNING: Imputation ", i, " has extreme SEs in: ", 
+                          paste(problem_terms, collapse = ", ")))
+      }
+      
+    }, error = function(e) {
+      warning_msg <- paste0("Fit failed: ", e$message)
+      log_message(paste0("ERROR: Imputation ", i, " - ", warning_msg))
+    })
+    
+    if (fit_success) {
+      models[[i]] <- model
+      
+      # Check if three-way interaction terms exist (with 4-level treatment)
+      threeway_terms <- grep("ever_lapse_binary.*:dr_severity.*:treatment_type", 
+                           rownames(coef_summary), value = TRUE)
+      
+      # Track progress
+      model_progress <- rbind(model_progress, data.frame(
+        Imputation = i,
+        Converged = model$converged,
+        ThreeWay_Terms = length(threeway_terms),
+        Max_SE = max_se,
+        Warning = warning_msg,
+        stringsAsFactors = FALSE
+      ))
+      
+      model_summaries[[i]] <- coef_summary
+      
+      # Stop if testing and issues found
+      if (TEST_SINGLE_IMPUTATION && i == 1 && max_se > MAX_SE_THRESHOLD) {
+        print(summary(model))
+        stop(paste0("Model instability detected. Max SE = ", round(max_se, 2), 
+                   ". Consider simplifying model or collapsing treatment categories."))
+      }
+    }
+  }
+  
+  # Save to cache
+  cached_models <- list(
+    models = models,
+    model_summaries = model_summaries,
+    model_progress = model_progress,
+    formula_used = full_interaction_formula,
+    n_imputations = n_imputations,
+    timestamp = Sys.time()
+  )
+  
+  saveRDS(cached_models, models_cache_file)
+  cache_location <- models_cache_file
+  log_message("Models fitted and saved to cache: ", cache_location)
+}
+
+# Verify we have the expected number of models
+if (length(models) != n_imputations) {
+  stop("Model list has ", length(models), " models but expected ", n_imputations)
+}
+
+# Remove any NULL entries if they exist
+models <- models[!sapply(models, is.null)]
+if (length(models) == 0) {
+  stop("No valid models to pool")
+}
+```
+
+### Model Fitting Summary
+
+```{r model-summary}
+kable(model_progress, caption = "Model fitting progress across imputations")
+```
+
+## Pool Results Using Rubin's Rules
+
+```{r pool-results}
+# Use mice::pool for robust pooling with Barnard-Rubin df adjustment
+# mice::pool automatically applies Barnard-Rubin (1999) correction
+
+# Ensure models is a proper list
+if (!is.list(models)) {
+  stop("Models must be a list")
+}
+
+# Check that all models have the same structure
+if (length(models) > 1) {
+  coef_names_first <- names(coef(models[[1]]))
+  for (i in 2:length(models)) {
+    if (!identical(names(coef(models[[i]])), coef_names_first)) {
+      warning("Model ", i, " has different coefficients than model 1")
+    }
+  }
+}
+
+# Calculate complete-data degrees of freedom for Barnard-Rubin adjustment
+# dfcom = residual degrees of freedom from complete-data model
+n_obs <- nrow(models[[1]]$data)
+n_params <- length(coef(models[[1]]))
+dfcom <- n_obs - n_params  # This is the residual df
+
+# Pool using mice with explicit dfcom for proper Barnard-Rubin df calculation
+# mice::pool automatically applies Barnard-Rubin (1999) small-sample correction
+pooled_model <- pool(models, dfcom = dfcom)
+pooled_summary <- summary(pooled_model)
+
+# Extract results - mice::pool provides df column with Barnard-Rubin adjustment
+# Each parameter gets its own df based on its fraction of missing information
+pooled_results <- pooled_summary |>
+  mutate(
+    Term = term,
+    Estimate = estimate,
+    SE = std.error,
+    t_stat = statistic,
+    df = df,  # Barnard-Rubin (1999) adjusted degrees of freedom
+    P_Value = p.value,
+    # Recalculate CIs using t-distribution with proper df
+    CI_Lower = estimate - qt(0.975, df) * std.error,
+    CI_Upper = estimate + qt(0.975, df) * std.error,
+    OR = exp(estimate),
+    OR_CI_Lower = exp(CI_Lower),
+    OR_CI_Upper = exp(CI_Upper)
+  ) |>
+  select(Term, Estimate, SE, t_stat, df, P_Value, CI_Lower, CI_Upper, OR, OR_CI_Lower, OR_CI_Upper)
+
+# Ensure proper formatting
+rownames(pooled_results) <- NULL
+
+# Construct pooled variance-covariance matrix from the pooled variances
+# mice::pool returns a mipo object which stores variances in pooled$t
+# We need to create a diagonal matrix since pool() doesn't provide covariances
+pooled_variances <- pooled_model$pooled$t
+pooled_vcov <- diag(pooled_variances)
+rownames(pooled_vcov) <- pooled_model$pooled$term
+colnames(pooled_vcov) <- pooled_model$pooled$term
+
+```
+
+### Pooling Diagnostics
+
+```{r pooling-diagnostics}
+# Create diagnostics table - now with df from mice::pool
+pool_diag <- data.frame(
+  Metric = c("Number of imputations", 
+             "Number of parameters",
+             "Average degrees of freedom (Barnard-Rubin adjusted)",
+             "Minimum degrees of freedom",
+             "Maximum degrees of freedom"),
+  Value = c(n_imputations,
+            nrow(pooled_results),
+            round(mean(pooled_results$df), 1),
+            round(min(pooled_results$df), 1),
+            round(max(pooled_results$df), 1))
+)
+
+kable(pool_diag, caption = "Pooling diagnostics")
+
+# Show key terms with their df and p-values
+key_terms <- grep("ever_lapse", pooled_results$Term, value = TRUE)[1:min(3, length(grep("ever_lapse", pooled_results$Term, value = TRUE)))]
+key_results <- pooled_results[pooled_results$Term %in% key_terms, c("Term", "Estimate", "SE", "df", "P_Value")]
+key_results$Term <- substr(key_results$Term, 1, 40)
+key_results$Estimate <- round(key_results$Estimate, 3)
+key_results$SE <- round(key_results$SE, 3)
+key_results$df <- round(key_results$df, 1)
+key_results$P_Value <- round(key_results$P_Value, 4)
+
+kable(key_results, caption = "Key lapse-related terms with degrees of freedom")
+
+# Three-way interaction terms are included in the model
+# but not displayed individually as they are not meaningful on their own
+# See subgroup effects and marginal effects sections for interpretation
+```
+
+## Joint Tests of Interaction Terms
+
+```{r joint-tests}
+pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
+  
+  # Perform test on each imputation
+  test_stats <- numeric(length(models))
+  df_tests <- numeric(length(models))
+  
+  for (i in 1:length(models)) {
+    test_result <- linearHypothesis(
+      models[[i]],
+      hypothesis_strings,
+      vcov = vcov(models[[i]])
+    )
+    test_stats[i] <- test_result$Chisq[2]
+    df_tests[i] <- test_result$Df[2]
+  }
+  
+  # Pool using Li, Raghunathan, and Rubin (1991) method for chi-square tests
+  # D-bar: average test statistic
+  D_bar <- mean(test_stats)
+  df <- df_tests[1]  # Should be same across all imputations
+  
+  # For large samples, can use D_bar directly with original df
+  # For more accuracy, would need to compute the adjusted statistic
+  p_value <- pchisq(D_bar, df = df, lower.tail = FALSE)
+  
+  return(list(
+    test_name = test_name,
+    D_bar = D_bar,
+    df = df,
+    p_value = p_value
+  ))
+}
+
+first_model <- models[[1]]
+
+# Test 1: Joint test of three-way interaction
+threeway_terms_test <- grep("ever_lapse.*:dr_severity.*:any_treatment", 
+                            names(coef(first_model)), value = TRUE)
+
+# Test 1: Three-way interaction
+if (length(threeway_terms_test) > 0) {
+  hypothesis_3way <- paste0(threeway_terms_test, " = 0")
+  pooled_test_3way <- pool_chi_square_tests(models, hypothesis_3way, "Three-way interaction")
+}
+
+# Test 2: Joint test of lapse × DR interaction (averaging over treatment)
+lapse_dr_terms <- grep("ever_lapse.*:dr_severity(?!.*:any_treatment)", 
+                      names(coef(first_model)), value = TRUE, perl = TRUE)
+
+if (length(lapse_dr_terms) > 0) {
+  hypothesis_lapse_dr <- paste0(lapse_dr_terms, " = 0")
+  pooled_test_lapse_dr <- pool_chi_square_tests(models, hypothesis_lapse_dr, "Lapse × DR interaction")
+}
+
+# Test 3: Joint test of lapse × treatment interaction (averaging over DR)
+lapse_tx_terms <- grep("ever_lapse.*:any_treatment(?!.*:dr_severity)", 
+                      names(coef(first_model)), value = TRUE, perl = TRUE)
+
+if (length(lapse_tx_terms) > 0) {
+  hypothesis_lapse_tx <- paste0(lapse_tx_terms, " = 0")
+  pooled_test_lapse_tx <- pool_chi_square_tests(models, hypothesis_lapse_tx, "Lapse × treatment interaction")
+}
+```
+
+### Joint Hypothesis Test Results
+
+```{r joint-test-results}
+# Compile all test results
+joint_tests <- data.frame(
+  Test = character(),
+  Chi_Square = numeric(),
+  df = numeric(),
+  P_Value = character(),
+  Significant = character(),
+  stringsAsFactors = FALSE
+)
+
+if (exists("pooled_test_3way")) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × DR × Treatment (3-way)",
+    Chi_Square = round(pooled_test_3way$D_bar, 3),
+    df = pooled_test_3way$df,
+    P_Value = format.pval(pooled_test_3way$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_3way$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+if (exists("pooled_test_lapse_dr")) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × DR Severity",
+    Chi_Square = round(pooled_test_lapse_dr$D_bar, 3),
+    df = pooled_test_lapse_dr$df,
+    P_Value = format.pval(pooled_test_lapse_dr$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_lapse_dr$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+if (exists("pooled_test_lapse_tx")) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × Treatment",
+    Chi_Square = round(pooled_test_lapse_tx$D_bar, 3),
+    df = pooled_test_lapse_tx$df,
+    P_Value = format.pval(pooled_test_lapse_tx$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_lapse_tx$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+kable(joint_tests, caption = "Pooled joint hypothesis tests (Li-Raghunathan-Rubin method)")
+```
+
+## Calculate Effects Within Each Subgroup Using emmeans
+
+```{r emmeans-analysis}
+# Function to pool emmeans results across imputations (matching main effects approach)
+pool_emmeans_subgroup_effects <- function(models, n_imputations) {
+  
+  # Set emmeans options to handle larger reference grids (matching main effects)
+  emm_options(rg.limit = 130000)
+  
+  # Store results from each imputation
+  all_emmeans <- list()
+  all_contrasts <- list()
+  all_risk_diffs <- list()
+  
+  # Initialize progress tracking
+  progress <- init_progress(n_imputations, "Calculating contrasts")
+  
+  for (i in 1:n_imputations) {
+    # Update progress
+    progress <- update_progress(progress)
+    
+    # Get the data for this imputation (needed for emmeans)
+    imp_data <- imputed_datasets[[i]]
+    
+    # Get marginal means on both log odds and response scales
+    emm_logit <- emmeans(models[[i]], 
+                         ~ ever_lapse_binary | dr_severity * any_treatment,
+                         weights = "proportional",
+                         data = imp_data)
+    
+    emm_response <- emmeans(models[[i]], 
+                           ~ ever_lapse_binary | dr_severity * any_treatment,
+                           weights = "proportional",
+                           type = "response",
+                           data = imp_data)
+    
+    # Get contrasts on log odds scale (for odds ratios)
+    lapse_contrasts <- contrast(emm_logit, method = "revpairwise", 
+                               by = c("dr_severity", "any_treatment"))
+    
+    # Get pairwise comparisons on response scale (for risk differences)
+    # Use regrid to ensure we get differences not ratios
+    risk_diffs <- regrid(emm_response) |>
+      pairs(reverse = TRUE, by = c("dr_severity", "any_treatment"))
+    
+    all_emmeans[[i]] <- as.data.frame(emm_response)
+    all_contrasts[[i]] <- as.data.frame(lapse_contrasts)
+    all_risk_diffs[[i]] <- as.data.frame(risk_diffs)
+  }
+  
+  # Get structure from first imputation
+  first_contrast <- all_contrasts[[1]]
+  first_rd <- all_risk_diffs[[1]]
+  n_subgroups <- nrow(first_contrast)
+  
+  # Initialize pooled results data frames
+  pooled_or_results <- data.frame(
+    dr_severity = first_contrast$dr_severity,
+    any_treatment = first_contrast$any_treatment,
+    contrast = first_contrast$contrast,
+    log_odds = as.numeric(n_subgroups),
+    SE_log_odds = as.numeric(n_subgroups),
+    df = as.numeric(n_subgroups),
+    stringsAsFactors = FALSE
+  )
+  
+  pooled_rd_results <- data.frame(
+    dr_severity = first_rd$dr_severity,
+    any_treatment = first_rd$any_treatment,
+    contrast = first_rd$contrast,
+    risk_diff = as.numeric(n_subgroups),
+    SE_risk_diff = as.numeric(n_subgroups),
+    df = as.numeric(n_subgroups),
+    stringsAsFactors = FALSE
+  )
+  
+  # Check column names in first imputation for debugging
+  if (length(all_contrasts) > 0) {
+    log_message("Contrast columns: ", paste(names(all_contrasts[[1]]), collapse = ", "))
+  }
+  if (length(all_risk_diffs) > 0) {
+    log_message("Risk diff columns: ", paste(names(all_risk_diffs[[1]]), collapse = ", "))
+  }
+  
+  # Pool each subgroup using Rubin's rules
+  log_progress(0, n_subgroups, "Pooling subgroup")
+  
+  for (j in 1:n_subgroups) {
+    log_progress(j, n_subgroups, "Pooling subgroup")
+    # Pool odds ratio contrasts (log scale)
+    # Extract the j-th estimate from each imputation
+    log_odds_estimates <- sapply(all_contrasts, function(x) {
+      x$estimate[j]
+    })
+    
+    log_odds_SEs <- sapply(all_contrasts, function(x) {
+      x$SE[j]
+    })
+    
+    # Convert to numeric and check for validity
+    log_odds_estimates <- as.numeric(log_odds_estimates)
+    log_odds_SEs <- as.numeric(log_odds_SEs)
+    
+    # Apply Rubin's rules for log odds
+    Q_bar_log <- mean(log_odds_estimates, na.rm = TRUE)
+    U_bar_log <- mean(log_odds_SEs^2, na.rm = TRUE)
+    B_log <- var(log_odds_estimates, na.rm = TRUE)
+    T_log <- U_bar_log + (1 + 1/n_imputations) * B_log
+    
+    # Degrees of freedom (Barnard-Rubin)
+    lambda_log <- (B_log + B_log/n_imputations) / T_log
+    df_log <- (n_imputations - 1) / (lambda_log^2)
+    
+    pooled_or_results$log_odds[j] <- Q_bar_log
+    pooled_or_results$SE_log_odds[j] <- sqrt(T_log)
+    pooled_or_results$df[j] <- df_log
+    
+    # Pool risk differences (probability scale)
+    # Extract the j-th estimate from each imputation
+    # pairs() on response scale may use 'odds.ratio' or 'estimate' depending on emmeans version
+    rd_estimates <- sapply(all_risk_diffs, function(x) {
+      if ("estimate" %in% names(x)) {
+        x$estimate[j]
+      } else if ("odds.ratio" %in% names(x)) {
+        # This is actually a risk difference despite the column name
+        x$odds.ratio[j]
+      } else {
+        # Try to find the appropriate column
+        stop("Could not find estimate column in risk diff results. Columns are: ", 
+             paste(names(x), collapse = ", "))
+      }
+    })
+    
+    rd_SEs <- sapply(all_risk_diffs, function(x) {
+      x$SE[j]
+    })
+    
+    # Convert to numeric and check for validity
+    rd_estimates <- as.numeric(rd_estimates)
+    rd_SEs <- as.numeric(rd_SEs)
+    
+    # Check if we got valid numeric values
+    if (any(is.na(rd_estimates)) || any(is.na(rd_SEs))) {
+      warning(paste("Missing values in risk difference pooling for subgroup", j))
+    }
+    
+    # Apply Rubin's rules for risk differences
+    Q_bar_rd <- mean(rd_estimates, na.rm = TRUE)
+    U_bar_rd <- mean(rd_SEs^2, na.rm = TRUE)
+    B_rd <- var(rd_estimates, na.rm = TRUE)
+    T_rd <- U_bar_rd + (1 + 1/n_imputations) * B_rd
+    
+    # Degrees of freedom
+    lambda_rd <- (B_rd + B_rd/n_imputations) / T_rd
+    df_rd <- (n_imputations - 1) / (lambda_rd^2)
+    
+    pooled_rd_results$risk_diff[j] <- Q_bar_rd
+    pooled_rd_results$SE_risk_diff[j] <- sqrt(T_rd)
+    pooled_rd_results$df[j] <- df_rd
+  }
+  
+  return(list(
+    odds_ratios = pooled_or_results,
+    risk_differences = pooled_rd_results,
+    emmeans_list = all_emmeans
+  ))
+}
+
+# Check if emmeans results are cached
+emmeans_cache_file <- file.path(reanalysis_data_dir, "emmeans_results_interaction.rds")
+
+if (file.exists(emmeans_cache_file) && !force_recalc_emmeans) {
+  # Load cached results
+  pooled_results <- readRDS(emmeans_cache_file)
+  emmeans_loaded_from_cache <- TRUE
+  emmeans_cache_location <- emmeans_cache_file
+  log_message("Emmeans results loaded from cache: ", emmeans_cache_location)
+} else {
+  # Calculate new emmeans results
+  emmeans_loaded_from_cache <- FALSE
+  
+  # Pool contrasts across all imputations
+  pooled_results <- pool_emmeans_subgroup_effects(models, n_imputations)
+  
+  # Save to cache
+  saveRDS(pooled_results, emmeans_cache_file)
+  emmeans_cache_location <- emmeans_cache_file
+  log_message("Emmeans results calculated and saved to cache: ", emmeans_cache_location)
+}
+
+# Process odds ratio results
+or_effects <- pooled_results$odds_ratios |>
+  mutate(
+    t_stat = log_odds / SE_log_odds,
+    p.value = 2 * pt(-abs(t_stat), df = df),
+    CI_Lower_log = log_odds - qt(0.975, df = df) * SE_log_odds,
+    CI_Upper_log = log_odds + qt(0.975, df = df) * SE_log_odds,
+    OR = exp(log_odds),
+    OR_CI_Lower = exp(CI_Lower_log),
+    OR_CI_Upper = exp(CI_Upper_log)
+  )
+
+# Process risk difference results
+rd_effects <- pooled_results$risk_differences |>
+  mutate(
+    t_stat = risk_diff / SE_risk_diff,
+    p.value = 2 * pt(-abs(t_stat), df = df),
+    CI_Lower = risk_diff - qt(0.975, df = df) * SE_risk_diff,
+    CI_Upper = risk_diff + qt(0.975, df = df) * SE_risk_diff
+  )
+
+# Create odds ratio table
+or_table <- data.frame(
+  DR_Severity = or_effects$dr_severity,
+  Treatment = or_effects$any_treatment,
+  OR = round(or_effects$OR, 3),
+  `OR_95CI` = paste0("(", round(or_effects$OR_CI_Lower, 3), ", ", 
+                     round(or_effects$OR_CI_Upper, 3), ")"),
+  P_Value = format.pval(or_effects$p.value, digits = 4, eps = 0.0001)
+)
+
+# Create risk difference table
+rd_table <- data.frame(
+  DR_Severity = rd_effects$dr_severity,
+  Treatment = rd_effects$any_treatment,
+  Risk_Diff = round(rd_effects$risk_diff, 4),
+  `RD_95CI` = paste0("(", round(rd_effects$CI_Lower, 4), ", ", 
+                     round(rd_effects$CI_Upper, 4), ")"),
+  P_Value = format.pval(rd_effects$p.value, digits = 4, eps = 0.0001)
+)
+
+kable(or_table,
+      caption = "Odds Ratios for Lapsing Effect Within Each Subgroup",
+      col.names = c("DR Severity", "Treatment", "Odds Ratio", "95% CI", "P-value"),
+      row.names = FALSE)
+
+kable(rd_table,
+      caption = "Risk Differences for Lapsing Effect Within Each Subgroup",
+      col.names = c("DR Severity", "Treatment", "Risk Diff", "95% CI", "P-value"),
+      row.names = FALSE)
+
+# Store for visualization (use OR results for compatibility)
+subgroup_effects_stored <- data.frame(
+  DR_Severity = or_effects$dr_severity,
+  Treatment = or_effects$any_treatment,
+  Log_Odds = or_effects$log_odds,
+  SE = or_effects$SE_log_odds,
+  CI_Lower = or_effects$CI_Lower_log,
+  CI_Upper = or_effects$CI_Upper_log,
+  OR = or_effects$OR,
+  OR_CI_Lower = or_effects$OR_CI_Lower,
+  OR_CI_Upper = or_effects$OR_CI_Upper,
+  P_Value = or_effects$p.value
+)
+
+# Also store risk differences for reporting
+risk_diff_effects_stored <- data.frame(
+  DR_Severity = rd_effects$dr_severity,
+  Treatment = rd_effects$any_treatment,
+  Risk_Diff = rd_effects$risk_diff,
+  SE = rd_effects$SE_risk_diff,
+  CI_Lower = rd_effects$CI_Lower,
+  CI_Upper = rd_effects$CI_Upper,
+  P_Value = rd_effects$p.value
+)
+
+# Display the risk differences prominently
+log_message("Risk differences (probability scale) calculated")
+```
+
+## Visualization of Three-Way Interaction
+
+```{r visualization}
+#| fig-height: 8
+#| fig-width: 12
+
+# Use the subgroup effects for visualization
+plot_data <- subgroup_effects_stored
+
+# Add OR confidence intervals (converting from log odds scale)
+plot_data <- plot_data |>
+  mutate(
+    OR_CI_Lower = exp(CI_Lower),
+    OR_CI_Upper = exp(CI_Upper)
+  )
+
+# Check for extreme values and cap if necessary
+max_or <- max(c(plot_data$OR, plot_data$OR_CI_Upper), na.rm = TRUE)
+if (max_or > 100) {
+  warning(paste("Extreme OR values detected (max =", round(max_or, 1), "). Consider checking the model."))
+  # Cap at reasonable values for visualization
+  plot_data <- plot_data |>
+    mutate(
+      OR_display = pmin(OR, 20),
+      OR_CI_Lower_display = pmax(OR_CI_Lower, 0.05),
+      OR_CI_Upper_display = pmin(OR_CI_Upper, 20),
+      capped = OR > 20 | OR_CI_Upper > 20
+    )
+} else {
+  plot_data <- plot_data |>
+    mutate(
+      OR_display = OR,
+      OR_CI_Lower_display = OR_CI_Lower,
+      OR_CI_Upper_display = OR_CI_Upper,
+      capped = FALSE
+    )
+}
+
+# Create interaction plot with Odds Ratios (converted from log odds)
+p1 <- ggplot(plot_data, aes(x = DR_Severity, y = OR_display, 
+                            color = Treatment, group = Treatment)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = OR_CI_Lower_display, ymax = OR_CI_Upper_display), 
+                width = 0.1, size = 0.8) +
+  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
+  labs(title = "Three-Way Interaction: Lapse × DR Severity × Treatment",
+       subtitle = ifelse(any(plot_data$capped), 
+                        "Effect of lapsing (OR scale, capped at 20 for display)",
+                        "Effect of lapsing on vision impairment (odds ratio scale)"),
+       x = "DR Severity",
+       y = "Odds Ratio",
+       color = "Treatment Status") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12),
+        legend.position = "bottom") +
+  scale_color_manual(values = c("No_Treatment" = "#2ca02c", 
+                               "Any_Treatment" = "#d62728")) +
+  coord_cartesian(ylim = c(0, max(plot_data$OR_CI_Upper_display) * 1.1))
+
+# Create OR bar plot with error bars
+p2 <- ggplot(plot_data, aes(x = DR_Severity, y = OR_display, 
+                            fill = Treatment)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.7) +
+  geom_errorbar(aes(ymin = OR_CI_Lower_display, ymax = OR_CI_Upper_display),
+                position = position_dodge(width = 0.8),
+                width = 0.2, size = 0.8) +
+  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
+  labs(title = "Odds Ratios by Subgroup",
+       subtitle = ifelse(any(plot_data$capped),
+                        "Effect of lapsing (with 95% CI, capped at 20 for display)",
+                        "Effect of lapsing on vision impairment (with 95% CI)"),
+       x = "DR Severity",
+       y = "Odds Ratio",
+       fill = "Treatment Status") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12),
+        legend.position = "bottom") +
+  scale_fill_manual(values = c("No_Treatment" = "#2ca02c", 
+                               "Any_Treatment" = "#d62728")) +
+  geom_text(aes(label = ifelse(capped, 
+                               sprintf(">%.0f", OR_display),
+                               sprintf("%.2f", OR))),
+            position = position_dodge(width = 0.8),
+            vjust = -1.5, size = 3.5) +
+  coord_cartesian(ylim = c(0, max(plot_data$OR_CI_Upper_display) * 1.1))
+
+# Arrange plots
+grid.arrange(p1, p2, ncol = 2)
+```
+
+## Convergence Diagnostics
+
+```{r convergence-diagnostics}
+# Extract estimates across imputations for key subgroups
+convergence_data <- data.frame()
+
+for (i in 1:n_imputations) {
+  # Get log odds estimates from each imputation for each subgroup
+  contrast_df <- pooled_results$odds_ratios
+  
+  # Track No_DR + No_Treatment as reference
+  ref_estimates <- sapply(1:n_imputations, function(imp) {
+    df <- as.data.frame(pooled_results$emmeans_list[[imp]])
+    subset_df <- df[df$dr_severity == "No_DR" & 
+                   df$any_treatment == "No_Treatment" & 
+                   df$ever_lapse_binary == "Lapsed", ]
+    if (nrow(subset_df) > 0) {
+      return(qlogis(subset_df$prob[1]))  # Convert prob to log odds
+    } else {
+      return(NA)
+    }
+  })
+  
+  # Track PDR + Any_Treatment as most complex interaction
+  complex_estimates <- sapply(1:n_imputations, function(imp) {
+    df <- as.data.frame(pooled_results$emmeans_list[[imp]])
+    subset_df <- df[df$dr_severity == "PDR" & 
+                   df$any_treatment == "Any_Treatment" & 
+                   df$ever_lapse_binary == "Lapsed", ]
+    if (nrow(subset_df) > 0) {
+      return(qlogis(subset_df$prob[1]))
+    } else {
+      return(NA)
+    }
+  })
+}
+
+# Calculate running averages
+running_avg_ref <- cumsum(ref_estimates) / seq_along(ref_estimates)
+running_avg_complex <- cumsum(complex_estimates) / seq_along(complex_estimates)
+
+# Create convergence plot
+convergence_df <- data.frame(
+  Imputation = rep(1:n_imputations, 2),
+  Estimate = c(ref_estimates, complex_estimates),
+  Running_Average = c(running_avg_ref, running_avg_complex),
+  Subgroup = factor(rep(c("No_DR + No_Treatment", "PDR + Any_Treatment"), 
+                        each = n_imputations))
+)
+
+# Plot convergence
+library(ggplot2)
+convergence_plot <- ggplot(convergence_df, aes(x = Imputation)) +
+  geom_point(aes(y = Estimate, color = Subgroup), alpha = 0.5) +
+  geom_line(aes(y = Running_Average, color = Subgroup), size = 1.2) +
+  labs(title = "Convergence of Subgroup Effect Estimates",
+       subtitle = "Points show individual estimates, lines show running averages",
+       x = "Imputation Number",
+       y = "Log Odds of Outcome (Lapsed)",
+       color = "Subgroup") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(convergence_plot)
+
+# Summary statistics
+convergence_stats <- data.frame(
+  Subgroup = c("No_DR + No_Treatment", "PDR + Any_Treatment"),
+  Mean = c(mean(ref_estimates), mean(complex_estimates)),
+  SD = c(sd(ref_estimates), sd(complex_estimates)),
+  CV = c(sd(ref_estimates)/abs(mean(ref_estimates)) * 100,
+         sd(complex_estimates)/abs(mean(complex_estimates)) * 100),
+  Final_Running_Avg = c(tail(running_avg_ref, 1), tail(running_avg_complex, 1))
+) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+kable(convergence_stats,
+      caption = "Convergence Statistics for Key Subgroups",
+      col.names = c("Subgroup", "Mean", "SD", "CV (%)", "Final Running Avg"))
+```
+
+## Export Results
+
+```{r export}
+# Note: Using emmeans-based risk differences as the primary effect measure
+# These are calculated at the reference grid rather than averaged over observed data
+
+# Save key results for reporting
+results_to_save <- list(
+  pooled_coefficients = pooled_results,
+  subgroup_effects = subgroup_effects_stored,
+  risk_differences = risk_diff_effects_stored,  # Risk differences on probability scale
+  emmeans_results = pooled_results,  # The emmeans-based effects
+  probability_table = if(exists("prob_table")) prob_table else NULL,
+  model_summaries = model_summaries,
+  n_imputations = n_imputations,
+  analysis_mode = analysis_mode,
+  timestamp = Sys.time()
+)
+
+saveRDS(results_to_save, 
+        file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
+
+log_message("Results saved to: ", 
+        file.path(reanalysis_data_dir, "outcome_analysis_results.rds"))
+```
+

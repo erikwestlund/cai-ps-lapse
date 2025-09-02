@@ -115,18 +115,7 @@ imputation_vars <- c(
   # NOT dr_severity or person_dr_severity - derived from person_dr
 )
 
-# First, create person-level DR severity (maximum observed per patient)
-df_person_dr <- df_for_imputation |>
-  group_by(e_mrn_deidentified) |>
-  summarise(
-    # Take the maximum observed person_dr for each patient
-    # This ensures consistency within patients
-    person_dr_max = max(person_dr, na.rm = TRUE),
-    # If all values are NA for a patient, max returns -Inf, so handle that
-    person_dr_max = ifelse(is.infinite(person_dr_max), NA_real_, person_dr_max)
-  ) |>
-  ungroup()
-
+# Prepare data for MICE - NO person_dr_max, use eye-level person_dr
 df_mice <- df_for_imputation |>
   mutate(
     # Create a unique row identifier to preserve exact row matching
@@ -134,15 +123,10 @@ df_mice <- df_for_imputation |>
     # Create numeric cluster ID for 2l.pan (required for multilevel imputation)
     cluster_id = as.numeric(factor(e_mrn_deidentified))
   ) |>
-  # Join the person-level DR severity
-  left_join(df_person_dr, by = "e_mrn_deidentified") |>
-  dplyr::select(row_id, cluster_id, dplyr::all_of(imputation_vars), person_dr_max) |>
+  dplyr::select(row_id, cluster_id, dplyr::all_of(imputation_vars)) |>
   mutate(
-    # Convert person_dr_max to ordered factor for polr imputation method
-    person_dr_max = factor(person_dr_max, levels = c(0, 1, 2), 
-                          labels = c("No_DR", "NPDR", "PDR"),
-                          ordered = TRUE),
-    # Convert original person_dr to factor (keep for comparison but won't impute)
+    # Convert person_dr to ordered factor for polr imputation method
+    # person_dr is eye-level DR severity (0=No_DR, 1=NPDR, 2=PDR)
     person_dr = factor(person_dr, levels = c(0, 1, 2), 
                       labels = c("No_DR", "NPDR", "PDR"),
                       ordered = TRUE),
@@ -164,9 +148,9 @@ df_mice <- df_for_imputation |>
     PRP_flag = factor(PRP_flag, levels = c(0, 1))
   )
 
-log_message(paste0("Created person_dr_max: ", 
-                  sum(!is.na(df_mice$person_dr_max)), " non-missing, ",
-                  sum(is.na(df_mice$person_dr_max)), " missing"))
+log_message(paste0("person_dr (eye-level): ", 
+                  sum(!is.na(df_mice$person_dr)), " non-missing, ",
+                  sum(is.na(df_mice$person_dr)), " missing"))
 ```
 
 ## Setup Imputation Model
@@ -222,11 +206,9 @@ custom_methods["CCI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["DCSI"] <- "pmm"  # Predictive mean matching for count data
 custom_methods["age"] <- "pmm"
 
-# Use proportional odds model for ordinal person_dr_max (0/1/2)
-# person_dr_max is the person-level DR severity (consistent within patients)
-custom_methods["person_dr_max"] <- "polr"  # Ordinal logistic regression
-# Don't impute the original eye-level person_dr - it's replaced by person_dr_max
-custom_methods["person_dr"] <- ""  # Don't impute eye-level DR
+# Use proportional odds model for ordinal person_dr (0/1/2)
+# person_dr is the eye-level DR severity
+custom_methods["person_dr"] <- "polr"  # Ordinal logistic regression
 
 # Use logistic regression for binary variables
 custom_methods["catsurg_before_hitplus_cat"] <- "logreg"
@@ -284,19 +266,14 @@ diag(pred_matrix) <- 0
 pred_matrix[, "ever_lapse_binary"] <- 1
 pred_matrix["ever_lapse_binary", "ever_lapse_binary"] <- 0
 
-# Handle person_dr and person_dr_max
-# person_dr (eye-level) should not be used as predictor or predicted
-pred_matrix["person_dr", ] <- 0  # Not predicted
-pred_matrix[, "person_dr"] <- 0  # Not a predictor
-
-# person_dr_max (person-level) should be used as predictor but only for appropriate variables
-# It can predict outcomes but not baseline variables
-pred_matrix[, "person_dr_max"] <- 1  # Use as predictor for most variables
-pred_matrix["person_dr_max", "person_dr_max"] <- 0  # Not its own predictor
-pred_matrix["baseline_VA_logMAR", "person_dr_max"] <- 0  # Don't use to predict baseline VA
-pred_matrix["row_id", "person_dr_max"] <- 0  # Don't use for IDs
-pred_matrix["e_mrn_deidentified", "person_dr_max"] <- 0  # Don't use for IDs
-pred_matrix["cohort_id", "person_dr_max"] <- 0  # Don't use for cohort_id
+# Handle person_dr (eye-level DR severity)
+# person_dr should be used as predictor and can be predicted
+pred_matrix[, "person_dr"] <- 1  # Use as predictor for most variables
+pred_matrix["person_dr", "person_dr"] <- 0  # Not its own predictor
+pred_matrix["baseline_VA_logMAR", "person_dr"] <- 0  # Don't use to predict baseline VA
+pred_matrix["row_id", "person_dr"] <- 0  # Don't use for IDs
+pred_matrix["e_mrn_deidentified", "person_dr"] <- 0  # Don't use for IDs
+pred_matrix["cohort_id", "person_dr"] <- 0  # Don't use for cohort_id
 
 
 # Save the predictor matrix to CSV for inspection
@@ -558,10 +535,10 @@ if (use_cached_mice && file.exists(mice_cache_file)) {
   log_message(paste0("Saved MICE results to cache: ", mice_cache_file))
 }
 
-# Log person_dr_max imputation status
-if ("person_dr_max" %in% names(mice_results$imp)) {
-  n_imputed_dr <- sum(mice_results$nmis["person_dr_max"])
-  log_message(paste0("person_dr_max imputed for ", n_imputed_dr, " observations"))
+# Log person_dr imputation status
+if ("person_dr" %in% names(mice_results$imp)) {
+  n_imputed_dr <- sum(mice_results$nmis["person_dr"])
+  log_message(paste0("person_dr imputed for ", n_imputed_dr, " observations"))
 }
 
 # Check convergence
@@ -579,17 +556,10 @@ imputed_datasets <- complete(mice_results, action = "all")
 imputed_datasets <- lapply(1:n_imputations, function(i) {
   imp_data <- imputed_datasets[[i]]
   
-  # CRITICAL: Copy person_dr_max (imputed) to person_dr for create_dr_severity_variables
-  # person_dr_max is the person-level DR that was imputed
-  # person_dr needs to be set for each eye from person_dr_max
-  if ("person_dr_max" %in% names(imp_data)) {
-    # Convert from factor if needed
-    if (is.factor(imp_data$person_dr_max)) {
-      # Convert factor levels (No_DR=1, NPDR=2, PDR=3) to numeric (0, 1, 2)
-      imp_data$person_dr <- as.numeric(imp_data$person_dr_max) - 1
-    } else {
-      imp_data$person_dr <- imp_data$person_dr_max
-    }
+  # Convert person_dr from factor back to numeric if needed
+  if (is.factor(imp_data$person_dr)) {
+    # Convert factor levels (No_DR=1, NPDR=2, PDR=3) to numeric (0, 1, 2)
+    imp_data$person_dr <- as.numeric(imp_data$person_dr) - 1
   }
   
   # Apply transformation functions to recreate all derived variables
@@ -674,33 +644,33 @@ imputed_datasets <- lapply(imputed_datasets, function(imp_data) {
   patient_level_vars <- imp_data |>
     group_by(e_mrn_deidentified) |>
     summarise(
-      # Handle case where all values are NA (max returns -Inf)
-      person_dr_consistent = ifelse(all(is.na(person_dr)), 
-                                   NA_real_, 
-                                   max(person_dr, na.rm = TRUE)),
+      # For CCI and DCSI, take minimum (better value) per patient
+      # Lower scores indicate better health
       CCI_consistent = ifelse(all(is.na(CCI)), 
                              NA_real_, 
-                             max(CCI, na.rm = TRUE)),
+                             min(CCI, na.rm = TRUE)),
       DCSI_consistent = ifelse(all(is.na(DCSI)), 
                               NA_real_, 
-                              max(DCSI, na.rm = TRUE)),
+                              min(DCSI, na.rm = TRUE)),
+      # Note: person_dr is now eye-level, so we don't enforce consistency
       .groups = 'drop'
     )
   
-  # Replace with consistent values
+  # Replace with consistent values (CCI and DCSI only, not person_dr)
   imp_data <- imp_data |>
     left_join(patient_level_vars, by = "e_mrn_deidentified") |>
     mutate(
-      person_dr = person_dr_consistent,
-      CCI = CCI_consistent,
-      DCSI = DCSI_consistent
+      # Only replace CCI and DCSI with consistent (minimum) values
+      CCI = coalesce(CCI_consistent, CCI),
+      DCSI = coalesce(DCSI_consistent, DCSI)
+      # person_dr remains eye-level, not enforced to be consistent
     ) |>
-    select(-person_dr_consistent, -CCI_consistent, -DCSI_consistent)
+    select(-CCI_consistent, -DCSI_consistent)
   
   return(imp_data)
 })
 
-log_message("Enforced patient-level consistency for person_dr, CCI, and DCSI by taking max value per patient")
+log_message("Enforced patient-level consistency for CCI and DCSI by taking minimum (better) value per patient")
 
 completeness_check <- lapply(imputed_datasets, function(d) {
   sum(!complete.cases(d[, ps_model_vars]))
