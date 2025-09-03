@@ -18,14 +18,11 @@ library(twang)
 library(ggplot2)
 library(gridExtra)
 library(knitr)
-library(parallel)
-library(doParallel)
 
 # ANALYSIS MODE: Use same as imputation
 analysis_mode <- "final"  # Should match imputation mode
 
-# PARALLEL PROCESSING CONFIGURATION
-max_cores_for_ps <- 1  # Maximum cores to use for propensity score estimation (reduced for memory management)
+# SEQUENTIAL PROCESSING (parallel clustering removed for stability)
 
 # CACHING CONFIGURATION
 use_cache <- FALSE  # Set to FALSE to force re-computation
@@ -45,15 +42,8 @@ if (analysis_mode == "test") {
   n_trees <- 3000  # More trees for final analysis
 }
 
-# Set up parallel processing
-# Reduce cores for memory-intensive GBM models
-available_cores <- detectCores()
-log_message(paste0("Detected ", available_cores, " available cores"))
-log_message(paste0("Max cores configured: ", max_cores_for_ps))
-# Use fewer cores to avoid memory issues - each GBM model needs substantial memory
-# Don't subtract 1 from max_cores_for_ps since it's already the desired limit
-n_cores <- if (available_cores > max_cores_for_ps) max_cores_for_ps else max(1, available_cores - 1)
-log_message(paste0("Parallel processing: Using ", n_cores, " cores (of ", available_cores, " available) to manage memory usage"))
+# Sequential processing - no parallel cores used
+log_message("Using sequential processing (parallel clustering removed for stability)")
 
 ```
 
@@ -241,68 +231,21 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
 # Create log directory for worker logs
 log_dir <- dirname(log_file)
 
-# Create assignments of imputations to workers
-# With 2 workers: Worker 1 gets 1-15, Worker 2 gets 16-30
-worker_assignments <- data.frame(
-  imputation = 1:n_imputations,
-  worker_id = rep(1:n_cores, length.out = n_imputations)[1:n_imputations]
+# Run sequential processing (parallel clustering removed due to stability issues)
+log_message(paste0("Starting sequential processing of ", n_imputations, " imputations"))
+sequential_start <- Sys.time()
+
+# Process each imputation sequentially
+sequential_results <- lapply(
+  1:n_imputations,
+  function(i) {
+    worker_id <- 1  # Single worker for sequential processing
+    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, worker_id, log_dir)
+  }
 )
 
-# For more even distribution with 2 workers
-if (n_cores == 2) {
-  midpoint <- ceiling(n_imputations / 2)
-  worker_assignments$worker_id <- ifelse(worker_assignments$imputation <= midpoint, 1, 2)
-}
-
-# Run parallel processing
-log_message(paste0("Starting parallel processing of ", n_imputations, " imputations using ", n_cores, " cores"))
-log_message(paste0("Worker 1 will process imputations: ", 
-                   paste(worker_assignments$imputation[worker_assignments$worker_id == 1], collapse = ", ")))
-if (n_cores >= 2) {
-  log_message(paste0("Worker 2 will process imputations: ", 
-                     paste(worker_assignments$imputation[worker_assignments$worker_id == 2], collapse = ", ")))
-}
-parallel_start <- Sys.time()
-
-# Use mclapply on Unix/Mac, parLapply on Windows
-if (.Platform$OS.type == "unix") {
-  # Unix/Mac - use mclapply
-  parallel_results <- mclapply(
-    1:n_imputations,
-    function(i) {
-      worker_id <- worker_assignments$worker_id[i]
-      process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, worker_id, log_dir)
-    },
-    mc.cores = n_cores
-  )
-} else {
-  # Windows - use parLapply
-  log_message(paste0("Creating cluster with ", n_cores, " workers"))
-  cl <- makeCluster(n_cores)
-  log_message(paste0("Cluster created with ", length(cl), " workers"))
-  
-  # Export necessary objects to cluster
-  clusterExport(cl, c(
-    "process_imputation", "imputed_datasets", "ps_formula", 
-    "n_trees", "cache_dir", "use_cache", "worker_assignments", "log_dir"
-  ), envir = environment())
-  
-  # Load required packages on each worker
-  clusterEvalQ(cl, {
-    library(twang)
-  })
-  
-  # Create wrapper function for parLapply
-  parallel_results <- parLapply(cl, 1:n_imputations, function(i) {
-    worker_id <- worker_assignments$worker_id[i]
-    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, worker_id, log_dir)
-  })
-  
-  stopCluster(cl)
-}
-
-parallel_time <- round(as.numeric(difftime(Sys.time(), parallel_start, units = "mins")), 2)
-log_message(paste0("Parallel processing completed in ", parallel_time, " minutes"))
+sequential_time <- round(as.numeric(difftime(Sys.time(), sequential_start, units = "mins")), 2)
+log_message(paste0("Sequential processing completed in ", sequential_time, " minutes"))
 
 # Extract results and build progress dataframe
 twang_results <- list()
@@ -316,7 +259,7 @@ progress_df <- data.frame(
   Time_Minutes = numeric()
 )
 
-for (res in parallel_results) {
+for (res in sequential_results) {
   twang_results[[res$imputation]] <- res$result
   
   progress_df <- rbind(progress_df, data.frame(
@@ -337,20 +280,18 @@ for (res in parallel_results) {
   }
 }
 
-# Read and consolidate worker logs
-log_message("=== Worker Log Summary ===")
-for (worker in 1:n_cores) {
-  worker_log_file <- file.path(log_dir, paste0("propensity_scores_worker_", worker, ".log"))
-  if (file.exists(worker_log_file)) {
-    worker_logs <- readLines(worker_log_file)
-    log_message(paste0("Worker ", worker, " processed ", 
-                      sum(grepl("started", worker_logs)), " imputations, ",
-                      sum(grepl("completed", worker_logs)), " completed"))
-    # Optionally show first and last entries
-    if (length(worker_logs) > 0) {
-      log_message(paste0("  First: ", worker_logs[1]))
-      log_message(paste0("  Last:  ", worker_logs[length(worker_logs)]))
-    }
+# Read worker log (single sequential worker)
+log_message("=== Processing Log Summary ===")
+worker_log_file <- file.path(log_dir, "propensity_scores_worker_1.log")
+if (file.exists(worker_log_file)) {
+  worker_logs <- readLines(worker_log_file)
+  log_message(paste0("Sequential processing: ", 
+                    sum(grepl("started", worker_logs)), " imputations started, ",
+                    sum(grepl("completed", worker_logs)), " completed"))
+  # Optionally show first and last entries
+  if (length(worker_logs) > 0) {
+    log_message(paste0("  First: ", worker_logs[1]))
+    log_message(paste0("  Last:  ", worker_logs[length(worker_logs)]))
   }
 }
 log_message("==========================")
@@ -360,7 +301,7 @@ progress_df <- progress_df[order(progress_df$Imputation), ]
 
 # Display progress summary with caching and timing information
 kable(progress_df, 
-      caption = paste0("Twang Model Fitting Progress (Total time: ", parallel_time, " minutes using ", n_cores, " cores)"),
+      caption = paste0("Twang Model Fitting Progress (Total time: ", sequential_time, " minutes - sequential processing)"),
       col.names = c("Imputation", "Worker", "Trees Used", "Min Weight", "Max Weight", "From Cache", "Time (min)"))
 ```
 
