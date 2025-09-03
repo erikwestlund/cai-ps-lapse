@@ -25,10 +25,28 @@ analysis_mode <- "final"  # Should match imputation mode
 # SEQUENTIAL PROCESSING (parallel clustering removed for stability)
 
 # CACHING CONFIGURATION
-use_cache <- FALSE  # Set to FALSE to force re-computation
+use_cache <- TRUE  # Set to TRUE to use cache, FALSE to force re-computation
+cache_max_age_days <- 2  # Cache files older than this many days will be recomputed
 cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
 if (!dir.exists(cache_dir)) {
   dir.create(cache_dir, recursive = TRUE)
+}
+
+# Get list of existing cache files with their modification times
+if (use_cache) {
+  cache_files <- list.files(cache_dir, pattern = "^twang_imp_.*\\.rds$", full.names = TRUE)
+  if (length(cache_files) > 0) {
+    cache_info <- file.info(cache_files)
+    cache_info$file <- basename(rownames(cache_info))
+    cache_info$age_days <- as.numeric(difftime(Sys.time(), cache_info$mtime, units = "days"))
+    log_message(paste0("Found ", nrow(cache_info), " cached files in ", cache_dir))
+    log_message(paste0("Cache staleness threshold: ", cache_max_age_days, " days"))
+  } else {
+    cache_info <- NULL
+    log_message("No cached files found")
+  }
+} else {
+  log_message("Cache disabled - will recompute all imputations")
 }
 
 # Set parameters based on mode
@@ -125,7 +143,7 @@ log_message(paste0("Cache directory: ", cache_dir))
 log_message(paste0("Use cache: ", use_cache))
 
 # Function to process a single imputation
-process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_caching, worker_id, log_dir) {
+process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_caching, worker_id, log_dir, cache_max_age_days) {
   # Recreate variables inside function to avoid scoping issues
   library(twang)
   
@@ -139,13 +157,33 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
   # Check for cached result
   cache_file <- file.path(cache_path, paste0("twang_imp_", i, ".rds"))
   
+  # Determine if we should use cached file
+  should_use_cache <- FALSE
+  cache_status <- "not found"
+  
   if (use_caching && file.exists(cache_file)) {
+    # Check age of cache file
+    cache_age_days <- as.numeric(difftime(Sys.time(), file.info(cache_file)$mtime, units = "days"))
+    
+    if (cache_age_days <= cache_max_age_days) {
+      should_use_cache <- TRUE
+      cache_status <- paste0("exists, age ", round(cache_age_days, 1), " days (< ", cache_max_age_days, " days) - using cache")
+    } else {
+      cache_status <- paste0("exists but stale, age ", round(cache_age_days, 1), " days (> ", cache_max_age_days, " days) - recomputing")
+    }
+  } else if (use_caching) {
+    cache_status <- "not found - computing"
+  } else {
+    cache_status <- "cache disabled - computing"
+  }
+  
+  # Log cache status
+  cache_msg <- paste0("[Worker ", worker_id, "] Imputation ", i, " cache: ", cache_status)
+  cat(paste0(Sys.time(), " - ", cache_msg, "\n"), file = worker_log_file, append = TRUE)
+  
+  if (should_use_cache) {
     cached_result <- readRDS(cache_file)
     weights <- cached_result$weights
-    
-    # Log cache hit
-    cache_msg <- paste0("[Worker ", worker_id, "] Imputation ", i, " loaded from cache")
-    cat(paste0(Sys.time(), " - ", cache_msg, "\n"), file = worker_log_file, append = TRUE)
     
     return(list(
       imputation = i,
@@ -240,7 +278,7 @@ sequential_results <- lapply(
   1:n_imputations,
   function(i) {
     worker_id <- 1  # Single worker for sequential processing
-    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, worker_id, log_dir)
+    process_imputation(i, imputed_datasets, ps_formula, n_trees, cache_dir, use_cache, worker_id, log_dir, cache_max_age_days)
   }
 )
 
@@ -272,11 +310,11 @@ for (res in sequential_results) {
     Time_Minutes = res$time_mins
   ))
   
-  # Log individual result summary in main log
+  # Log individual result summary in main log (details in worker log)
   if (res$cached) {
-    log_message(paste0("Imputation ", res$imputation, " (Worker ", res$worker_id, "): Loaded from cache"))
+    log_message(paste0("Imputation ", res$imputation, ": Used cached result"))
   } else {
-    log_message(paste0("Imputation ", res$imputation, " (Worker ", res$worker_id, "): Fitted in ", res$time_mins, " minutes"))
+    log_message(paste0("Imputation ", res$imputation, ": Computed in ", res$time_mins, " minutes"))
   }
 }
 
@@ -295,6 +333,20 @@ if (file.exists(worker_log_file)) {
   }
 }
 log_message("==========================")
+
+# Cache usage summary
+n_cached <- sum(progress_df$Cached)
+n_computed <- sum(!progress_df$Cached)
+cache_time_saved <- round(n_cached * mean(progress_df$Time_Minutes[!progress_df$Cached], na.rm = TRUE), 1)
+
+log_message("=== Cache Summary ===")
+log_message(paste0("Total imputations: ", n_imputations))
+log_message(paste0("Used cache: ", n_cached, " (", round(100 * n_cached / n_imputations, 1), "%)"))
+log_message(paste0("Newly computed: ", n_computed, " (", round(100 * n_computed / n_imputations, 1), "%)"))
+if (n_computed > 0 && n_cached > 0) {
+  log_message(paste0("Estimated time saved: ~", cache_time_saved, " minutes"))
+}
+log_message("=====================")
 
 # Sort progress_df by imputation number
 progress_df <- progress_df[order(progress_df$Imputation), ]
