@@ -25,7 +25,7 @@ library(doParallel)
 analysis_mode <- "final"  # Should match imputation mode
 
 # PARALLEL PROCESSING CONFIGURATION
-max_cores_for_ps <- 2  # Maximum cores to use for propensity score estimation (reduced for memory management)
+max_cores_for_ps <- 1  # Maximum cores to use for propensity score estimation (reduced for memory management)
 
 # CACHING CONFIGURATION
 use_cache <- FALSE  # Set to FALSE to force re-computation
