@@ -240,43 +240,80 @@ log_message("Where focal laser patients were assigned:")
 print(focal_assignment)
 ```
 
-## Check Cell Sizes for Full Interaction
+## Average Cell Sizes Across Imputations
 
-```{r check-cells}
-# Check cell sizes for the three-way interaction
-first_data <- imputed_datasets[[1]]
-cell_counts <- first_data |>
-  count(ever_lapse_binary, dr_severity, treatment_type) |>
-  arrange(n)
+```{r average-cell-counts}
+# Compute cell counts for each imputation
+all_cell_counts <- list()
 
-# Identify problematic cells
-small_cells <- cell_counts |> filter(n < MIN_N_PER_CELL)
-
-if (nrow(small_cells) > 0) {
-  log_message(paste0("WARNING: ", nrow(small_cells), 
-                    " cells have fewer than ", MIN_N_PER_CELL, " observations"))
+for (i in 1:n_imputations) {
+  cell_counts <- imputed_datasets[[i]] |>
+    count(ever_lapse_binary, dr_severity, treatment_type) |>
+    mutate(imputation = i)
   
-  print(kable(small_cells, 
-              caption = paste("Cells with < ", MIN_N_PER_CELL, " observations")))
-  
-  # Decide whether to proceed
-  if (nrow(small_cells) > length(unique(first_data$treatment_type))) {
-    warning("Many small cells detected. Model may be unstable.")
-    # Could stop here or collapse categories
-  }
+  all_cell_counts[[i]] <- cell_counts
 }
 
-# Display full interaction table
-interaction_table <- cell_counts |>
+# Combine all imputations
+combined_counts <- bind_rows(all_cell_counts)
+
+# Calculate average counts across imputations
+average_counts <- combined_counts |>
+  group_by(ever_lapse_binary, dr_severity, treatment_type) |>
+  summarise(
+    mean_n = mean(n),
+    sd_n = sd(n),
+    min_n = min(n),
+    max_n = max(n),
+    .groups = "drop"
+  ) |>
+  arrange(ever_lapse_binary, dr_severity, treatment_type)
+
+# Display average cell counts in wide format
+average_table <- average_counts |>
+  select(ever_lapse_binary, dr_severity, treatment_type, mean_n) |>
   pivot_wider(
     names_from = treatment_type,
-    values_from = n,
+    values_from = mean_n,
     values_fill = 0
   ) |>
   arrange(ever_lapse_binary, dr_severity)
 
-kable(interaction_table,
-      caption = "Cell sizes for Lapse × DR Severity × Treatment Type (4 levels)")
+kable(average_table,
+      caption = paste0("Average cell sizes across ", n_imputations, " imputations"),
+      digits = 1,
+      col.names = c("Lapse", "DR Severity", names(average_table)[-(1:2)]))
+
+# Identify small cells (averaged across imputations)
+small_cells <- average_counts |> 
+  filter(mean_n < MIN_N_PER_CELL)
+
+if (nrow(small_cells) > 0) {
+  log_message(paste0("WARNING: ", nrow(small_cells), 
+                    " cells have average count < ", MIN_N_PER_CELL))
+  
+  kable(small_cells |> 
+        select(ever_lapse_binary, dr_severity, treatment_type, 
+               mean_n, min_n, max_n) |>
+        arrange(mean_n),
+        caption = paste0("Cells with average count < ", MIN_N_PER_CELL),
+        digits = 1,
+        col.names = c("Lapse", "DR Severity", "Treatment", "Mean N", "Min N", "Max N"))
+}
+
+# Summary statistics
+total_cells <- nrow(average_counts)
+sparse_cells <- sum(average_counts$mean_n < 30)
+very_sparse_cells <- sum(average_counts$mean_n < 10)
+
+cat("\n### Cell Count Summary\n")
+cat("- Total cells in 3-way interaction:", total_cells, "\n")
+cat("- Cells with average n < 30:", sparse_cells, 
+    "(", round(100*sparse_cells/total_cells, 1), "%)\n")
+cat("- Cells with average n < 10:", very_sparse_cells,
+    "(", round(100*very_sparse_cells/total_cells, 1), "%)\n")
+cat("- Smallest average cell size:", round(min(average_counts$mean_n), 1), "\n")
+cat("- Largest average cell size:", round(max(average_counts$mean_n), 1), "\n")
 ```
 
 ### Variable Distributions in First Imputed Dataset
