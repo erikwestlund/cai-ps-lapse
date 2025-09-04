@@ -1,6 +1,6 @@
 ---
-title: "Cell Count Analysis for Full Four-Treatment Interaction (Monotherapy Only)"
-subtitle: "Average cell sizes for lapse × DR severity × 4-level treatment across imputations"
+title: "Cell Count Analysis for Lapse × DR × Treatment Interaction (Monotherapy Only)"
+subtitle: "Checking cell sizes across imputations"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
 format: html
@@ -11,191 +11,85 @@ format: html
 ```{r setup}
 #| include: false
 source("dependencies.R")
-source("functions.R")  # Load formulas and helper functions
+source("functions.R")
 setup_analysis(seed = 2025)
 
-# Additional packages
 library(knitr)
 library(tidyr)
 library(dplyr)
 
-# ANALYSIS MODE: Use same as imputation/PS
-analysis_mode <- "final"  # Should match imputation and PS modes
-
-# Set parameters based on mode
-if (analysis_mode == "test") {
-  max_imputations_to_process <- 2  # Process only 2 imputations in test mode
-} else {
-  max_imputations_to_process <- NULL  # Process all available imputations
-}
-
 # Initialize logging
-log_file <- init_log("cell_count_analysis_full_interaction")
+log_file <- init_log("cell_count_analysis")
 
-# Configuration for cell size checking
+# Configuration
 MIN_N_PER_CELL <- 5    # Minimum observations per interaction cell
-
-# Treatment approach configuration
 TREATMENT_APPROACH <- "hierarchical"  # "hierarchical" or "collapsed"
 
 log_message("======================================")
-log_message("Cell Count Analysis - Full Interaction")
+log_message("Cell Count Analysis")
 log_message("======================================")
 log_message(paste0("Analysis started at: ", Sys.time()))
 ```
 
-## Load Data and Weights
+## Load Imputed Datasets
 
 ```{r load-data}
-# Load imputed datasets
+# Load imputed datasets from reanalysis-2
 imputed_file <- file.path(reanalysis_data_dir, "imputed_datasets.rds")
+
 if (!file.exists(imputed_file)) {
-  stop("Imputed datasets not found. Run reanalysis-2 first.")
+  stop("Imputed datasets not found. Run reanalysis-2-multiple_imputation.qmd first.")
 }
 
 imputed_datasets <- readRDS(imputed_file)
-n_available <- length(imputed_datasets)
+n_imputations <- length(imputed_datasets)
 
-# Load PS results for weights
-ps_file <- file.path(reanalysis_data_dir, "ps_results.rds")
-if (!file.exists(ps_file)) {
-  stop("PS results not found. Run reanalysis-4 first.")
-}
-
-ps_results <- readRDS(ps_file)
-n_ps_available <- length(ps_results$twang_results)
-
-# Determine how many imputations to process
-if (!is.null(max_imputations_to_process)) {
-  n_imputations <- min(max_imputations_to_process, n_available, n_ps_available)
-} else {
-  n_imputations <- min(n_available, n_ps_available)
-}
-
-log_message(paste0("Available imputed datasets: ", n_available))
-log_message(paste0("Available PS weight sets: ", n_ps_available))
-log_message(paste0("Processing: ", n_imputations, " imputations"))
-
-# Verify match between imputations and PS weights
-n_ps_weights <- length(ps_results$twang_results)
-if (n_ps_weights < n_imputations) {
-  warning("Only ", n_ps_weights, " PS weight sets available for ", n_imputations, " imputations")
-  stop("Mismatch between imputations and PS results. Ensure PS analysis was run with same number of imputations.")
-}
-
-for (i in 1:n_imputations) {
-  imputed_datasets[[i]]$iptw_weight <- ps_results$twang_results[[i]]$weights
-}
+log_message(paste0("Loaded ", n_imputations, " imputed datasets"))
 ```
 
-**Available imputed datasets:** `r n_available`  
-**Available PS results:** `r n_ps_available`  
-**Processing:** `r n_imputations` **datasets** `r if(analysis_mode == "test") "(test mode limit)" else "(all available)"`
+## Prepare Treatment Variables
 
-**Note:** This analysis is restricted to monotherapy patients only (n_treatments ≤ 1) to avoid complexity from overlapping treatments.
-
-```{r prepare-data}
-# Create consistent analysis variables across all imputed datasets
+```{r prepare-treatment}
+# Create treatment variables and restrict to monotherapy
 for (i in 1:n_imputations) {
   imputed_datasets[[i]] <- imputed_datasets[[i]] |>
     mutate(
-      # First, check treatment overlaps for diagnostic purposes
+      # Count treatments per patient
       n_treatments = as.numeric(as.character(other_inject)) + 
                      as.numeric(as.character(anti_VEGF)) + 
                      as.numeric(as.character(focal_laser_flag)) + 
                      as.numeric(as.character(PRP_flag)),
       
-      # Create treatment factor based on chosen approach
+      # Create treatment factor with hierarchical assignment
       treatment_type = case_when(
-        TREATMENT_APPROACH == "hierarchical" ~ case_when(
-          focal_laser_flag == 1 ~ "focal_laser",  # Highest priority to preserve all 36 cases
-          anti_VEGF == 1 ~ "anti_VEGF",
-          PRP_flag == 1 ~ "PRP",
-          other_inject == 1 ~ "other_inject",
-          TRUE ~ "none"
-        ),
-        TREATMENT_APPROACH == "collapsed" ~ case_when(
-          anti_VEGF == 1 ~ "anti_VEGF",
-          PRP_flag == 1 ~ "PRP",
-          focal_laser_flag == 1 | other_inject == 1 ~ "other_or_focal",
-          TRUE ~ "none"
-        ),
-        TRUE ~ "none"  # fallback
+        focal_laser_flag == 1 ~ "focal_laser",  # Highest priority
+        anti_VEGF == 1 ~ "anti_VEGF",
+        PRP_flag == 1 ~ "PRP",
+        other_inject == 1 ~ "other_inject",
+        TRUE ~ "none"
       ),
       
-      # Set factor levels based on approach
-      treatment_type = if (TREATMENT_APPROACH == "collapsed") {
-        factor(treatment_type, 
-               levels = c("none", "other_or_focal", "PRP", "anti_VEGF"))
-      } else {
-        factor(treatment_type,
-               levels = c("none", "other_inject", "focal_laser", "PRP", "anti_VEGF"))
-      },
-      
-      # Keep binary for comparison
-      any_treatment = as.numeric(anti_VEGF == 1 | PRP_flag == 1 | 
-                                 other_inject == 1 | focal_laser_flag == 1),
-      any_treatment = factor(any_treatment, levels = c(0, 1), 
-                            labels = c("No_Treatment", "Any_Treatment")),
+      treatment_type = factor(treatment_type,
+                              levels = c("none", "other_inject", "focal_laser", "PRP", "anti_VEGF")),
       
       # Ensure DR severity is properly factored
-      dr_severity = factor(dr_severity,
-                          levels = c("No_DR", "NPDR", "PDR")),
+      dr_severity = factor(dr_severity, levels = c("No_DR", "NPDR", "PDR")),
       
       # Ensure lapse is properly coded
       ever_lapse_binary = factor(ever_lapse_binary, levels = c(0, 1),
                                  labels = c("No_Lapse", "Lapsed"))
     ) |>
-    # RESTRICT TO MONOTHERAPY PATIENTS (n_treatments == 0 or 1)
+    # RESTRICT TO MONOTHERAPY PATIENTS
     filter(n_treatments <= 1)
   
   log_message(paste0("Imputation ", i, ": ", nrow(imputed_datasets[[i]]), 
                      " patients after restricting to monotherapy"))
 }
-
-# Check treatment distribution and overlaps
-first_data <- imputed_datasets[[1]]
-
-log_message(paste0("Using treatment approach: ", TREATMENT_APPROACH))
-if (TREATMENT_APPROACH == "collapsed") {
-  log_message("Combining focal_laser and other_inject into 'other_or_focal' category")
-}
-
-# Check how many patients have multiple treatments
-multi_treatment <- table(first_data$n_treatments)
-log_message("Number of treatments per patient:")
-for (n in names(multi_treatment)) {
-  log_message(paste0("  ", n, " treatment(s): ", multi_treatment[n]))
-}
-
-# Check specific overlaps with focal laser
-if (sum(as.numeric(as.character(first_data$focal_laser_flag))) > 0) {
-  focal_patients <- first_data[as.numeric(as.character(first_data$focal_laser_flag)) == 1, ]
-  log_message(paste0("Total focal laser patients: ", nrow(focal_patients)))
-  log_message(paste0("  Focal only: ", sum(focal_patients$n_treatments == 1)))
-  log_message(paste0("  Focal + anti_VEGF: ", sum(as.numeric(as.character(focal_patients$anti_VEGF)))))
-  log_message(paste0("  Focal + PRP: ", sum(as.numeric(as.character(focal_patients$PRP_flag)))))
-  log_message(paste0("  Focal + other: ", sum(as.numeric(as.character(focal_patients$other_inject)))))
-}
-
-treatment_dist <- table(first_data$treatment_type)
-log_message("Treatment type distribution (hierarchical assignment):")
-for (tx in names(treatment_dist)) {
-  log_message(paste0("  ", tx, ": ", treatment_dist[tx]))
-}
-
-# Create a cross-tab to show the hierarchical effect
-focal_assignment <- table(
-  focal_laser_flag = first_data$focal_laser_flag,
-  assigned_treatment = first_data$treatment_type
-)
-log_message("Where focal laser patients were assigned:")
-print(focal_assignment)
 ```
 
 ## Average Cell Sizes Across Imputations
 
-```{r average-cell-counts}
+```{r compute-cell-counts}
 # Compute cell counts for each imputation
 all_cell_counts <- list()
 
@@ -233,11 +127,10 @@ average_table <- average_counts |>
   arrange(ever_lapse_binary, dr_severity)
 
 kable(average_table,
-      caption = paste0("Average cell sizes across ", n_imputations, " imputations"),
-      digits = 1,
-      col.names = c("Lapse", "DR Severity", names(average_table)[-(1:2)]))
+      caption = paste0("Average cell sizes across ", n_imputations, " imputations (monotherapy only)"),
+      digits = 1)
 
-# Identify small cells (averaged across imputations)
+# Identify small cells
 small_cells <- average_counts |> 
   filter(mean_n < MIN_N_PER_CELL)
 
@@ -250,8 +143,7 @@ if (nrow(small_cells) > 0) {
                mean_n, min_n, max_n) |>
         arrange(mean_n),
         caption = paste0("Cells with average count < ", MIN_N_PER_CELL),
-        digits = 1,
-        col.names = c("Lapse", "DR Severity", "Treatment", "Mean N", "Min N", "Max N"))
+        digits = 1)
 }
 
 # Summary statistics
@@ -269,7 +161,22 @@ cat("- Smallest average cell size:", round(min(average_counts$mean_n), 1), "\n")
 cat("- Largest average cell size:", round(max(average_counts$mean_n), 1), "\n")
 ```
 
-## Session Info
+## Cell Distribution Details
+
+```{r detailed-distribution}
+# Show distribution with standard deviations
+detailed_table <- average_counts |>
+  mutate(
+    mean_sd = paste0(round(mean_n, 1), " (", round(sd_n, 1), ")"),
+    range = paste0("[", round(min_n), "-", round(max_n), "]")
+  ) |>
+  select(ever_lapse_binary, dr_severity, treatment_type, mean_sd, range) |>
+  arrange(ever_lapse_binary, dr_severity, treatment_type)
+
+kable(detailed_table,
+      caption = "Cell sizes: Mean (SD) and [Min-Max] range across imputations",
+      col.names = c("Lapse", "DR Severity", "Treatment", "Mean (SD)", "Range"))
+```
 
 ```{r session-info}
 # Close log
