@@ -33,16 +33,16 @@ original_complete <- apply_exclusions(original_data)  # Remove missing CCI/DCSI
 
 log_message(paste0("Original data after exclusions: ", nrow(original_complete), " observations"))
 
-# 2. Load new complete cases data (from reanalysis-1)
-complete_file <- file.path(reanalysis_data_dir, "df_complete_original.rds")
-if (!file.exists(complete_file)) {
-  stop("Complete cases data not found. Run reanalysis-1-data_preparation.qmd first.")
+# 2. Load full data for imputation (contains both submitted and excluded)
+imputation_data_file <- file.path(reanalysis_data_dir, "df_for_imputation.rds")
+if (!file.exists(imputation_data_file)) {
+  stop("Imputation data not found. Run reanalysis-1-data_preparation.qmd first.")
 }
-complete_data <- readRDS(complete_file)
+imputation_data <- readRDS(imputation_data_file)
 
 # Split into submitted and excluded based on cohort_id
-submitted_data <- complete_data[complete_data$cohort_id == "submitted", ]
-excluded_data <- complete_data[complete_data$cohort_id == "excluded", ]
+submitted_data <- imputation_data[imputation_data$cohort_id == "submitted", ]
+excluded_data <- imputation_data[imputation_data$cohort_id == "excluded", ]
 
 log_message(paste0("Submitted (included) data: ", nrow(submitted_data), " observations"))
 log_message(paste0("Excluded data: ", nrow(excluded_data), " observations"))
@@ -68,7 +68,7 @@ vars_continuous <- c("age", "baseline_VA_logMAR", "CCI", "DCSI")
 # Variables in original data (with proper capitalization)
 vars_categorical_original <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
                                "ever_lapse_binary", 
-                               "Glaucoma_bef_hitplus_cat", "Otherretina_bef_hitplus_cat",
+                               "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
                                "catsurg_before_hitplus_cat",
                                "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
                                "outcome_va_vi_binary")
@@ -79,7 +79,7 @@ vars_categorical_new_only <- c("dr_severity")
 # All categorical variables for new data
 vars_categorical_new <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
                           "dr_severity", "ever_lapse_binary", 
-                          "Glaucoma_bef_hitplus_cat", "Otherretina_bef_hitplus_cat",
+                          "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
                           "catsurg_before_hitplus_cat",
                           "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
                           "outcome_va_vi_binary")
@@ -176,14 +176,25 @@ process_dataset <- function(data, name, categorical_vars = NULL) {
     }
   }))
   
-  # Categorical variables
-  cat_summaries <- do.call(rbind, lapply(categorical_vars, function(v) {
+  # Categorical variables - filter out variables that don't exist
+  cat_summaries_list <- lapply(categorical_vars, function(v) {
     if (v %in% names(data)) {
       summarize_categorical(data, v)
     } else {
-      data.frame(variable = v, n = NA, pct = NA, n_missing = NA, pct_missing = NA)
+      NULL
     }
-  }))
+  })
+  
+  # Remove NULL entries and combine
+  cat_summaries_list <- cat_summaries_list[!sapply(cat_summaries_list, is.null)]
+  
+  if (length(cat_summaries_list) > 0) {
+    cat_summaries <- do.call(rbind, cat_summaries_list)
+  } else {
+    cat_summaries <- data.frame(variable = character(), n = numeric(), 
+                                pct = numeric(), n_missing = numeric(), 
+                                pct_missing = numeric())
+  }
   
   list(continuous = cont_summaries, categorical = cat_summaries, dataset = name)
 }
@@ -383,6 +394,8 @@ sample_sizes <- data.frame(
 
 kable(sample_sizes, caption = "Sample Sizes")
 ```
+
+**Note:** The "Excluded" column shows patients who were excluded from the original submitted analysis because they lacked 2-year outcome data. These patients have substantial missing data, which is why many cells show 0 (NaN%) - indicating all values are missing for those variables. The imputation process fills in these missing values, allowing us to include these patients in the analysis.
 
 ```{r finalize}
 # Finalize log
