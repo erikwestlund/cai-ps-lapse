@@ -115,13 +115,40 @@ summarize_continuous <- function(data, var) {
 
 # Function to compute summary statistics for categorical variables
 summarize_categorical <- function(data, var) {
-  tbl <- table(data[[var]], useNA = "ifany")
-  props <- prop.table(table(data[[var]], useNA = "no"))
+  # Check if variable exists in data
+  if (!(var %in% names(data))) {
+    return(data.frame(
+      variable = var,
+      n = NA,
+      pct = NA,
+      n_missing = NA,
+      pct_missing = NA
+    ))
+  }
   
+  # Get table including NA
+  tbl <- table(data[[var]], useNA = "no")
+  
+  # Handle case where all values are NA or empty
+  if (length(tbl) == 0) {
+    return(data.frame(
+      variable = var,
+      n = 0,
+      pct = NA,
+      n_missing = nrow(data),
+      pct_missing = 100
+    ))
+  }
+  
+  # Calculate proportions
+  props <- prop.table(tbl)
+  
+  # Create data frame with results
   levels_df <- data.frame(
-    variable = paste0(var, "_", names(props)),
-    n = as.vector(table(data[[var]], useNA = "no")),
-    pct = 100 * as.vector(props)
+    variable = paste0(var, "_", names(tbl)),
+    n = as.vector(tbl),
+    pct = 100 * as.vector(props),
+    stringsAsFactors = FALSE
   )
   
   # Add missing info
