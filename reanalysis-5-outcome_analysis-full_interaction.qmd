@@ -179,8 +179,8 @@ kable(detailed_table,
 ```
 
 ```{r session-info}
-# Close log
-close_log(log_file)
+# Finalize log
+finalize_log()
 
 sessionInfo()
 ```
