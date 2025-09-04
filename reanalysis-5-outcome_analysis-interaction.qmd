@@ -30,8 +30,8 @@ library(mitools)  # For additional MI utilities if needed
 analysis_mode <- "final"  # Should match imputation and PS modes
 
 # CACHE SETTINGS - Set these to TRUE to force recalculation
-force_refit_models <- TRUE  # Set to TRUE to re-fit all models
-force_recalc_emmeans <- TRUE  # Set to TRUE to recalculate marginal means
+force_refit_models <- FALSE  # Set to TRUE to re-fit all models
+force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
@@ -438,67 +438,128 @@ kable(key_results, caption = "Key lapse-related terms with degrees of freedom")
 ## Joint Tests of Interaction Terms
 
 ```{r joint-tests}
-pool_chi_square_tests <- function(models, hypothesis_strings, test_name) {
+# Function to pool Wald tests across multiple imputations using Rubin's rules
+pool_wald_tests <- function(models, term_indices, test_name) {
+  n_imp <- length(models)
+  n_params <- length(term_indices)
   
-  # Perform test on each imputation
-  test_stats <- numeric(length(models))
-  df_tests <- numeric(length(models))
+  # Storage for estimates and covariances from each imputation
+  beta_list <- list()
+  vcov_list <- list()
   
-  for (i in 1:length(models)) {
-    test_result <- linearHypothesis(
-      models[[i]],
-      hypothesis_strings,
-      vcov = vcov(models[[i]])
-    )
-    test_stats[i] <- test_result$Chisq[2]
-    df_tests[i] <- test_result$Df[2]
+  # Extract coefficients and vcov for specified terms from each imputation
+  for (i in 1:n_imp) {
+    coef_full <- coef(models[[i]])
+    vcov_full <- vcov(models[[i]])
+    
+    beta_list[[i]] <- coef_full[term_indices]
+    vcov_list[[i]] <- vcov_full[term_indices, term_indices, drop = FALSE]
   }
   
-  # Pool using Li, Raghunathan, and Rubin (1991) method for chi-square tests
-  # D-bar: average test statistic
-  D_bar <- mean(test_stats)
-  df <- df_tests[1]  # Should be same across all imputations
+  # Rubin's rules pooling
+  # Step 1: Pool point estimates (beta_bar)
+  beta_bar <- Reduce("+", beta_list) / n_imp
   
-  # For large samples, can use D_bar directly with original df
-  # For more accuracy, would need to compute the adjusted statistic
-  p_value <- pchisq(D_bar, df = df, lower.tail = FALSE)
+  # Step 2: Within-imputation variance (U_bar)
+  U_bar <- Reduce("+", vcov_list) / n_imp
+  
+  # Step 3: Between-imputation variance (B)
+  beta_matrix <- do.call(rbind, beta_list)
+  B <- cov(beta_matrix)
+  
+  # Step 4: Total variance (T)
+  T_var <- U_bar + (1 + 1/n_imp) * B
+  
+  # Step 5: Wald statistic
+  # Check if T_var is invertible
+  T_inv <- try(solve(T_var), silent = TRUE)
+  if (inherits(T_inv, "try-error")) {
+    warning(paste0("Covariance matrix not invertible for ", test_name))
+    return(list(
+      test_name = test_name,
+      F_stat = NA,
+      df1 = n_params,
+      df2 = NA,
+      p_value = NA
+    ))
+  }
+  
+  wald_stat <- as.numeric(t(beta_bar) %*% T_inv %*% beta_bar)
+  
+  # Step 6: Reference distribution with Barnard-Rubin adjustment
+  # Relative increase in variance
+  r <- mean(diag((1 + 1/n_imp) * B %*% solve(U_bar)))
+  
+  # Barnard-Rubin degrees of freedom
+  df_m <- (n_imp - 1) * (1 + 1/r)^2
+  
+  # For multi-parameter test, use F distribution
+  F_stat <- wald_stat / n_params
+  df1 <- n_params
+  df2 <- df_m
+  
+  # P-value from F distribution
+  p_value <- pf(F_stat, df1, df2, lower.tail = FALSE)
   
   return(list(
     test_name = test_name,
-    D_bar = D_bar,
-    df = df,
+    F_stat = F_stat,
+    df1 = df1,
+    df2 = round(df2),
     p_value = p_value
   ))
 }
 
 first_model <- models[[1]]
+all_coef_names <- names(coef(first_model))
 
-# Test 1: Joint test of three-way interaction
-threeway_terms_test <- grep("ever_lapse.*:dr_severity.*:any_treatment", 
-                            names(coef(first_model)), value = TRUE)
+# Test 1: Three-way interaction terms only
+threeway_indices <- which(grepl("ever_lapse.*:dr_severity.*:any_treatment", all_coef_names))
 
-# Test 1: Three-way interaction
-if (length(threeway_terms_test) > 0) {
-  hypothesis_3way <- paste0(threeway_terms_test, " = 0")
-  pooled_test_3way <- pool_chi_square_tests(models, hypothesis_3way, "Three-way interaction")
+if (length(threeway_indices) > 0) {
+  log_message(paste0("Testing three-way interaction with ", length(threeway_indices), " parameters"))
+  pooled_test_3way <- pool_wald_tests(models, threeway_indices, "Three-way interaction")
 }
 
-# Test 2: Joint test of lapse × DR interaction (averaging over treatment)
-lapse_dr_terms <- grep("ever_lapse.*:dr_severity(?!.*:any_treatment)", 
-                      names(coef(first_model)), value = TRUE, perl = TRUE)
+# Test 2: All interaction terms (2-way and 3-way jointly)
+all_interaction_patterns <- c(
+  "ever_lapse.*:dr_severity",
+  "ever_lapse.*:any_treatment", 
+  "dr_severity.*:any_treatment"
+)
 
-if (length(lapse_dr_terms) > 0) {
-  hypothesis_lapse_dr <- paste0(lapse_dr_terms, " = 0")
-  pooled_test_lapse_dr <- pool_chi_square_tests(models, hypothesis_lapse_dr, "Lapse × DR interaction")
+all_interaction_indices <- which(grepl(paste(all_interaction_patterns, collapse = "|"), all_coef_names))
+
+if (length(all_interaction_indices) > 0) {
+  log_message(paste0("Testing all interactions jointly with ", length(all_interaction_indices), " parameters"))
+  pooled_test_all <- pool_wald_tests(models, all_interaction_indices, "All interactions (2-way + 3-way)")
 }
 
-# Test 3: Joint test of lapse × treatment interaction (averaging over DR)
-lapse_tx_terms <- grep("ever_lapse.*:any_treatment(?!.*:dr_severity)", 
-                      names(coef(first_model)), value = TRUE, perl = TRUE)
+# Test 3: Lapse × DR interaction only (2-way, excluding 3-way)
+lapse_dr_indices <- which(grepl("ever_lapse.*:dr_severity", all_coef_names) & 
+                         !grepl("any_treatment", all_coef_names))
 
-if (length(lapse_tx_terms) > 0) {
-  hypothesis_lapse_tx <- paste0(lapse_tx_terms, " = 0")
-  pooled_test_lapse_tx <- pool_chi_square_tests(models, hypothesis_lapse_tx, "Lapse × treatment interaction")
+if (length(lapse_dr_indices) > 0) {
+  log_message(paste0("Testing lapse × DR interaction with ", length(lapse_dr_indices), " parameters"))
+  pooled_test_lapse_dr <- pool_wald_tests(models, lapse_dr_indices, "Lapse × DR interaction")
+}
+
+# Test 4: Lapse × treatment interaction only (2-way, excluding 3-way)
+lapse_tx_indices <- which(grepl("ever_lapse.*:any_treatment", all_coef_names) & 
+                         !grepl("dr_severity", all_coef_names))
+
+if (length(lapse_tx_indices) > 0) {
+  log_message(paste0("Testing lapse × treatment interaction with ", length(lapse_tx_indices), " parameters"))
+  pooled_test_lapse_tx <- pool_wald_tests(models, lapse_tx_indices, "Lapse × treatment interaction")
+}
+
+# Test 5: DR × treatment interaction only (2-way, excluding 3-way)
+dr_tx_indices <- which(grepl("dr_severity.*:any_treatment", all_coef_names) & 
+                      !grepl("ever_lapse", all_coef_names))
+
+if (length(dr_tx_indices) > 0) {
+  log_message(paste0("Testing DR × treatment interaction with ", length(dr_tx_indices), " parameters"))
+  pooled_test_dr_tx <- pool_wald_tests(models, dr_tx_indices, "DR × treatment interaction")
 }
 ```
 
@@ -508,44 +569,79 @@ if (length(lapse_tx_terms) > 0) {
 # Compile all test results
 joint_tests <- data.frame(
   Test = character(),
-  Chi_Square = numeric(),
-  df = numeric(),
+  F_Statistic = numeric(),
+  Num_DF = numeric(),
+  Den_DF = numeric(),
   P_Value = character(),
   Significant = character(),
   stringsAsFactors = FALSE
 )
 
-if (exists("pooled_test_3way")) {
+# Add three-way interaction test
+if (exists("pooled_test_3way") && !is.na(pooled_test_3way$F_stat)) {
   joint_tests <- rbind(joint_tests, data.frame(
-    Test = "Lapse × DR × Treatment (3-way)",
-    Chi_Square = round(pooled_test_3way$D_bar, 3),
-    df = pooled_test_3way$df,
+    Test = "Lapse × DR × Treatment (3-way only)",
+    F_Statistic = round(pooled_test_3way$F_stat, 4),
+    Num_DF = pooled_test_3way$df1,
+    Den_DF = pooled_test_3way$df2,
     P_Value = format.pval(pooled_test_3way$p_value, digits = 4, eps = 0.0001),
     Significant = ifelse(pooled_test_3way$p_value < 0.05, "Yes", "No")
   ))
 }
 
-if (exists("pooled_test_lapse_dr")) {
+# Add all interactions test
+if (exists("pooled_test_all") && !is.na(pooled_test_all$F_stat)) {
   joint_tests <- rbind(joint_tests, data.frame(
-    Test = "Lapse × DR Severity",
-    Chi_Square = round(pooled_test_lapse_dr$D_bar, 3),
-    df = pooled_test_lapse_dr$df,
+    Test = "All interactions (2-way + 3-way)",
+    F_Statistic = round(pooled_test_all$F_stat, 4),
+    Num_DF = pooled_test_all$df1,
+    Den_DF = pooled_test_all$df2,
+    P_Value = format.pval(pooled_test_all$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_all$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+# Add two-way interaction tests
+if (exists("pooled_test_lapse_dr") && !is.na(pooled_test_lapse_dr$F_stat)) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "Lapse × DR (2-way only)",
+    F_Statistic = round(pooled_test_lapse_dr$F_stat, 4),
+    Num_DF = pooled_test_lapse_dr$df1,
+    Den_DF = pooled_test_lapse_dr$df2,
     P_Value = format.pval(pooled_test_lapse_dr$p_value, digits = 4, eps = 0.0001),
     Significant = ifelse(pooled_test_lapse_dr$p_value < 0.05, "Yes", "No")
   ))
 }
 
-if (exists("pooled_test_lapse_tx")) {
+if (exists("pooled_test_lapse_tx") && !is.na(pooled_test_lapse_tx$F_stat)) {
   joint_tests <- rbind(joint_tests, data.frame(
-    Test = "Lapse × Treatment",
-    Chi_Square = round(pooled_test_lapse_tx$D_bar, 3),
-    df = pooled_test_lapse_tx$df,
+    Test = "Lapse × Treatment (2-way only)",
+    F_Statistic = round(pooled_test_lapse_tx$F_stat, 4),
+    Num_DF = pooled_test_lapse_tx$df1,
+    Den_DF = pooled_test_lapse_tx$df2,
     P_Value = format.pval(pooled_test_lapse_tx$p_value, digits = 4, eps = 0.0001),
     Significant = ifelse(pooled_test_lapse_tx$p_value < 0.05, "Yes", "No")
   ))
 }
 
-kable(joint_tests, caption = "Pooled joint hypothesis tests (Li-Raghunathan-Rubin method)")
+if (exists("pooled_test_dr_tx") && !is.na(pooled_test_dr_tx$F_stat)) {
+  joint_tests <- rbind(joint_tests, data.frame(
+    Test = "DR × Treatment (2-way only)",
+    F_Statistic = round(pooled_test_dr_tx$F_stat, 4),
+    Num_DF = pooled_test_dr_tx$df1,
+    Den_DF = pooled_test_dr_tx$df2,
+    P_Value = format.pval(pooled_test_dr_tx$p_value, digits = 4, eps = 0.0001),
+    Significant = ifelse(pooled_test_dr_tx$p_value < 0.05, "Yes", "No")
+  ))
+}
+
+if (nrow(joint_tests) > 0) {
+  kable(joint_tests, 
+        caption = "Pooled Wald Tests for Interaction Terms (Rubin's Rules with Barnard-Rubin DF)",
+        col.names = c("Test", "F", "df1", "df2", "P-value", "Sig."))
+} else {
+  cat("No interaction tests could be performed.\n")
+}
 ```
 
 ## Calculate Effects Within Each Subgroup Using emmeans
