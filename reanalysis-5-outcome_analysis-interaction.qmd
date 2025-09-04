@@ -258,6 +258,17 @@ if (file.exists(models_cache_file) && !force_refit_models) {
   models <- cached_data$models
   model_progress <- cached_data$model_progress
   
+  # Extract or initialize model_summaries
+  if ("model_summaries" %in% names(cached_data)) {
+    model_summaries <- cached_data$model_summaries
+  } else {
+    # Rebuild model_summaries from models if not in cache
+    model_summaries <- list()
+    for (i in 1:length(models)) {
+      model_summaries[[i]] <- summary(models[[i]])$coefficients
+    }
+  }
+  
   models_loaded_from_cache <- TRUE
   cache_location <- models_cache_file
   log_message(paste0("Models loaded from cache: ", cache_location))
@@ -308,6 +319,7 @@ if (file.exists(models_cache_file) && !force_refit_models) {
   # Save to cache with full structure
   cached_data <- list(
     models = models,
+    model_summaries = model_summaries,
     model_progress = model_progress,
     formula_used = interaction_formula,
     n_imputations = n_imputations,
