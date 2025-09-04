@@ -30,8 +30,8 @@ library(mitools)  # For additional MI utilities if needed
 analysis_mode <- "final"  # Should match imputation and PS modes
 
 # CACHE SETTINGS - Set these to TRUE to force recalculation
-force_refit_models <- FALSE  # Set to TRUE to re-fit all models
-force_recalc_emmeans <- FALSE  # Set to TRUE to recalculate marginal means
+force_refit_models <- TRUE  # Set to TRUE to re-fit all models
+force_recalc_emmeans <- TRUE  # Set to TRUE to recalculate marginal means
 
 # Set parameters based on mode
 if (analysis_mode == "test") {
