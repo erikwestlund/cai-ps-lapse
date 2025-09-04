@@ -33,16 +33,16 @@ original_complete <- apply_exclusions(original_data)  # Remove missing CCI/DCSI
 
 log_message(paste0("Original data after exclusions: ", nrow(original_complete), " observations"))
 
-# 2. Load new data with cohort assignments (from reanalysis-1)
-cohort_file <- file.path(reanalysis_data_dir, "df_with_cohort.rds")
-if (!file.exists(cohort_file)) {
-  stop("Cohort data not found. Run reanalysis-1-data_preparation.qmd first.")
+# 2. Load new complete cases data (from reanalysis-1)
+complete_file <- file.path(reanalysis_data_dir, "df_complete_original.rds")
+if (!file.exists(complete_file)) {
+  stop("Complete cases data not found. Run reanalysis-1-data_preparation.qmd first.")
 }
-cohort_data <- readRDS(cohort_file)
+complete_data <- readRDS(complete_file)
 
-# Split into submitted and excluded
-submitted_data <- cohort_data[cohort_data$cohort_id == "submitted", ]
-excluded_data <- cohort_data[cohort_data$cohort_id == "excluded", ]
+# Split into submitted and excluded based on cohort_id
+submitted_data <- complete_data[complete_data$cohort_id == "submitted", ]
+excluded_data <- complete_data[complete_data$cohort_id == "excluded", ]
 
 log_message(paste0("Submitted (included) data: ", nrow(submitted_data), " observations"))
 log_message(paste0("Excluded data: ", nrow(excluded_data), " observations"))
