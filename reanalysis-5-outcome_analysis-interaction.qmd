@@ -251,29 +251,16 @@ print(interaction_formula)
 models_cache_file <- file.path(reanalysis_data_dir, "fitted_models_interaction.rds")
 
 if (file.exists(models_cache_file) && !force_refit_models) {
-  # Load cached models (just the models list, not a complex structure)
-  models <- readRDS(models_cache_file)
+  # Load cached models structure
+  cached_data <- readRDS(models_cache_file)
+  
+  # Extract components from the cached structure
+  models <- cached_data$models
+  model_progress <- cached_data$model_progress
+  
   models_loaded_from_cache <- TRUE
   cache_location <- models_cache_file
-  log_message("Models loaded from cache: ", cache_location)
-  
-  # Rebuild model_progress from loaded models
-  model_progress <- data.frame(
-    Imputation = integer(),
-    Converged = logical(),
-    ThreeWay_Terms = integer()
-  )
-  
-  for (i in 1:length(models)) {
-    coef_summary <- summary(models[[i]])$coefficients
-    threeway_terms <- grep("ever_lapse_binary.*:dr_severity.*:any_treatment", 
-                           rownames(coef_summary), value = TRUE)
-    model_progress <- rbind(model_progress, data.frame(
-      Imputation = i,
-      Converged = models[[i]]$converged,
-      ThreeWay_Terms = length(threeway_terms)
-    ))
-  }
+  log_message(paste0("Models loaded from cache: ", cache_location))
 } else {
   # Fit new models
   models_loaded_from_cache <- FALSE
@@ -318,8 +305,15 @@ if (file.exists(models_cache_file) && !force_refit_models) {
   model_summaries[[i]] <- coef_summary
   }
   
-  # Save to cache - models only, not the full cached_models list to save memory
-  saveRDS(models, models_cache_file)
+  # Save to cache with full structure
+  cached_data <- list(
+    models = models,
+    model_progress = model_progress,
+    formula_used = interaction_formula,
+    n_imputations = n_imputations,
+    timestamp = Sys.time()
+  )
+  saveRDS(cached_data, models_cache_file)
   cache_location <- models_cache_file
   log_message("Models fitted and saved to cache: ", cache_location)
 }
