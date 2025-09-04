@@ -23,7 +23,7 @@ library(dplyr)
 log_file <- init_log("sample_comparison")
 ```
 
-## Load Data from Three Sources
+## Load Data from Four Sources
 
 ```{r load-data}
 # 1. Load original data (from analysis.Rmd)
@@ -33,14 +33,19 @@ original_complete <- apply_exclusions(original_data)  # Remove missing CCI/DCSI
 
 log_message(paste0("Original data after exclusions: ", nrow(original_complete), " observations"))
 
-# 2. Load complete cases from reanalysis (reanalysis-1)
-complete_cases_file <- file.path(reanalysis_data_dir, "df_complete_original.rds")
-if (!file.exists(complete_cases_file)) {
-  stop("Complete cases data not found. Run reanalysis-1-data_preparation.qmd first.")
+# 2. Load new data with cohort assignments (from reanalysis-1)
+cohort_file <- file.path(reanalysis_data_dir, "df_with_cohort.rds")
+if (!file.exists(cohort_file)) {
+  stop("Cohort data not found. Run reanalysis-1-data_preparation.qmd first.")
 }
-complete_cases_data <- readRDS(complete_cases_file)
+cohort_data <- readRDS(cohort_file)
 
-log_message(paste0("Complete cases data: ", nrow(complete_cases_data), " observations"))
+# Split into submitted and excluded
+submitted_data <- cohort_data[cohort_data$cohort_id == "submitted", ]
+excluded_data <- cohort_data[cohort_data$cohort_id == "excluded", ]
+
+log_message(paste0("Submitted (included) data: ", nrow(submitted_data), " observations"))
+log_message(paste0("Excluded data: ", nrow(excluded_data), " observations"))
 
 # 3. Load imputed datasets (reanalysis-2)
 imputed_file <- file.path(reanalysis_data_dir, "imputed_datasets.rds")
@@ -57,15 +62,27 @@ log_message(paste0("Loaded ", n_imputations, " imputed datasets"))
 
 ```{r prepare-variables}
 # Define variables for Table 1
+# Note: Original data doesn't have dr_severity
 vars_continuous <- c("age", "baseline_VA_logMAR", "CCI", "DCSI")
-vars_categorical <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
-                      "dr_severity", "ever_lapse_binary", 
-                      "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
-                      "catsurg_before_hitplus_cat",
-                      "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
-                      "outcome_va_vi_binary")
 
-all_vars <- c(vars_continuous, vars_categorical)
+# Variables in original data (with proper capitalization)
+vars_categorical_original <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
+                               "ever_lapse_binary", 
+                               "Glaucoma_bef_hitplus_cat", "Otherretina_bef_hitplus_cat",
+                               "catsurg_before_hitplus_cat",
+                               "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
+                               "outcome_va_vi_binary")
+
+# Additional variables in new data only
+vars_categorical_new_only <- c("dr_severity")
+
+# All categorical variables for new data
+vars_categorical_new <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
+                          "dr_severity", "ever_lapse_binary", 
+                          "Glaucoma_bef_hitplus_cat", "Otherretina_bef_hitplus_cat",
+                          "catsurg_before_hitplus_cat",
+                          "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
+                          "outcome_va_vi_binary")
 
 # Function to compute summary statistics for continuous variables
 summarize_continuous <- function(data, var) {
@@ -116,7 +133,12 @@ summarize_categorical <- function(data, var) {
 }
 
 # Process each dataset
-process_dataset <- function(data, name) {
+process_dataset <- function(data, name, categorical_vars = NULL) {
+  # Use provided categorical vars or default to new vars
+  if (is.null(categorical_vars)) {
+    categorical_vars <- vars_categorical_new
+  }
+  
   # Continuous variables
   cont_summaries <- do.call(rbind, lapply(vars_continuous, function(v) {
     if (v %in% names(data)) {
@@ -128,7 +150,7 @@ process_dataset <- function(data, name) {
   }))
   
   # Categorical variables
-  cat_summaries <- do.call(rbind, lapply(vars_categorical, function(v) {
+  cat_summaries <- do.call(rbind, lapply(categorical_vars, function(v) {
     if (v %in% names(data)) {
       summarize_categorical(data, v)
     } else {
@@ -141,11 +163,14 @@ process_dataset <- function(data, name) {
 ```
 
 ```{r create-table}
-# Process original data
-original_summary <- process_dataset(original_complete, "Original")
+# Process original data (with original variable names)
+original_summary <- process_dataset(original_complete, "Original", vars_categorical_original)
 
-# Process complete cases
-complete_summary <- process_dataset(complete_cases_data, "Complete Cases")
+# Process submitted (included) data
+submitted_summary <- process_dataset(submitted_data, "Submitted", vars_categorical_new)
+
+# Process excluded data
+excluded_summary <- process_dataset(excluded_data, "Excluded", vars_categorical_new)
 
 # Process imputed data (average across imputations)
 # For imputed data, we need to average across all imputations
@@ -211,13 +236,14 @@ imputed_summary <- list(
 
 ```{r display-table}
 # Create formatted table for continuous variables
-format_continuous_table <- function(original, complete, imputed) {
-  vars <- unique(c(original$variable, complete$variable, imputed$variable))
+format_continuous_table <- function(original, submitted, excluded, imputed) {
+  vars <- unique(c(original$variable, submitted$variable, excluded$variable, imputed$variable))
   
   table_df <- data.frame(
     Variable = vars,
     Original = NA,
-    Complete_Cases = NA,
+    Submitted = NA,
+    Excluded = NA,
     Imputed = NA,
     stringsAsFactors = FALSE
   )
@@ -231,10 +257,16 @@ format_continuous_table <- function(original, complete, imputed) {
       table_df$Original[i] <- sprintf("%.2f (%.2f)", orig_row$mean, orig_row$sd)
     }
     
-    # Complete cases
-    comp_row <- complete[complete$variable == v, ]
-    if (nrow(comp_row) > 0 && !is.na(comp_row$mean)) {
-      table_df$Complete_Cases[i] <- sprintf("%.2f (%.2f)", comp_row$mean, comp_row$sd)
+    # Submitted
+    sub_row <- submitted[submitted$variable == v, ]
+    if (nrow(sub_row) > 0 && !is.na(sub_row$mean)) {
+      table_df$Submitted[i] <- sprintf("%.2f (%.2f)", sub_row$mean, sub_row$sd)
+    }
+    
+    # Excluded
+    exc_row <- excluded[excluded$variable == v, ]
+    if (nrow(exc_row) > 0 && !is.na(exc_row$mean)) {
+      table_df$Excluded[i] <- sprintf("%.2f (%.2f)", exc_row$mean, exc_row$sd)
     }
     
     # Imputed
@@ -248,13 +280,14 @@ format_continuous_table <- function(original, complete, imputed) {
 }
 
 # Create formatted table for categorical variables
-format_categorical_table <- function(original, complete, imputed) {
-  vars <- unique(c(original$variable, complete$variable, imputed$variable))
+format_categorical_table <- function(original, submitted, excluded, imputed) {
+  vars <- unique(c(original$variable, submitted$variable, excluded$variable, imputed$variable))
   
   table_df <- data.frame(
     Variable = vars,
     Original = NA,
-    Complete_Cases = NA, 
+    Submitted = NA,
+    Excluded = NA,
     Imputed = NA,
     stringsAsFactors = FALSE
   )
@@ -268,10 +301,16 @@ format_categorical_table <- function(original, complete, imputed) {
       table_df$Original[i] <- sprintf("%.0f (%.1f%%)", orig_row$n, orig_row$pct)
     }
     
-    # Complete cases
-    comp_row <- complete[complete$variable == v, ]
-    if (nrow(comp_row) > 0 && !is.na(comp_row$n)) {
-      table_df$Complete_Cases[i] <- sprintf("%.0f (%.1f%%)", comp_row$n, comp_row$pct)
+    # Submitted
+    sub_row <- submitted[submitted$variable == v, ]
+    if (nrow(sub_row) > 0 && !is.na(sub_row$n)) {
+      table_df$Submitted[i] <- sprintf("%.0f (%.1f%%)", sub_row$n, sub_row$pct)
+    }
+    
+    # Excluded
+    exc_row <- excluded[excluded$variable == v, ]
+    if (nrow(exc_row) > 0 && !is.na(exc_row$n)) {
+      table_df$Excluded[i] <- sprintf("%.0f (%.1f%%)", exc_row$n, exc_row$pct)
     }
     
     # Imputed
@@ -287,30 +326,32 @@ format_categorical_table <- function(original, complete, imputed) {
 # Create the tables
 continuous_table <- format_continuous_table(
   original_summary$continuous,
-  complete_summary$continuous,
+  submitted_summary$continuous,
+  excluded_summary$continuous,
   imputed_summary$continuous
 )
 
 categorical_table <- format_categorical_table(
   original_summary$categorical,
-  complete_summary$categorical,
+  submitted_summary$categorical,
+  excluded_summary$categorical,
   imputed_summary$categorical
 )
 
 # Display continuous variables
 kable(continuous_table, 
       caption = "Continuous Variables: Mean (SD)",
-      col.names = c("Variable", "Original Data", "Complete Cases", "Imputed (Average)"))
+      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)"))
 
 # Display categorical variables
 kable(categorical_table,
       caption = "Categorical Variables: N (%)",
-      col.names = c("Variable", "Original Data", "Complete Cases", "Imputed (Average)"))
+      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)"))
 
 # Sample sizes
 sample_sizes <- data.frame(
-  Dataset = c("Original (after exclusions)", "Complete Cases", "Imputed (each)"),
-  N = c(nrow(original_complete), nrow(complete_cases_data), nrow(imputed_datasets[[1]]))
+  Dataset = c("Original (after exclusions)", "Submitted (included)", "Excluded", "Imputed (each)"),
+  N = c(nrow(original_complete), nrow(submitted_data), nrow(excluded_data), nrow(imputed_datasets[[1]]))
 )
 
 kable(sample_sizes, caption = "Sample Sizes")
