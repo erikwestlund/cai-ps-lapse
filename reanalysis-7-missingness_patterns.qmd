@@ -1,6 +1,6 @@
 ---
-title: "Reanalysis Step 7: Missingness Pattern Analysis"
-subtitle: "Comparing characteristics of excluded vs included patients"
+title: "Reanalysis Step 7: Sample Comparison Table"
+subtitle: "Comparing Original, Complete Cases, and Imputed Data"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
 format: html
@@ -10,645 +10,313 @@ format: html
 
 ```{r setup}
 #| include: false
-# Setup analysis environment
 source("dependencies.R")
 source("functions.R")
+source("settings.R")
 setup_analysis(seed = 2025)
 
-# Additional packages for this analysis
-library(knitr)
 library(tableone)
-library(ggplot2)
-library(gridExtra)
+library(knitr)
+library(dplyr)
 
 # Initialize logging
-log_file <- init_log("missingness_pattern_analysis")
-
-# Load the original data before exclusions
-# Use the load_and_prepare_data function to get processed variables
-original_data <- load_and_prepare_data(reanalysis_data_file_path)
-
-# Load imputed datasets (this is a list of 20 imputed dataframes)
-imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
-
-log_message("Data loaded successfully")
+log_file <- init_log("sample_comparison")
 ```
 
-## Motivation
+## Load Data from Three Sources
 
-When we performed multiple imputation, the observed treatment effect increased. This suggests that those with missing data (excluded from complete case analysis) may differ systematically from those included.
+```{r load-data}
+# 1. Load original data (from analysis.Rmd)
+data_path <- file.path(s_root, "Gina's Project/df_Final_240909.csv")
+original_data <- load_and_prepare_data(data_path)
+original_complete <- apply_exclusions(original_data)  # Remove missing CCI/DCSI
 
-This analysis compares baseline characteristics between:
+log_message(paste0("Original data after exclusions: ", nrow(original_complete), " observations"))
 
-- **Excluded**: Patients with missing outcome data (excluded from complete case analysis)
-- **Included**: Patients with complete outcome data (included in analysis)
-
-## Identify Excluded vs Included Patients
-
-```{r identify-groups}
-# Use cohort_id if it exists to identify excluded vs included
-if ("cohort_id" %in% names(original_data)) {
-  # cohort_id has values "excluded" and "submitted"
-  # "excluded" = patients with missing outcomes who were excluded from complete case analysis
-  # "submitted" = patients with complete outcomes who were included
-  original_data$excluded <- original_data$cohort_id == "excluded"
-  log_message("Using cohort_id to identify excluded patients")
-  log_message(paste("Cohort distribution:", 
-                   sum(original_data$cohort_id == "excluded"), "excluded,",
-                   sum(original_data$cohort_id == "submitted"), "submitted"))
-} else if ("outcome_va_vi_binary" %in% names(original_data)) {
-  # Use missing outcome as the exclusion criterion
-  original_data$excluded <- is.na(original_data$outcome_va_vi_binary)
-  log_message("Using missing outcome_va_vi_binary to identify excluded patients")
-} else if ("outcome_va_logMAR" %in% names(original_data)) {
-  # Use missing outcome VA
-  original_data$excluded <- is.na(original_data$outcome_va_logMAR)
-  log_message("Using missing outcome_va_logMAR to identify excluded patients")
-} else {
-  stop("Cannot identify excluded patients - no cohort_id or outcome variables found")
+# 2. Load complete cases from reanalysis (reanalysis-1)
+complete_cases_file <- file.path(reanalysis_data_dir, "df_complete_original.rds")
+if (!file.exists(complete_cases_file)) {
+  stop("Complete cases data not found. Run reanalysis-1-data_preparation.qmd first.")
 }
+complete_cases_data <- readRDS(complete_cases_file)
 
-# Verify the excluded variable has two levels
-if (length(unique(original_data$excluded)) < 2) {
-  log_message(paste("Warning: All patients are", 
-                   ifelse(all(original_data$excluded), "excluded", "included")))
-  log_message("Check data processing - there should be both excluded and included patients")
+log_message(paste0("Complete cases data: ", nrow(complete_cases_data), " observations"))
+
+# 3. Load imputed datasets (reanalysis-2)
+imputed_file <- file.path(reanalysis_data_dir, "imputed_datasets.rds")
+if (!file.exists(imputed_file)) {
+  stop("Imputed datasets not found. Run reanalysis-2-multiple_imputation.qmd first.")
 }
+imputed_datasets <- readRDS(imputed_file)
+n_imputations <- length(imputed_datasets)
 
-# Summary counts
-n_total <- nrow(original_data)
-n_included <- sum(!original_data$excluded)  # FALSE = included
-n_excluded <- sum(original_data$excluded)   # TRUE = excluded
-pct_excluded <- round(100 * n_excluded / n_total, 1)
-
-log_message(sprintf("Total patients (eyes): %d", n_total))
-log_message(sprintf("Included (submitted/complete outcome): %d (%.1f%%)", n_included, 100 - pct_excluded))
-log_message(sprintf("Excluded (missing outcome): %d (%.1f%%)", n_excluded, pct_excluded))
-
-# Create summary table
-summary_df <- data.frame(
-  Group = c("Included (submitted)", "Excluded", "Total"),
-  N = c(n_included, n_excluded, n_total),
-  Percentage = c(round(100 - pct_excluded, 1), pct_excluded, 100)
-)
+log_message(paste0("Loaded ", n_imputations, " imputed datasets"))
 ```
 
-```{r summary-table}
-#| echo: false
-kable(summary_df,
-      caption = "Sample Size Summary",
-      col.names = c("Group", "N (eyes)", "Percentage (%)"),
-      align = c("l", "r", "r"))
-```
+## Create Comparison Table
 
-## Variable Selection
+```{r prepare-variables}
+# Define variables for Table 1
+vars_continuous <- c("age", "baseline_VA_logMAR", "CCI", "DCSI")
+vars_categorical <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
+                      "dr_severity", "ever_lapse_binary", 
+                      "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
+                      "catsurg_before_hitplus_cat",
+                      "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
+                      "outcome_va_vi_binary")
 
-```{r variable-selection}
-# Get variables used in outcome and propensity score models
-# Log what columns exist in the processed data
-log_message(paste("Total columns in processed data:", length(names(original_data))))
-log_message(paste("Sample columns:", paste(names(original_data)[1:min(10, length(names(original_data)))], collapse = ", ")))
+all_vars <- c(vars_continuous, vars_categorical)
 
-# Variables from the actual matching and outcome formulas in functions.R
-# Demographics created by load_and_prepare_data
-demographic_vars <- c("age", "age_cat", "gender_cat", "race_ethnic_cat", "insurance_cat")
-
-# Comorbidity scores (these ARE in the raw data)
-comorbidity_vars <- c("CCI", "DCSI")
-
-# Vision and treatment variables
-vision_vars <- c("baseline_VA_logMAR")
-
-# Treatment flags (these ARE in the raw data)
-treatment_vars <- c("other_inject", "anti_VEGF", "focal_laser_flag", "PRP_flag")
-
-# Other eye conditions
-eye_condition_vars <- c("glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", 
-                        "catsurg_before_hitplus_cat")
-
-# DR severity (created by the function)
-dr_vars <- c("dr_severity")
-
-# Treatment/exposure (created by the function)
-exposure_var <- "ever_lapse_binary"
-
-# Outcome variables (created by the function)
-outcome_vars <- c("outcome_va_logMAR", "outcome_va_vi_binary")
-
-# Combine all variables
-all_vars <- c(demographic_vars, comorbidity_vars, vision_vars, treatment_vars,
-              eye_condition_vars, dr_vars, exposure_var, outcome_vars)
-
-# Check which variables exist in the data
-available_vars <- intersect(all_vars, names(original_data))
-missing_vars <- setdiff(all_vars, names(original_data))
-
-if (length(missing_vars) > 0) {
-  log_message(paste("Variables not found in data:", paste(missing_vars, collapse = ", ")))
-}
-
-log_message(paste("Analyzing", length(available_vars), "variables"))
-```
-
-## Descriptive Statistics by Exclusion Status
-
-```{r descriptive-stats}
-# Create Table 1 comparing excluded vs included
-# Specify which variables should be treated as factors
-factor_vars <- c("age_cat", "gender_cat", "race_ethnic_cat", "insurance_cat",
-                 "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat", 
-                 "catsurg_before_hitplus_cat", "dr_severity", "ever_lapse_binary")
-
-# Ensure factor variables are factors
-for (var in factor_vars) {
-  if (var %in% names(original_data)) {
-    if (!is.factor(original_data[[var]])) {
-      original_data[[var]] <- as.factor(original_data[[var]])
-    }
+# Function to compute summary statistics for continuous variables
+summarize_continuous <- function(data, var) {
+  values <- data[[var]]
+  values <- values[!is.na(values)]
+  if (length(values) == 0) {
+    return(data.frame(
+      variable = var,
+      mean = NA,
+      sd = NA,
+      median = NA,
+      q25 = NA,
+      q75 = NA,
+      n_missing = nrow(data),
+      pct_missing = 100
+    ))
   }
-}
-
-# Create Table 1
-table1 <- CreateTableOne(
-  vars = available_vars,
-  strata = "excluded",
-  data = original_data,
-  factorVars = intersect(factor_vars, available_vars),
-  includeNA = TRUE,
-  test = TRUE,
-  smd = TRUE
-)
-
-# Print table with standardized mean differences
-# Label the strata clearly
-table1_print <- print(table1, 
-                      smd = TRUE, 
-                      showAllLevels = TRUE,
-                      formatOptions = list(big.mark = ","),
-                      printToggle = FALSE)
-
-# Update column names for clarity
-colnames(table1_print)[colnames(table1_print) == "FALSE"] <- "Included (n)"
-colnames(table1_print)[colnames(table1_print) == "TRUE"] <- "Excluded (n)"
-
-kable(table1_print, 
-      caption = "Comparison of Baseline Characteristics: Excluded vs Included Patients")
-```
-
-## Key Differences Visualization
-
-```{r key-differences}
-#| fig-height: 10
-#| fig-width: 12
-
-# Extract SMDs with more detail for factor variables
-# Get the table itself to access all SMD information
-table1_matrix <- print(table1, smd = TRUE, printToggle = FALSE)
-
-# Extract SMDs manually from the table for each row
-# This will give us SMDs for each level of factor variables
-smd_data <- data.frame()
-
-# Process each variable in the table
-for (var in available_vars) {
-  if (var %in% names(original_data)) {
-    # Check if it's a factor or character that should be treated as factor
-    is_factor_var <- (var %in% factor_vars) || is.factor(original_data[[var]]) || is.character(original_data[[var]])
-    
-    if (is_factor_var) {
-      # For factor/categorical variables, calculate SMD for each level
-      # Convert to factor if needed
-      if (!is.factor(original_data[[var]])) {
-        original_data[[var]] <- as.factor(original_data[[var]])
-      }
-      
-      var_levels <- levels(original_data[[var]])
-      for (level in var_levels) {
-        # Calculate proportion in each group
-        prop_excluded <- mean(original_data[[var]][original_data$excluded] == level, na.rm = TRUE)
-        prop_included <- mean(original_data[[var]][!original_data$excluded] == level, na.rm = TRUE)
-        
-        # Calculate SMD for this level
-        # SMD for proportions = (p1 - p2) / sqrt((p1*(1-p1) + p2*(1-p2))/2)
-        pooled_var <- (prop_excluded * (1 - prop_excluded) + prop_included * (1 - prop_included)) / 2
-        smd_val <- if (pooled_var > 0) {
-          abs(prop_excluded - prop_included) / sqrt(pooled_var)
-        } else {
-          0
-        }
-        
-        smd_data <- rbind(smd_data, data.frame(
-          Variable = paste0(var, ": ", level),
-          SMD = smd_val,
-          VarType = "Factor",
-          BaseVar = var,
-          stringsAsFactors = FALSE
-        ))
-      }
-    } else if (is.numeric(original_data[[var]])) {
-      # For continuous variables, calculate single SMD
-      if (sum(!is.na(original_data[[var]])) > 0) {
-        # Calculate means
-        mean_excluded <- mean(original_data[[var]][original_data$excluded], na.rm = TRUE)
-        mean_included <- mean(original_data[[var]][!original_data$excluded], na.rm = TRUE)
-        
-        # Calculate pooled standard deviation
-        var_excluded <- var(original_data[[var]][original_data$excluded], na.rm = TRUE)
-        var_included <- var(original_data[[var]][!original_data$excluded], na.rm = TRUE)
-        
-        # Check if we have valid variances
-        if (!is.na(var_excluded) && !is.na(var_included)) {
-          sd_pooled <- sqrt((var_excluded + var_included) / 2)
-          
-          smd_val <- if (!is.na(sd_pooled) && sd_pooled > 0) {
-            abs(mean_excluded - mean_included) / sd_pooled
-          } else {
-            0
-          }
-        } else {
-          smd_val <- 0
-        }
-        
-        smd_data <- rbind(smd_data, data.frame(
-          Variable = var,
-          SMD = smd_val,
-          VarType = "Continuous",
-          BaseVar = var,
-          stringsAsFactors = FALSE
-        ))
-      }
-    }
-  }
-}
-
-# Remove NA values and order by absolute SMD
-smd_data <- smd_data[!is.na(smd_data$SMD), ]
-smd_data <- smd_data[order(abs(smd_data$SMD), decreasing = TRUE), ]
-
-# Get top differences (for display purposes, limit to top 20)
-smd_data_top <- head(smd_data, 20)
-
-# Identify variables with substantial differences (SMD > 0.1)
-substantial_diff <- smd_data[abs(smd_data$SMD) > 0.1, ]
-
-# Plot 1: SMD plot (showing top 20 differences)
-p1 <- ggplot(smd_data_top, aes(x = reorder(Variable, abs(SMD)), y = SMD)) +
-  geom_point(aes(color = VarType), size = 3) +
-  geom_point(data = smd_data_top[abs(smd_data_top$SMD) > 0.1, ],
-             color = "red", size = 3.5) +
-  geom_hline(yintercept = c(-0.1, 0, 0.1), linetype = c(2, 1, 2), alpha = 0.5) +
-  coord_flip() +
-  labs(title = "Standardized Mean Differences: Excluded vs Included (Top 20)",
-       subtitle = "Red overlay indicates SMD > 0.1; Factor levels shown separately",
-       x = "Variable",
-       y = "Standardized Mean Difference",
-       color = "Variable Type") +
-  theme_minimal() +
-  theme(plot.title = element_text(size = 14, face = "bold"))
-
-print(p1)
-```
-
-## Focus on Key Variables
-
-```{r key-variables}
-# Analyze key variables of interest
-key_results <- data.frame(
-  Variable = character(),
-  Included = character(),
-  Excluded = character(),
-  P_value = numeric(),
-  SMD = numeric(),
-  stringsAsFactors = FALSE
-)
-
-# Helper function to format results
-format_continuous <- function(data, var, excluded_flag) {
-  subset_data <- data[data$excluded == excluded_flag & !is.na(data[[var]]), var]
-  sprintf("%.2f (%.2f)", mean(subset_data, na.rm = TRUE), sd(subset_data, na.rm = TRUE))
-}
-
-format_binary <- function(data, var, excluded_flag, level = "1") {
-  subset_data <- data[data$excluded == excluded_flag, ]
-  n <- sum(!is.na(subset_data[[var]]))
-  n_level <- sum(subset_data[[var]] == level, na.rm = TRUE)
-  sprintf("%d (%.1f%%)", n_level, 100 * n_level / n)
-}
-
-# Analyze lapsing rate
-if ("ever_lapse_binary" %in% available_vars) {
-  lapse_included <- mean(original_data$ever_lapse_binary[!original_data$excluded] == 1, na.rm = TRUE)
-  lapse_excluded <- mean(original_data$ever_lapse_binary[original_data$excluded] == 1, na.rm = TRUE)
-  lapse_p <- chisq.test(table(original_data$excluded, original_data$ever_lapse_binary))$p.value
   
-  key_results <- rbind(key_results, data.frame(
-    Variable = "Lapsed from care",
-    Included = sprintf("%.1f%%", 100 * lapse_included),
-    Excluded = sprintf("%.1f%%", 100 * lapse_excluded),
-    P_value = lapse_p,
-    SMD = abs(lapse_excluded - lapse_included) / sqrt((lapse_included * (1 - lapse_included) + 
-                                                        lapse_excluded * (1 - lapse_excluded)) / 2)
-  ))
-}
-
-# Analyze baseline VA
-if ("baseline_VA_logMAR" %in% available_vars) {
-  va_included <- mean(original_data$baseline_VA_logMAR[!original_data$excluded], na.rm = TRUE)
-  va_excluded <- mean(original_data$baseline_VA_logMAR[original_data$excluded], na.rm = TRUE)
-  va_p <- t.test(original_data$baseline_VA_logMAR ~ original_data$excluded)$p.value
-  
-  key_results <- rbind(key_results, data.frame(
-    Variable = "Baseline VA (logMAR)",
-    Included = sprintf("%.3f", va_included),
-    Excluded = sprintf("%.3f", va_excluded),
-    P_value = va_p,
-    SMD = abs(va_excluded - va_included) / sd(original_data$baseline_VA_logMAR, na.rm = TRUE)
-  ))
-}
-
-# Analyze CCI
-if ("CCI" %in% available_vars) {
-  cci_included <- mean(original_data$CCI[!original_data$excluded], na.rm = TRUE)
-  cci_excluded <- mean(original_data$CCI[original_data$excluded], na.rm = TRUE)
-  cci_p <- t.test(original_data$CCI ~ original_data$excluded)$p.value
-  
-  key_results <- rbind(key_results, data.frame(
-    Variable = "Charlson Comorbidity Index",
-    Included = sprintf("%.2f", cci_included),
-    Excluded = sprintf("%.2f", cci_excluded),
-    P_value = cci_p,
-    SMD = abs(cci_excluded - cci_included) / sd(original_data$CCI, na.rm = TRUE)
-  ))
-}
-
-# Format and display
-key_results$P_value <- format.pval(key_results$P_value, digits = 3)
-key_results$SMD <- round(key_results$SMD, 3)
-
-kable(key_results,
-      caption = "Key Variable Comparisons",
-      col.names = c("Variable", "Included", "Excluded", "P-value", "SMD"))
-```
-
-## Missingness Patterns by DR Severity
-
-```{r missingness-by-dr}
-#| fig-height: 6
-#| fig-width: 10
-
-if ("dr_severity" %in% available_vars) {
-  # Calculate missingness rate by DR severity
-  miss_by_dr <- original_data %>%
-    group_by(dr_severity) %>%
-    summarise(
-      n_total = n(),
-      n_excluded = sum(excluded),
-      pct_excluded = 100 * n_excluded / n_total,
-      .groups = 'drop'
-    )
-  
-  # Plot missingness by DR severity
-  p2 <- ggplot(miss_by_dr, aes(x = dr_severity, y = pct_excluded)) +
-    geom_col(fill = "steelblue", alpha = 0.7) +
-    geom_text(aes(label = sprintf("%.1f%%", pct_excluded)), 
-              vjust = -0.5, size = 4) +
-    labs(title = "Outcome Missingness by DR Severity",
-         subtitle = "Percentage of patients excluded due to missing outcomes",
-         x = "DR Severity",
-         y = "% Excluded") +
-    theme_minimal() +
-    theme(plot.title = element_text(size = 14, face = "bold"))
-  
-  print(p2)
-  
-  # Table of missingness by DR severity
-  kable(miss_by_dr,
-        caption = "Missingness Patterns by DR Severity",
-        col.names = c("DR Severity", "Total N", "N Excluded", "% Excluded"),
-        digits = 1)
-}
-```
-
-## Missingness Patterns by Treatment and Lapse Status
-
-```{r missingness-by-treatment}
-#| fig-height: 8
-#| fig-width: 12
-
-# Create 2x2 plots for treatment and lapse patterns
-plots <- list()
-
-# Plot 1: Missingness by treatment status
-if ("any_treatment" %in% available_vars) {
-  miss_by_treatment <- original_data %>%
-    group_by(any_treatment) %>%
-    summarise(
-      n_total = n(),
-      n_excluded = sum(excluded),
-      pct_excluded = 100 * n_excluded / n_total,
-      .groups = 'drop'
-    )
-  
-  plots[[1]] <- ggplot(miss_by_treatment, aes(x = any_treatment, y = pct_excluded)) +
-    geom_col(fill = "coral", alpha = 0.7) +
-    geom_text(aes(label = sprintf("%.1f%%", pct_excluded)), 
-              vjust = -0.5, size = 4) +
-    labs(title = "Missingness by Treatment Status",
-         x = "Any Treatment", y = "% Excluded") +
-    theme_minimal()
-}
-
-# Plot 2: Missingness by lapse status
-if ("ever_lapse_binary" %in% available_vars) {
-  miss_by_lapse <- original_data %>%
-    mutate(lapse_status = factor(ever_lapse_binary, 
-                                 levels = c(0, 1),
-                                 labels = c("Not Lapsed", "Lapsed"))) %>%
-    group_by(lapse_status) %>%
-    summarise(
-      n_total = n(),
-      n_excluded = sum(excluded),
-      pct_excluded = 100 * n_excluded / n_total,
-      .groups = 'drop'
-    )
-  
-  plots[[2]] <- ggplot(miss_by_lapse, aes(x = lapse_status, y = pct_excluded)) +
-    geom_col(fill = "darkgreen", alpha = 0.7) +
-    geom_text(aes(label = sprintf("%.1f%%", pct_excluded)), 
-              vjust = -0.5, size = 4) +
-    labs(title = "Missingness by Lapse Status",
-         x = "Lapse Status", y = "% Excluded") +
-    theme_minimal()
-}
-
-# Plot 3: Joint distribution
-if ("any_treatment" %in% available_vars && "ever_lapse_binary" %in% available_vars) {
-  miss_joint <- original_data %>%
-    mutate(lapse_status = factor(ever_lapse_binary, 
-                                 levels = c(0, 1),
-                                 labels = c("Not Lapsed", "Lapsed"))) %>%
-    group_by(any_treatment, lapse_status) %>%
-    summarise(
-      n_total = n(),
-      n_excluded = sum(excluded),
-      pct_excluded = 100 * n_excluded / n_total,
-      .groups = 'drop'
-    )
-  
-  plots[[3]] <- ggplot(miss_joint, aes(x = any_treatment, y = pct_excluded, 
-                                       fill = lapse_status)) +
-    geom_col(position = position_dodge(width = 0.8), alpha = 0.7) +
-    labs(title = "Missingness by Treatment and Lapse Status",
-         x = "Treatment Status", y = "% Excluded",
-         fill = "Lapse Status") +
-    theme_minimal() +
-    scale_fill_manual(values = c("Not Lapsed" = "blue", "Lapsed" = "red"))
-}
-
-# Arrange plots
-if (length(plots) > 0) {
-  # Remove NULL elements from plots list
-  plots <- plots[!sapply(plots, is.null)]
-  
-  if (length(plots) == 1) {
-    print(plots[[1]])
-  } else if (length(plots) > 1) {
-    do.call(grid.arrange, c(plots, list(ncol = 2)))
-  }
-}
-```
-
-## Comparison Across Imputed Datasets
-
-```{r imputation-comparison}
-# For key variables, compare means across imputed datasets for originally missing vs complete
-# This shows how imputation filled in the missing values
-
-imputation_summary <- data.frame()
-
-# Get IDs of included patients (those not excluded)
-id_var <- if("cohort_id" %in% names(original_data)) "cohort_id" else "e_mrn_deidentified"
-included_data <- original_data[!original_data$excluded, ]
-included_ids <- unique(included_data[[id_var]])
-
-for (var in c("baseline_VA_logMAR", "CCI", "DCSI")) {
-  if (var %in% names(original_data)) {  # Check if variable exists in original data
-    # Get which observations were originally missing
-    originally_missing <- is.na(original_data[[var]])
-    
-    # Calculate mean across imputations for originally missing
-    if (sum(originally_missing, na.rm = TRUE) > 0) {
-      means_missing <- sapply(imputed_datasets, function(df) {
-        # Match IDs to find corresponding rows in imputed data
-        imputed_ids <- df[[id_var]]
-        matching_rows <- imputed_ids %in% included_ids
-        missing_and_included <- originally_missing[match(imputed_ids, original_data[[id_var]])] & matching_rows
-        
-        if (sum(missing_and_included, na.rm = TRUE) > 0) {
-          mean(df[[var]][missing_and_included], na.rm = TRUE)
-        } else {
-          NA
-        }
-      })
-      
-      # Calculate mean for originally complete
-      means_complete <- sapply(imputed_datasets, function(df) {
-        imputed_ids <- df[[id_var]]
-        matching_rows <- imputed_ids %in% included_ids
-        complete_and_included <- !originally_missing[match(imputed_ids, original_data[[id_var]])] & matching_rows
-        
-        if (sum(complete_and_included, na.rm = TRUE) > 0) {
-          mean(df[[var]][complete_and_included], na.rm = TRUE)
-        } else {
-          NA
-        }
-      })
-      
-      # Remove NAs before calculating statistics
-      means_missing <- means_missing[!is.na(means_missing)]
-      means_complete <- means_complete[!is.na(means_complete)]
-      
-      if (length(means_missing) > 0 && length(means_complete) > 0) {
-        imputation_summary <- rbind(imputation_summary, data.frame(
-          Variable = var,
-          Originally_Complete = sprintf("%.3f (%.3f)", 
-                                       mean(means_complete), sd(means_complete)),
-          Imputed_for_Missing = sprintf("%.3f (%.3f)", 
-                                        mean(means_missing), sd(means_missing)),
-          Difference = sprintf("%.3f", mean(means_missing) - mean(means_complete))
-        ))
-      }
-    }
-  }
-}
-
-if (nrow(imputation_summary) > 0) {
-  kable(imputation_summary,
-        caption = "Comparison of Imputed Values: Originally Missing vs Complete",
-        col.names = c("Variable", "Originally Complete", "Imputed (for Missing)", "Difference"))
-}
-```
-
-## Summary and Implications
-
-```{r summary}
-# Summarize key findings
-significant_differences <- substantial_diff$Variable
-
-# Calculate effect size measures
-lapse_or_excluded_vs_included <- NA
-if ("ever_lapse_binary" %in% available_vars) {
-  # Calculate odds ratio of being excluded for lapsed vs not lapsed
-  lapse_table <- table(Lapse = original_data$ever_lapse_binary, 
-                      Excluded = original_data$excluded)
-  if (ncol(lapse_table) == 2 && nrow(lapse_table) == 2) {
-    # OR = (lapsed & excluded * not lapsed & not excluded) / 
-    #      (lapsed & not excluded * not lapsed & excluded)
-    lapse_or_excluded_vs_included <- (lapse_table["1", "TRUE"] * lapse_table["0", "FALSE"]) / 
-                                     (lapse_table["1", "FALSE"] * lapse_table["0", "TRUE"])
-  }
-}
-
-log_message("Analysis completed successfully")
-```
-
-### Key Findings
-
-**Variables with Substantial Differences (SMD > 0.1):**
-```{r}
-#| echo: false
-if (length(significant_differences) > 0) {
-  for (var in significant_differences) {
-    cat("- ", var, "\n")
-  }
-} else {
-  cat("No variables showed substantial differences (SMD > 0.1)\n")
-}
-```
-
-```{r lapse-missingness-summary}
-#| echo: false
-# Create summary of lapse status and missingness relationship
-if (!is.na(lapse_or_excluded_vs_included)) {
-  lapse_summary <- data.frame(
-    Measure = c("Odds ratio of exclusion (lapsed vs not lapsed)",
-                "Interpretation"),
-    Value = c(sprintf("%.2f", lapse_or_excluded_vs_included),
-              ifelse(lapse_or_excluded_vs_included > 1.5,
-                     "Lapsed patients were substantially more likely to have missing outcomes",
-                     "No substantial difference in missingness by lapse status"))
+  data.frame(
+    variable = var,
+    mean = mean(values, na.rm = TRUE),
+    sd = sd(values, na.rm = TRUE),
+    median = median(values, na.rm = TRUE),
+    q25 = quantile(values, 0.25, na.rm = TRUE),
+    q75 = quantile(values, 0.75, na.rm = TRUE),
+    n_missing = sum(is.na(data[[var]])),
+    pct_missing = 100 * sum(is.na(data[[var]])) / nrow(data)
   )
-  kable(lapse_summary, 
-        caption = "Lapse Status and Missingness Relationship",
-        col.names = c("Measure", "Value"))
-} else {
-  cat("Lapse status and missingness relationship could not be calculated.\n")
+}
+
+# Function to compute summary statistics for categorical variables
+summarize_categorical <- function(data, var) {
+  tbl <- table(data[[var]], useNA = "ifany")
+  props <- prop.table(table(data[[var]], useNA = "no"))
+  
+  levels_df <- data.frame(
+    variable = paste0(var, "_", names(props)),
+    n = as.vector(table(data[[var]], useNA = "no")),
+    pct = 100 * as.vector(props)
+  )
+  
+  # Add missing info
+  n_missing <- sum(is.na(data[[var]]))
+  levels_df$n_missing <- n_missing
+  levels_df$pct_missing <- 100 * n_missing / nrow(data)
+  
+  levels_df
+}
+
+# Process each dataset
+process_dataset <- function(data, name) {
+  # Continuous variables
+  cont_summaries <- do.call(rbind, lapply(vars_continuous, function(v) {
+    if (v %in% names(data)) {
+      summarize_continuous(data, v)
+    } else {
+      data.frame(variable = v, mean = NA, sd = NA, median = NA, 
+                 q25 = NA, q75 = NA, n_missing = NA, pct_missing = NA)
+    }
+  }))
+  
+  # Categorical variables
+  cat_summaries <- do.call(rbind, lapply(vars_categorical, function(v) {
+    if (v %in% names(data)) {
+      summarize_categorical(data, v)
+    } else {
+      data.frame(variable = v, n = NA, pct = NA, n_missing = NA, pct_missing = NA)
+    }
+  }))
+  
+  list(continuous = cont_summaries, categorical = cat_summaries, dataset = name)
 }
 ```
 
-```{r finalize-log}
-#| include: false
-# Finalize logging
-log_message("Missingness pattern analysis completed successfully")
-final_log <- finalize_log(success = TRUE)
+```{r create-table}
+# Process original data
+original_summary <- process_dataset(original_complete, "Original")
+
+# Process complete cases
+complete_summary <- process_dataset(complete_cases_data, "Complete Cases")
+
+# Process imputed data (average across imputations)
+# For imputed data, we need to average across all imputations
+imputed_summaries <- lapply(1:n_imputations, function(i) {
+  process_dataset(imputed_datasets[[i]], paste0("Imputation_", i))
+})
+
+# Average the imputed results
+average_imputed_continuous <- do.call(rbind, lapply(vars_continuous, function(v) {
+  # Extract values for this variable across all imputations
+  imp_values <- lapply(imputed_summaries, function(s) {
+    s$continuous[s$continuous$variable == v, ]
+  })
+  
+  # Average the statistics
+  if (nrow(imp_values[[1]]) > 0) {
+    data.frame(
+      variable = v,
+      mean = mean(sapply(imp_values, function(x) x$mean), na.rm = TRUE),
+      sd = mean(sapply(imp_values, function(x) x$sd), na.rm = TRUE),
+      median = mean(sapply(imp_values, function(x) x$median), na.rm = TRUE),
+      q25 = mean(sapply(imp_values, function(x) x$q25), na.rm = TRUE),
+      q75 = mean(sapply(imp_values, function(x) x$q75), na.rm = TRUE),
+      n_missing = 0,  # No missing in imputed data
+      pct_missing = 0
+    )
+  } else {
+    data.frame(variable = v, mean = NA, sd = NA, median = NA, 
+               q25 = NA, q75 = NA, n_missing = NA, pct_missing = NA)
+  }
+}))
+
+# For categorical variables, average the percentages
+all_cat_vars <- unique(unlist(lapply(imputed_summaries, function(s) s$categorical$variable)))
+average_imputed_categorical <- do.call(rbind, lapply(all_cat_vars, function(v) {
+  # Extract values for this variable level across all imputations
+  imp_values <- lapply(imputed_summaries, function(s) {
+    s$categorical[s$categorical$variable == v, ]
+  })
+  
+  # Remove empty results
+  imp_values <- imp_values[sapply(imp_values, nrow) > 0]
+  
+  if (length(imp_values) > 0) {
+    data.frame(
+      variable = v,
+      n = mean(sapply(imp_values, function(x) x$n), na.rm = TRUE),
+      pct = mean(sapply(imp_values, function(x) x$pct), na.rm = TRUE),
+      n_missing = 0,
+      pct_missing = 0
+    )
+  } else {
+    data.frame(variable = v, n = NA, pct = NA, n_missing = NA, pct_missing = NA)
+  }
+}))
+
+imputed_summary <- list(
+  continuous = average_imputed_continuous,
+  categorical = average_imputed_categorical,
+  dataset = "Imputed (Average)"
+)
+```
+
+```{r display-table}
+# Create formatted table for continuous variables
+format_continuous_table <- function(original, complete, imputed) {
+  vars <- unique(c(original$variable, complete$variable, imputed$variable))
+  
+  table_df <- data.frame(
+    Variable = vars,
+    Original = NA,
+    Complete_Cases = NA,
+    Imputed = NA,
+    stringsAsFactors = FALSE
+  )
+  
+  for (i in 1:length(vars)) {
+    v <- vars[i]
+    
+    # Original
+    orig_row <- original[original$variable == v, ]
+    if (nrow(orig_row) > 0 && !is.na(orig_row$mean)) {
+      table_df$Original[i] <- sprintf("%.2f (%.2f)", orig_row$mean, orig_row$sd)
+    }
+    
+    # Complete cases
+    comp_row <- complete[complete$variable == v, ]
+    if (nrow(comp_row) > 0 && !is.na(comp_row$mean)) {
+      table_df$Complete_Cases[i] <- sprintf("%.2f (%.2f)", comp_row$mean, comp_row$sd)
+    }
+    
+    # Imputed
+    imp_row <- imputed[imputed$variable == v, ]
+    if (nrow(imp_row) > 0 && !is.na(imp_row$mean)) {
+      table_df$Imputed[i] <- sprintf("%.2f (%.2f)", imp_row$mean, imp_row$sd)
+    }
+  }
+  
+  table_df
+}
+
+# Create formatted table for categorical variables
+format_categorical_table <- function(original, complete, imputed) {
+  vars <- unique(c(original$variable, complete$variable, imputed$variable))
+  
+  table_df <- data.frame(
+    Variable = vars,
+    Original = NA,
+    Complete_Cases = NA, 
+    Imputed = NA,
+    stringsAsFactors = FALSE
+  )
+  
+  for (i in 1:length(vars)) {
+    v <- vars[i]
+    
+    # Original
+    orig_row <- original[original$variable == v, ]
+    if (nrow(orig_row) > 0 && !is.na(orig_row$n)) {
+      table_df$Original[i] <- sprintf("%.0f (%.1f%%)", orig_row$n, orig_row$pct)
+    }
+    
+    # Complete cases
+    comp_row <- complete[complete$variable == v, ]
+    if (nrow(comp_row) > 0 && !is.na(comp_row$n)) {
+      table_df$Complete_Cases[i] <- sprintf("%.0f (%.1f%%)", comp_row$n, comp_row$pct)
+    }
+    
+    # Imputed
+    imp_row <- imputed[imputed$variable == v, ]
+    if (nrow(imp_row) > 0 && !is.na(imp_row$n)) {
+      table_df$Imputed[i] <- sprintf("%.1f (%.1f%%)", imp_row$n, imp_row$pct)
+    }
+  }
+  
+  table_df
+}
+
+# Create the tables
+continuous_table <- format_continuous_table(
+  original_summary$continuous,
+  complete_summary$continuous,
+  imputed_summary$continuous
+)
+
+categorical_table <- format_categorical_table(
+  original_summary$categorical,
+  complete_summary$categorical,
+  imputed_summary$categorical
+)
+
+# Display continuous variables
+kable(continuous_table, 
+      caption = "Continuous Variables: Mean (SD)",
+      col.names = c("Variable", "Original Data", "Complete Cases", "Imputed (Average)"))
+
+# Display categorical variables
+kable(categorical_table,
+      caption = "Categorical Variables: N (%)",
+      col.names = c("Variable", "Original Data", "Complete Cases", "Imputed (Average)"))
+
+# Sample sizes
+sample_sizes <- data.frame(
+  Dataset = c("Original (after exclusions)", "Complete Cases", "Imputed (each)"),
+  N = c(nrow(original_complete), nrow(complete_cases_data), nrow(imputed_datasets[[1]]))
+)
+
+kable(sample_sizes, caption = "Sample Sizes")
+```
+
+```{r finalize}
+# Finalize log
+finalize_log()
 ```
