@@ -18,6 +18,7 @@ setup_analysis(seed = 2025)
 library(tableone)
 library(knitr)
 library(dplyr)
+library(tidyr)
 
 # Initialize logging
 log_file <- init_log("sample_comparison")
@@ -30,6 +31,18 @@ log_file <- init_log("sample_comparison")
 data_path <- file.path(s_root, "Gina's Project/df_Final_240909.csv")
 original_data <- load_and_prepare_data(data_path)
 original_complete <- apply_exclusions(original_data)  # Remove missing CCI/DCSI
+
+# Create dr_severity for original data from No_DR/NPDR/PDR
+original_complete <- original_complete |>
+  mutate(
+    dr_severity = case_when(
+      No_DR == TRUE ~ "No_DR",
+      NPDR %in% c("Mild", "Moderate", "Severe") ~ "NPDR",
+      PDR == "Present" ~ "PDR",
+      TRUE ~ NA_character_
+    ),
+    dr_severity = factor(dr_severity, levels = c("No_DR", "NPDR", "PDR"))
+  )
 
 log_message(paste0("Original data after exclusions: ", nrow(original_complete), " observations"))
 
@@ -67,14 +80,14 @@ vars_continuous <- c("age", "baseline_VA_logMAR", "CCI", "DCSI")
 
 # Variables in original data (with proper capitalization)
 vars_categorical_original <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
-                               "ever_lapse_binary", 
+                               "dr_severity", "ever_lapse_binary", 
                                "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
                                "catsurg_before_hitplus_cat",
                                "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
                                "outcome_va_vi_binary")
 
-# Additional variables in new data only
-vars_categorical_new_only <- c("dr_severity")
+# Additional variables (none now that dr_severity is in both)
+vars_categorical_new_only <- c()
 
 # All categorical variables for new data
 vars_categorical_new <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
@@ -203,12 +216,15 @@ process_dataset <- function(data, name, categorical_vars = NULL) {
 ```{r create-table}
 # Process original data (with original variable names)
 original_summary <- process_dataset(original_complete, "Original", vars_categorical_original)
+original_summary$categorical$variable_std <- original_summary$categorical$variable
 
 # Process submitted (included) data
 submitted_summary <- process_dataset(submitted_data, "Submitted", vars_categorical_new)
+submitted_summary$categorical$variable_std <- submitted_summary$categorical$variable
 
 # Process excluded data
 excluded_summary <- process_dataset(excluded_data, "Excluded", vars_categorical_new)
+excluded_summary$categorical$variable_std <- excluded_summary$categorical$variable
 
 # Process imputed data (average across imputations)
 # For imputed data, we need to average across all imputations
@@ -265,6 +281,9 @@ average_imputed_categorical <- do.call(rbind, lapply(all_cat_vars, function(v) {
   }
 }))
 
+# Add variable_std column to average_imputed_categorical for consistency
+average_imputed_categorical$variable_std <- average_imputed_categorical$variable
+
 imputed_summary <- list(
   continuous = average_imputed_continuous,
   categorical = average_imputed_categorical,
@@ -319,7 +338,34 @@ format_continuous_table <- function(original, submitted, excluded, imputed) {
 
 # Create formatted table for categorical variables
 format_categorical_table <- function(original, submitted, excluded, imputed) {
-  vars <- unique(c(original$variable, submitted$variable, excluded$variable, imputed$variable))
+  # Get unique base variable names (without the level suffixes)
+  get_base_var <- function(x) sub("_[^_]+$", "", x)
+  
+  # Collect all variables
+  all_vars <- unique(c(original$variable, submitted$variable, excluded$variable, imputed$variable))
+  
+  # For glaucoma and otherretina, we need to handle different naming conventions
+  # Original has _FALSE/_TRUE, new data has _0/_1
+  standardize_var <- function(v) {
+    if (grepl("glaucoma_bef_hitplus_cat_FALSE", v)) return("glaucoma_bef_hitplus_cat_0")
+    if (grepl("glaucoma_bef_hitplus_cat_TRUE", v)) return("glaucoma_bef_hitplus_cat_1")
+    if (grepl("otherretina_bef_hitplus_cat_FALSE", v)) return("otherretina_bef_hitplus_cat_0")
+    if (grepl("otherretina_bef_hitplus_cat_TRUE", v)) return("otherretina_bef_hitplus_cat_1")
+    return(v)
+  }
+  
+  # Standardize variable names
+  original$variable_std <- sapply(original$variable, standardize_var)
+  submitted$variable_std <- sapply(submitted$variable, standardize_var)
+  excluded$variable_std <- sapply(excluded$variable, standardize_var)
+  imputed$variable_std <- sapply(imputed$variable, standardize_var)
+  
+  # Get unique standardized variables
+  vars <- unique(c(original$variable_std, submitted$variable_std, 
+                   excluded$variable_std, imputed$variable_std))
+  
+  # Remove duplicates and unwanted rows
+  vars <- vars[!grepl("^outcome_va_vi_binary$|^ever_lapse_binary$", vars)]
   
   table_df <- data.frame(
     Variable = vars,
@@ -334,29 +380,33 @@ format_categorical_table <- function(original, submitted, excluded, imputed) {
     v <- vars[i]
     
     # Original
-    orig_row <- original[original$variable == v, ]
+    orig_row <- original[original$variable_std == v, ]
     if (nrow(orig_row) > 0 && !is.na(orig_row$n)) {
       table_df$Original[i] <- sprintf("%.0f (%.1f%%)", orig_row$n, orig_row$pct)
     }
     
     # Submitted
-    sub_row <- submitted[submitted$variable == v, ]
+    sub_row <- submitted[submitted$variable_std == v, ]
     if (nrow(sub_row) > 0 && !is.na(sub_row$n)) {
       table_df$Submitted[i] <- sprintf("%.0f (%.1f%%)", sub_row$n, sub_row$pct)
     }
     
     # Excluded
-    exc_row <- excluded[excluded$variable == v, ]
+    exc_row <- excluded[excluded$variable_std == v, ]
     if (nrow(exc_row) > 0 && !is.na(exc_row$n)) {
       table_df$Excluded[i] <- sprintf("%.0f (%.1f%%)", exc_row$n, exc_row$pct)
     }
     
     # Imputed
-    imp_row <- imputed[imputed$variable == v, ]
+    imp_row <- imputed[imputed$variable_std == v, ]
     if (nrow(imp_row) > 0 && !is.na(imp_row$n)) {
       table_df$Imputed[i] <- sprintf("%.1f (%.1f%%)", imp_row$n, imp_row$pct)
     }
   }
+  
+  # Clean up variable names for display
+  table_df$Variable <- gsub("_0$", "_No", table_df$Variable)
+  table_df$Variable <- gsub("_1$", "_Yes", table_df$Variable)
   
   table_df
 }
