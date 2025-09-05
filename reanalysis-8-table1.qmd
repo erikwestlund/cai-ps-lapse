@@ -884,74 +884,227 @@ export_stratified_table <- function(table_data, filename) {
     stringsAsFactors = FALSE
   )
   
+  # Helper function to parse "mean ± sd" format
+  parse_mean_sd <- function(x) {
+    if (is.na(x) || x == "") return(list(mean = NA, sd = NA))
+    parts <- strsplit(x, " ± ")[[1]]
+    return(list(mean = as.numeric(parts[1]), sd = as.numeric(parts[2])))
+  }
+  
+  # Helper function to parse "n (pct%)" format
+  parse_n_pct <- function(x) {
+    if (is.na(x) || x == "") return(list(n = NA, pct = NA))
+    n <- as.numeric(gsub(" .*", "", x))
+    pct <- as.numeric(gsub(".*\\((.*)%.*", "\\1", x))
+    return(list(n = n, pct = pct))
+  }
+  
   # Add total row
-  n_lapse <- as.numeric(gsub(" .*", "", table_data$totals$Lapse))
-  n_no_lapse <- as.numeric(gsub(" .*", "", table_data$totals$NoLapse))
-  n_total <- as.numeric(gsub(" .*", "", table_data$totals$Total))
+  lapse_total <- parse_n_pct(table_data$totals$Lapse)
+  no_lapse_total <- parse_n_pct(table_data$totals$NoLapse)
+  total_total <- parse_n_pct(table_data$totals$Total)
   
   export_df <- rbind(export_df, data.frame(
     variable = "Total",
-    lapse_value = n_lapse,
-    lapse_prop = as.numeric(gsub(".*\\((.*)%.*", "\\1", table_data$totals$Lapse)),
+    lapse_value = lapse_total$n,
+    lapse_prop = lapse_total$pct,
     lapse_sd = NA,
-    no_lapse_value = n_no_lapse,
-    no_lapse_prop = as.numeric(gsub(".*\\((.*)%.*", "\\1", table_data$totals$NoLapse)),
+    no_lapse_value = no_lapse_total$n,
+    no_lapse_prop = no_lapse_total$pct,
     no_lapse_sd = NA,
-    total_value = n_total,
+    total_value = total_total$n,
     total_prop = 100,
     total_sd = NA
   ))
   
-  # Process categorical variables from table_data
-  # This is a simplified version - you'll need to expand this based on your exact structure
-  
-  # Add treatments
-  for (i in 1:3) {  # Lapse, No Lapse, Total
-    if (i <= nrow(table_data$treatments$prp)) {
-      # Extract values for each treatment
-      # This needs more sophisticated parsing based on actual data structure
+  # Process categorical variables
+  # Sex
+  if (!is.null(table_data$sex)) {
+    for (i in 1:nrow(table_data$sex)) {
+      level <- table_data$sex$level[i]
+      lapse_val <- parse_n_pct(table_data$sex$stat_lapse[i])
+      no_lapse_val <- parse_n_pct(table_data$sex$stat_no_lapse[i])
+      total_val <- parse_n_pct(table_data$sex$stat_total[i])
+      
+      export_df <- rbind(export_df, data.frame(
+        variable = paste0("Sex_", level),
+        lapse_value = lapse_val$n,
+        lapse_prop = lapse_val$pct,
+        lapse_sd = NA,
+        no_lapse_value = no_lapse_val$n,
+        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_sd = NA,
+        total_value = total_val$n,
+        total_prop = total_val$pct,
+        total_sd = NA
+      ))
     }
   }
   
-  # Add continuous variables
-  for (var_name in c("baseline_VA_logMAR", "DCSI", "CCI")) {
-    var_label <- switch(var_name,
-      "baseline_VA_logMAR" = "Baseline VA (logMAR)",
-      "DCSI" = "Diabetes Complication Severity Index",
-      "CCI" = "Charlson Comorbidity Index"
-    )
-    
-    # Parse mean ± SD format
-    if (var_name == "baseline_VA_logMAR") {
-      stats <- table_data$continuous$va$stat
-    } else if (var_name == "DCSI") {
-      stats <- table_data$continuous$dcsi$stat
-    } else {
-      stats <- table_data$continuous$cci$stat
+  # Age groups
+  if (!is.null(table_data$age)) {
+    for (i in 1:nrow(table_data$age)) {
+      level <- table_data$age$level[i]
+      lapse_val <- parse_n_pct(table_data$age$stat_lapse[i])
+      no_lapse_val <- parse_n_pct(table_data$age$stat_no_lapse[i])
+      total_val <- parse_n_pct(table_data$age$stat_total[i])
+      
+      export_df <- rbind(export_df, data.frame(
+        variable = paste0("Age_", level),
+        lapse_value = lapse_val$n,
+        lapse_prop = lapse_val$pct,
+        lapse_sd = NA,
+        no_lapse_value = no_lapse_val$n,
+        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_sd = NA,
+        total_value = total_val$n,
+        total_prop = total_val$pct,
+        total_sd = NA
+      ))
     }
-    
-    # Parse "mean ± sd" format
-    parse_mean_sd <- function(x) {
-      parts <- strsplit(x, " ± ")[[1]]
-      return(list(mean = as.numeric(parts[1]), sd = as.numeric(parts[2])))
+  }
+  
+  # Race/Ethnicity
+  if (!is.null(table_data$race)) {
+    for (i in 1:nrow(table_data$race)) {
+      level <- table_data$race$level[i]
+      lapse_val <- parse_n_pct(table_data$race$stat_lapse[i])
+      no_lapse_val <- parse_n_pct(table_data$race$stat_no_lapse[i])
+      total_val <- parse_n_pct(table_data$race$stat_total[i])
+      
+      export_df <- rbind(export_df, data.frame(
+        variable = paste0("Race_", level),
+        lapse_value = lapse_val$n,
+        lapse_prop = lapse_val$pct,
+        lapse_sd = NA,
+        no_lapse_value = no_lapse_val$n,
+        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_sd = NA,
+        total_value = total_val$n,
+        total_prop = total_val$pct,
+        total_sd = NA
+      ))
     }
-    
-    lapse_stats <- parse_mean_sd(stats[1])
-    no_lapse_stats <- parse_mean_sd(stats[2])
-    total_stats <- parse_mean_sd(stats[3])
-    
-    export_df <- rbind(export_df, data.frame(
-      variable = var_label,
-      lapse_value = lapse_stats$mean,
-      lapse_prop = NA,
-      lapse_sd = lapse_stats$sd,
-      no_lapse_value = no_lapse_stats$mean,
-      no_lapse_prop = NA,
-      no_lapse_sd = no_lapse_stats$sd,
-      total_value = total_stats$mean,
-      total_prop = NA,
-      total_sd = total_stats$sd
-    ))
+  }
+  
+  # Insurance
+  if (!is.null(table_data$insurance)) {
+    for (i in 1:nrow(table_data$insurance)) {
+      level <- table_data$insurance$level[i]
+      lapse_val <- parse_n_pct(table_data$insurance$stat_lapse[i])
+      no_lapse_val <- parse_n_pct(table_data$insurance$stat_no_lapse[i])
+      total_val <- parse_n_pct(table_data$insurance$stat_total[i])
+      
+      export_df <- rbind(export_df, data.frame(
+        variable = paste0("Insurance_", level),
+        lapse_value = lapse_val$n,
+        lapse_prop = lapse_val$pct,
+        lapse_sd = NA,
+        no_lapse_value = no_lapse_val$n,
+        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_sd = NA,
+        total_value = total_val$n,
+        total_prop = total_val$pct,
+        total_sd = NA
+      ))
+    }
+  }
+  
+  # DR Severity
+  if (!is.null(table_data$dr)) {
+    for (i in 1:nrow(table_data$dr)) {
+      level <- table_data$dr$level[i]
+      lapse_val <- parse_n_pct(table_data$dr$stat_lapse[i])
+      no_lapse_val <- parse_n_pct(table_data$dr$stat_no_lapse[i])
+      total_val <- parse_n_pct(table_data$dr$stat_total[i])
+      
+      export_df <- rbind(export_df, data.frame(
+        variable = paste0("DR_", level),
+        lapse_value = lapse_val$n,
+        lapse_prop = lapse_val$pct,
+        lapse_sd = NA,
+        no_lapse_value = no_lapse_val$n,
+        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_sd = NA,
+        total_value = total_val$n,
+        total_prop = total_val$pct,
+        total_sd = NA
+      ))
+    }
+  }
+  
+  # Treatments
+  treatment_names <- c("PRP", "Focal_laser", "Anti_VEGF", "Other_injections")
+  treatment_data <- list(table_data$treatments$prp, table_data$treatments$focal,
+                        table_data$treatments$vegf, table_data$treatments$other)
+  
+  for (j in 1:length(treatment_names)) {
+    if (!is.null(treatment_data[[j]])) {
+      tx_data <- treatment_data[[j]]
+      export_df <- rbind(export_df, data.frame(
+        variable = treatment_names[j],
+        lapse_value = tx_data$n[tx_data$lapse_group == "Lapse in care"],
+        lapse_prop = tx_data$pct[tx_data$lapse_group == "Lapse in care"],
+        lapse_sd = NA,
+        no_lapse_value = tx_data$n[tx_data$lapse_group == "No lapse in care"],
+        no_lapse_prop = tx_data$pct[tx_data$lapse_group == "No lapse in care"],
+        no_lapse_sd = NA,
+        total_value = tx_data$n[tx_data$lapse_group == "Total"],
+        total_prop = tx_data$pct[tx_data$lapse_group == "Total"],
+        total_sd = NA
+      ))
+    }
+  }
+  
+  # Comorbidities
+  comorb_names <- c("Glaucoma", "Prior_cataract_surgery", "Other_retinal_disease")
+  comorb_data <- list(table_data$comorbidities$glaucoma, table_data$comorbidities$cataract,
+                     table_data$comorbidities$retina)
+  
+  for (j in 1:length(comorb_names)) {
+    if (!is.null(comorb_data[[j]])) {
+      com_data <- comorb_data[[j]]
+      export_df <- rbind(export_df, data.frame(
+        variable = comorb_names[j],
+        lapse_value = com_data$n[com_data$lapse_group == "Lapse in care"],
+        lapse_prop = com_data$pct[com_data$lapse_group == "Lapse in care"],
+        lapse_sd = NA,
+        no_lapse_value = com_data$n[com_data$lapse_group == "No lapse in care"],
+        no_lapse_prop = com_data$pct[com_data$lapse_group == "No lapse in care"],
+        no_lapse_sd = NA,
+        total_value = com_data$n[com_data$lapse_group == "Total"],
+        total_prop = com_data$pct[com_data$lapse_group == "Total"],
+        total_sd = NA
+      ))
+    }
+  }
+  
+  # Continuous variables
+  cont_vars <- list(
+    list(name = "Baseline_VA_logMAR", data = table_data$continuous$va),
+    list(name = "DCSI", data = table_data$continuous$dcsi),
+    list(name = "CCI", data = table_data$continuous$cci)
+  )
+  
+  for (cv in cont_vars) {
+    if (!is.null(cv$data)) {
+      lapse_stats <- parse_mean_sd(cv$data$stat[cv$data$lapse_group == "Lapse in care"])
+      no_lapse_stats <- parse_mean_sd(cv$data$stat[cv$data$lapse_group == "No lapse in care"])
+      total_stats <- parse_mean_sd(cv$data$stat[cv$data$lapse_group == "Total"])
+      
+      export_df <- rbind(export_df, data.frame(
+        variable = cv$name,
+        lapse_value = lapse_stats$mean,
+        lapse_prop = NA,
+        lapse_sd = lapse_stats$sd,
+        no_lapse_value = no_lapse_stats$mean,
+        no_lapse_prop = NA,
+        no_lapse_sd = no_lapse_stats$sd,
+        total_value = total_stats$mean,
+        total_prop = NA,
+        total_sd = total_stats$sd
+      ))
+    }
   }
   
   # Save to CSV
