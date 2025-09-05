@@ -114,7 +114,7 @@ ps_strategy_base <- function(data, formula, method_name, params, imputation_id,
         result$matched_data <- match.data(ps_result, subclass = "subclass")
         result$weights <- result$matched_data$weights
       } else {
-        result$matched_data <- get_matches(ps_result)
+        result$matched_data <- get_matches(ps_result, data = data)
         result$weights <- rep(1, nrow(result$matched_data))
       }
       

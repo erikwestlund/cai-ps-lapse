@@ -103,9 +103,8 @@ for (method in available_methods) {
   cat(" -", method, "\n")
 }
 
-# Define which methods to actually run
-# Comment out any methods you want to skip
-methods_to_run <- c(
+# Define all available methods
+all_methods <- c(
   "nearest_glm",
   "nearest_gam", 
   "nearest_gbm",
@@ -119,7 +118,24 @@ methods_to_run <- c(
   "twang_gbm"  # Will load from reanalysis-4 if available
 )
 
+# Define completed methods (add to this list as methods complete successfully)
+completed_methods <- c(
+  "nearest_glm"  # Uncomment if completed
+)
+
+# Methods to run = all methods minus completed ones
+methods_to_run <- setdiff(all_methods, completed_methods)
+
+# Optionally, you can also explicitly exclude problematic methods
+methods_to_exclude <- c(
+  # Add any methods that consistently fail or you want to skip
+)
+methods_to_run <- setdiff(methods_to_run, methods_to_exclude)
+
 log_message(paste0("Will run ", length(methods_to_run), " methods"))
+if (length(completed_methods) > 0) {
+  log_message(paste0("Skipping completed: ", paste(completed_methods, collapse = ", ")))
+}
 ```
 
 ## Run Complete Analysis
