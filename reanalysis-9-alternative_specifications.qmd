@@ -120,7 +120,17 @@ all_methods <- c(
 
 # Define completed methods (add to this list as methods complete successfully)
 completed_methods <- c(
-  "nearest_glm"  # Uncomment if completed
+  "nearest_glm",  # Uncomment if completed
+  "nearest_gam"
+  # "nearest_gbm",
+  # "nearest_lasso",
+  # "nearest_rpart",
+  # "nearest_mahalanobis",
+  # "subclass_glm",
+  # "cbps",
+  # "entropy",
+  # "bart",
+  # "twang_gbm"
 )
 
 # Methods to run = all methods minus completed ones

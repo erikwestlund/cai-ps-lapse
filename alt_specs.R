@@ -205,17 +205,36 @@ ps_nearest_gam <- function(data, formula, params) {
 
 # MatchIt nearest neighbor with GBM distance
 ps_nearest_gbm <- function(data, formula, params) {
+  # Ensure response is numeric {0,1} for Bernoulli GBM
+  data2 <- data.frame(data)
+  outcome_var <- all.vars(formula)[1]
+  if (outcome_var %in% names(data2)) {
+    y <- data2[[outcome_var]]
+    if (is.factor(y)) {
+      y <- as.numeric(as.character(y))
+    } else if (is.character(y)) {
+      y <- as.numeric(y)
+    } else if (is.logical(y)) {
+      y <- as.numeric(y)
+    }
+    data2[[outcome_var]] <- y
+    if (any(!is.na(data2[[outcome_var]]) & !data2[[outcome_var]] %in% c(0, 1))) {
+      stop(paste0("Response variable ", outcome_var, " must be numeric 0/1 for GBM. Found values: ",
+                  paste(unique(data2[[outcome_var]]), collapse = ", ")))
+    }
+  }
+
   matchit(formula = formula,
-         data = data,
-         method = "nearest",
-         distance = "gbm",
-         estimand = "ATT",
-         replace = TRUE,
-         distance.options = list(
-           n.trees = params$n_trees,
-           interaction.depth = 3,
-           shrinkage = 0.01
-         ))
+          data = data2,
+          method = "nearest",
+          distance = "gbm",
+          estimand = "ATT",
+          replace = TRUE,
+          distance.options = list(
+            n.trees = params$n_trees,
+            interaction.depth = 3,
+            shrinkage = 0.01
+          ))
 }
 
 # MatchIt nearest neighbor with LASSO distance
