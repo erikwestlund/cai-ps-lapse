@@ -569,7 +569,7 @@ fit_outcome_model <- function(ps_result, data, formula, method_name = NULL) {
   }
   
   result <- list(
-    method = method_name %||% ps_result$method,
+    method = ifelse(!is.null(method_name), method_name, ps_result$method),
     imputation_id = ps_result$imputation_id,
     success = FALSE
   )
