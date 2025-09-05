@@ -1,0 +1,479 @@
+---
+title: "Reanalysis Step 8: Patient-Level Table 1"
+subtitle: "Comparing Original, Complete Cases, and Imputed Data at Patient Level (Best Eye)"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+source("settings.R")
+setup_analysis(seed = 2025)
+
+library(tableone)
+library(knitr)
+library(dplyr)
+library(tidyr)
+
+# Initialize logging
+log_file <- init_log("patient_level_table1")
+```
+
+## Load Data from Four Sources
+
+```{r load-data}
+# 1. Load original data (from analysis.Rmd)
+data_path <- file.path(s_root, "Gina's Project/df_Final_240909.csv")
+original_data <- load_and_prepare_data(data_path)
+original_complete <- apply_exclusions(original_data)  # Remove missing CCI/DCSI
+
+# Create dr_severity for original data from No_DR/NPDR/PDR
+original_complete <- original_complete |>
+  mutate(
+    dr_severity = case_when(
+      No_DR == TRUE ~ "No_DR",
+      NPDR %in% c("Mild", "Moderate", "Severe") ~ "NPDR",
+      PDR == "Present" ~ "PDR",
+      TRUE ~ NA_character_
+    ),
+    dr_severity = factor(dr_severity, levels = c("No_DR", "NPDR", "PDR"))
+  )
+
+# Filter to patient level - best eye (lowest outcome_VA_logMAR)
+original_complete <- original_complete |>
+  arrange(outcome_VA_logMAR) |>
+  group_by(e_mrn_deidentified) |>
+  slice(1) |>
+  ungroup()
+
+log_message(paste0("Original data after exclusions (patient-level): ", nrow(original_complete), " patients"))
+
+# 2. Load full data for imputation (contains both submitted and excluded)
+imputation_data_file <- file.path(reanalysis_data_dir, "df_for_imputation.rds")
+if (!file.exists(imputation_data_file)) {
+  stop("Imputation data not found. Run reanalysis-1-data_preparation.qmd first.")
+}
+imputation_data <- readRDS(imputation_data_file)
+
+# Filter to patient level - best eye (lowest outcome_VA_logMAR)
+imputation_data <- imputation_data |>
+  arrange(outcome_VA_logMAR) |>
+  group_by(e_mrn_deidentified) |>
+  slice(1) |>
+  ungroup()
+
+# Split into submitted and excluded based on cohort_id
+submitted_data <- imputation_data[imputation_data$cohort_id == "submitted", ]
+excluded_data <- imputation_data[imputation_data$cohort_id == "excluded", ]
+
+log_message(paste0("Submitted (included) data: ", nrow(submitted_data), " patients"))
+log_message(paste0("Excluded data: ", nrow(excluded_data), " patients"))
+
+# 3. Load imputed datasets (reanalysis-2)
+imputed_file <- file.path(reanalysis_data_dir, "imputed_datasets.rds")
+if (!file.exists(imputed_file)) {
+  stop("Imputed datasets not found. Run reanalysis-2-multiple_imputation.qmd first.")
+}
+imputed_datasets <- readRDS(imputed_file)
+n_imputations <- length(imputed_datasets)
+
+# Filter each imputed dataset to patient level - best eye
+for (i in 1:n_imputations) {
+  imputed_datasets[[i]] <- imputed_datasets[[i]] |>
+    arrange(outcome_VA_logMAR) |>
+    group_by(e_mrn_deidentified) |>
+    slice(1) |>
+    ungroup()
+}
+
+log_message(paste0("Loaded ", n_imputations, " imputed datasets (patient-level)"))
+```
+
+## Create Comparison Table
+
+```{r prepare-variables}
+# Define variables for Table 1
+# Note: Original data doesn't have dr_severity
+vars_continuous <- c("age", "baseline_VA_logMAR", "CCI", "DCSI")
+
+# Variables in original data (with proper capitalization)
+vars_categorical_original <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
+                               "dr_severity", "ever_lapse_binary", 
+                               "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
+                               "catsurg_before_hitplus_cat",
+                               "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
+                               "outcome_va_vi_binary")
+
+# Additional variables (none now that dr_severity is in both)
+vars_categorical_new_only <- c()
+
+# All categorical variables for new data
+vars_categorical_new <- c("gender_cat", "race_ethnic_cat", "insurance_cat", "age_cat",
+                          "dr_severity", "ever_lapse_binary", 
+                          "glaucoma_bef_hitplus_cat", "otherretina_bef_hitplus_cat",
+                          "catsurg_before_hitplus_cat",
+                          "anti_VEGF", "PRP_flag", "focal_laser_flag", "other_inject",
+                          "outcome_va_vi_binary")
+
+# Function to compute summary statistics for continuous variables
+summarize_continuous <- function(data, var) {
+  values <- data[[var]]
+  values <- values[!is.na(values)]
+  if (length(values) == 0) {
+    return(data.frame(
+      variable = var,
+      mean = NA,
+      sd = NA,
+      median = NA,
+      q25 = NA,
+      q75 = NA,
+      n_missing = nrow(data),
+      pct_missing = 100
+    ))
+  }
+  
+  data.frame(
+    variable = var,
+    mean = mean(values, na.rm = TRUE),
+    sd = sd(values, na.rm = TRUE),
+    median = median(values, na.rm = TRUE),
+    q25 = quantile(values, 0.25, na.rm = TRUE),
+    q75 = quantile(values, 0.75, na.rm = TRUE),
+    n_missing = sum(is.na(data[[var]])),
+    pct_missing = 100 * sum(is.na(data[[var]])) / nrow(data)
+  )
+}
+
+# Function to compute summary statistics for categorical variables
+summarize_categorical <- function(data, var) {
+  # Check if variable exists in data
+  if (!(var %in% names(data))) {
+    return(data.frame(
+      variable = var,
+      n = NA,
+      pct = NA,
+      n_missing = NA,
+      pct_missing = NA
+    ))
+  }
+  
+  # Get table including NA
+  tbl <- table(data[[var]], useNA = "no")
+  
+  # Handle case where all values are NA or empty
+  if (length(tbl) == 0) {
+    return(data.frame(
+      variable = var,
+      n = 0,
+      pct = NA,
+      n_missing = nrow(data),
+      pct_missing = 100
+    ))
+  }
+  
+  # Calculate proportions
+  props <- prop.table(tbl)
+  
+  # Create data frame with results
+  levels_df <- data.frame(
+    variable = paste0(var, "_", names(tbl)),
+    n = as.vector(tbl),
+    pct = 100 * as.vector(props),
+    stringsAsFactors = FALSE
+  )
+  
+  # Add missing info
+  n_missing <- sum(is.na(data[[var]]))
+  levels_df$n_missing <- n_missing
+  levels_df$pct_missing <- 100 * n_missing / nrow(data)
+  
+  levels_df
+}
+
+# Process each dataset
+process_dataset <- function(data, name, categorical_vars = NULL) {
+  # Use provided categorical vars or default to new vars
+  if (is.null(categorical_vars)) {
+    categorical_vars <- vars_categorical_new
+  }
+  
+  # Continuous variables
+  cont_summaries <- do.call(rbind, lapply(vars_continuous, function(v) {
+    if (v %in% names(data)) {
+      summarize_continuous(data, v)
+    } else {
+      data.frame(variable = v, mean = NA, sd = NA, median = NA, 
+                 q25 = NA, q75 = NA, n_missing = NA, pct_missing = NA)
+    }
+  }))
+  
+  # Categorical variables - filter out variables that don't exist
+  cat_summaries_list <- lapply(categorical_vars, function(v) {
+    if (v %in% names(data)) {
+      summarize_categorical(data, v)
+    } else {
+      NULL
+    }
+  })
+  
+  # Remove NULL entries and combine
+  cat_summaries_list <- cat_summaries_list[!sapply(cat_summaries_list, is.null)]
+  
+  if (length(cat_summaries_list) > 0) {
+    cat_summaries <- do.call(rbind, cat_summaries_list)
+  } else {
+    cat_summaries <- data.frame(variable = character(), n = numeric(), 
+                                pct = numeric(), n_missing = numeric(), 
+                                pct_missing = numeric())
+  }
+  
+  list(continuous = cont_summaries, categorical = cat_summaries, dataset = name)
+}
+```
+
+```{r create-table}
+# Process original data (with original variable names)
+original_summary <- process_dataset(original_complete, "Original", vars_categorical_original)
+original_summary$categorical$variable_std <- original_summary$categorical$variable
+
+# Process submitted (included) data
+submitted_summary <- process_dataset(submitted_data, "Submitted", vars_categorical_new)
+submitted_summary$categorical$variable_std <- submitted_summary$categorical$variable
+
+# Process excluded data
+excluded_summary <- process_dataset(excluded_data, "Excluded", vars_categorical_new)
+excluded_summary$categorical$variable_std <- excluded_summary$categorical$variable
+
+# Process imputed data (average across imputations)
+# For imputed data, we need to average across all imputations
+imputed_summaries <- lapply(1:n_imputations, function(i) {
+  process_dataset(imputed_datasets[[i]], paste0("Imputation_", i))
+})
+
+# Average the imputed results
+average_imputed_continuous <- do.call(rbind, lapply(vars_continuous, function(v) {
+  # Extract values for this variable across all imputations
+  imp_values <- lapply(imputed_summaries, function(s) {
+    s$continuous[s$continuous$variable == v, ]
+  })
+  
+  # Average the statistics
+  if (nrow(imp_values[[1]]) > 0) {
+    data.frame(
+      variable = v,
+      mean = mean(sapply(imp_values, function(x) x$mean), na.rm = TRUE),
+      sd = mean(sapply(imp_values, function(x) x$sd), na.rm = TRUE),
+      median = mean(sapply(imp_values, function(x) x$median), na.rm = TRUE),
+      q25 = mean(sapply(imp_values, function(x) x$q25), na.rm = TRUE),
+      q75 = mean(sapply(imp_values, function(x) x$q75), na.rm = TRUE),
+      n_missing = 0,  # No missing in imputed data
+      pct_missing = 0
+    )
+  } else {
+    data.frame(variable = v, mean = NA, sd = NA, median = NA, 
+               q25 = NA, q75 = NA, n_missing = NA, pct_missing = NA)
+  }
+}))
+
+# For categorical variables, average the percentages
+all_cat_vars <- unique(unlist(lapply(imputed_summaries, function(s) s$categorical$variable)))
+average_imputed_categorical <- do.call(rbind, lapply(all_cat_vars, function(v) {
+  # Extract values for this variable level across all imputations
+  imp_values <- lapply(imputed_summaries, function(s) {
+    s$categorical[s$categorical$variable == v, ]
+  })
+  
+  # Remove empty results
+  imp_values <- imp_values[sapply(imp_values, nrow) > 0]
+  
+  if (length(imp_values) > 0) {
+    data.frame(
+      variable = v,
+      n = mean(sapply(imp_values, function(x) x$n), na.rm = TRUE),
+      pct = mean(sapply(imp_values, function(x) x$pct), na.rm = TRUE),
+      n_missing = 0,
+      pct_missing = 0
+    )
+  } else {
+    data.frame(variable = v, n = NA, pct = NA, n_missing = NA, pct_missing = NA)
+  }
+}))
+
+# Add variable_std column to average_imputed_categorical for consistency
+average_imputed_categorical$variable_std <- average_imputed_categorical$variable
+
+imputed_summary <- list(
+  continuous = average_imputed_continuous,
+  categorical = average_imputed_categorical,
+  dataset = "Imputed (Average)"
+)
+```
+
+```{r display-table}
+# Create formatted table for continuous variables
+format_continuous_table <- function(original, submitted, excluded, imputed) {
+  vars <- unique(c(original$variable, submitted$variable, excluded$variable, imputed$variable))
+  
+  table_df <- data.frame(
+    Variable = vars,
+    Original = NA,
+    Submitted = NA,
+    Excluded = NA,
+    Imputed = NA,
+    stringsAsFactors = FALSE
+  )
+  
+  for (i in 1:length(vars)) {
+    v <- vars[i]
+    
+    # Original
+    orig_row <- original[original$variable == v, ]
+    if (nrow(orig_row) > 0 && !is.na(orig_row$mean)) {
+      table_df$Original[i] <- sprintf("%.2f (%.2f)", orig_row$mean, orig_row$sd)
+    }
+    
+    # Submitted
+    sub_row <- submitted[submitted$variable == v, ]
+    if (nrow(sub_row) > 0 && !is.na(sub_row$mean)) {
+      table_df$Submitted[i] <- sprintf("%.2f (%.2f)", sub_row$mean, sub_row$sd)
+    }
+    
+    # Excluded
+    exc_row <- excluded[excluded$variable == v, ]
+    if (nrow(exc_row) > 0 && !is.na(exc_row$mean)) {
+      table_df$Excluded[i] <- sprintf("%.2f (%.2f)", exc_row$mean, exc_row$sd)
+    }
+    
+    # Imputed
+    imp_row <- imputed[imputed$variable == v, ]
+    if (nrow(imp_row) > 0 && !is.na(imp_row$mean)) {
+      table_df$Imputed[i] <- sprintf("%.2f (%.2f)", imp_row$mean, imp_row$sd)
+    }
+  }
+  
+  table_df
+}
+
+# Create formatted table for categorical variables
+format_categorical_table <- function(original, submitted, excluded, imputed) {
+  # Get unique base variable names (without the level suffixes)
+  get_base_var <- function(x) sub("_[^_]+$", "", x)
+  
+  # Collect all variables
+  all_vars <- unique(c(original$variable, submitted$variable, excluded$variable, imputed$variable))
+  
+  # For glaucoma and otherretina, we need to handle different naming conventions
+  # Original has _FALSE/_TRUE, new data has _0/_1
+  standardize_var <- function(v) {
+    if (grepl("glaucoma_bef_hitplus_cat_FALSE", v)) return("glaucoma_bef_hitplus_cat_0")
+    if (grepl("glaucoma_bef_hitplus_cat_TRUE", v)) return("glaucoma_bef_hitplus_cat_1")
+    if (grepl("otherretina_bef_hitplus_cat_FALSE", v)) return("otherretina_bef_hitplus_cat_0")
+    if (grepl("otherretina_bef_hitplus_cat_TRUE", v)) return("otherretina_bef_hitplus_cat_1")
+    return(v)
+  }
+  
+  # Standardize variable names
+  original$variable_std <- sapply(original$variable, standardize_var)
+  submitted$variable_std <- sapply(submitted$variable, standardize_var)
+  excluded$variable_std <- sapply(excluded$variable, standardize_var)
+  imputed$variable_std <- sapply(imputed$variable, standardize_var)
+  
+  # Get unique standardized variables
+  vars <- unique(c(original$variable_std, submitted$variable_std, 
+                   excluded$variable_std, imputed$variable_std))
+  
+  # Remove duplicates and unwanted rows
+  vars <- vars[!grepl("^outcome_va_vi_binary$|^ever_lapse_binary$", vars)]
+  
+  table_df <- data.frame(
+    Variable = vars,
+    Original = NA,
+    Submitted = NA,
+    Excluded = NA,
+    Imputed = NA,
+    stringsAsFactors = FALSE
+  )
+  
+  for (i in 1:length(vars)) {
+    v <- vars[i]
+    
+    # Original
+    orig_row <- original[original$variable_std == v, ]
+    if (nrow(orig_row) > 0 && !is.na(orig_row$n)) {
+      table_df$Original[i] <- sprintf("%.0f (%.1f%%)", orig_row$n, orig_row$pct)
+    }
+    
+    # Submitted
+    sub_row <- submitted[submitted$variable_std == v, ]
+    if (nrow(sub_row) > 0 && !is.na(sub_row$n)) {
+      table_df$Submitted[i] <- sprintf("%.0f (%.1f%%)", sub_row$n, sub_row$pct)
+    }
+    
+    # Excluded
+    exc_row <- excluded[excluded$variable_std == v, ]
+    if (nrow(exc_row) > 0 && !is.na(exc_row$n)) {
+      table_df$Excluded[i] <- sprintf("%.0f (%.1f%%)", exc_row$n, exc_row$pct)
+    }
+    
+    # Imputed
+    imp_row <- imputed[imputed$variable_std == v, ]
+    if (nrow(imp_row) > 0 && !is.na(imp_row$n)) {
+      table_df$Imputed[i] <- sprintf("%.1f (%.1f%%)", imp_row$n, imp_row$pct)
+    }
+  }
+  
+  # Clean up variable names for display
+  table_df$Variable <- gsub("_0$", "_No", table_df$Variable)
+  table_df$Variable <- gsub("_1$", "_Yes", table_df$Variable)
+  
+  table_df
+}
+
+# Create the tables
+continuous_table <- format_continuous_table(
+  original_summary$continuous,
+  submitted_summary$continuous,
+  excluded_summary$continuous,
+  imputed_summary$continuous
+)
+
+categorical_table <- format_categorical_table(
+  original_summary$categorical,
+  submitted_summary$categorical,
+  excluded_summary$categorical,
+  imputed_summary$categorical
+)
+
+# Display continuous variables
+kable(continuous_table, 
+      caption = "Continuous Variables: Mean (SD)",
+      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)"))
+
+# Display categorical variables
+kable(categorical_table,
+      caption = "Categorical Variables: N (%)",
+      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)"))
+
+# Sample sizes
+sample_sizes <- data.frame(
+  Dataset = c("Original (after exclusions, patient-level)", "Submitted (included, patient-level)", "Excluded (patient-level)", "Imputed (each, patient-level)"),
+  N = c(nrow(original_complete), nrow(submitted_data), nrow(excluded_data), nrow(imputed_datasets[[1]]))
+)
+
+kable(sample_sizes, caption = "Sample Sizes")
+```
+
+**Note:** 
+- All analyses are at the patient level, selecting the best eye (lowest outcome_VA_logMAR) for each patient.
+- The "Excluded" column shows patients who were excluded from the original submitted analysis because they lacked 2-year outcome data. These patients have substantial missing data, which is why many cells show 0 (NaN%) - indicating all values are missing for those variables. 
+- The imputation process fills in these missing values, allowing us to include these patients in the analysis.
+
+```{r finalize}
+# Finalize log
+finalize_log()
+```
