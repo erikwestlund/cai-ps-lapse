@@ -21,14 +21,14 @@ get_analysis_config <- function(mode = "test") {
     list(
       n_imputations = 2,
       n_trees_gbm = 1000,
-      n_trees_twang = 1000,
+      n_trees_twang = 10000,  # Match analysis.Rmd line 157
       cache_enabled = TRUE
     )
   } else if (mode == "final") {
     list(
       n_imputations = 50,
       n_trees_gbm = 3000,
-      n_trees_twang = 3000,
+      n_trees_twang = 10000,  # Match analysis.Rmd line 157
       cache_enabled = TRUE
     )
   } else {
@@ -124,9 +124,9 @@ ps_strategy_base <- function(data, formula, method_name, params, imputation_id,
       result$success <- TRUE
       
     } else if (inherits(ps_result, "ps")) {
-      # twang result
+      # twang result - use get.weights() like in analysis.Rmd line 346
       result$ps_object <- ps_result
-      result$weights <- ps_result$w[, "es.mean.ATT"]
+      result$weights <- get.weights(ps_result, stop.method = "es.mean")
       result$success <- TRUE
       
     } else {
@@ -170,7 +170,7 @@ extract_diagnostics <- function(ps_result, original_data) {
     } else if (inherits(ps_result$ps_object, "ps")) {
       # twang diagnostics
       diag$balance_summary <- bal.table(ps_result$ps_object)
-      diag$n_trees_used <- ps_result$ps_object$desc$ps$n.trees
+      diag$n_trees_used <- ps_result$ps_object$desc$es.mean$n.trees  # es.mean specific
     }
   }, error = function(e) {
     diag$diagnostic_error <- e$message
@@ -283,7 +283,7 @@ ps_bart <- function(data, formula, params) {
           estimand = "ATT")
 }
 
-# Twang GBM (for completeness, though usually loaded from reanalysis-4)
+# Twang GBM (matching analysis.Rmd lines 156-159)
 ps_twang_gbm <- function(data, formula, params) {
   ps(formula = formula,
      data = data.frame(data),
@@ -291,7 +291,7 @@ ps_twang_gbm <- function(data, formula, params) {
      interaction.depth = 3,
      shrinkage = 0.01,
      estimand = "ATT",
-     stop.method = "es.mean")
+     stop.method = c("es.mean", "ks.max"))
 }
 
 # ============================================================================
@@ -515,7 +515,11 @@ load_twang_from_reanalysis4 <- function(imputed_datasets, config) {
   results <- list()
   
   for (i in 1:n_imp) {
-    twang_file <- file.path(twang_cache_dir, paste0("twang_imp_", i, ".rds"))
+    # Check both possible file naming conventions
+    twang_file1 <- file.path(twang_cache_dir, paste0("twang_imp_", i, ".rds"))
+    twang_file2 <- file.path(twang_cache_dir, paste0("ps_imp_", i, ".rds"))  # Alternative naming
+    
+    twang_file <- if (file.exists(twang_file1)) twang_file1 else twang_file2
     
     if (file.exists(twang_file)) {
       cached <- readRDS(twang_file)
