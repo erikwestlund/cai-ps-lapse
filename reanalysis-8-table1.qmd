@@ -629,6 +629,16 @@ create_stratified_table <- function(data) {
       .groups = "drop"
     )
   
+  # Add overall total for treatments
+  prp_overall <- data |>
+    summarise(
+      n = sum(PRP_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  prp_total <- bind_rows(prp_total, prp_overall)
+  
   focal_total <- data |>
     group_by(lapse_group) |>
     summarise(
@@ -637,6 +647,15 @@ create_stratified_table <- function(data) {
       pct = 100 * n / total,
       .groups = "drop"
     )
+  
+  focal_overall <- data |>
+    summarise(
+      n = sum(focal_laser_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  focal_total <- bind_rows(focal_total, focal_overall)
   
   vegf_total <- data |>
     group_by(lapse_group) |>
@@ -647,6 +666,15 @@ create_stratified_table <- function(data) {
       .groups = "drop"
     )
   
+  vegf_overall <- data |>
+    summarise(
+      n = sum(anti_VEGF_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  vegf_total <- bind_rows(vegf_total, vegf_overall)
+  
   other_inj_total <- data |>
     group_by(lapse_group) |>
     summarise(
@@ -655,6 +683,15 @@ create_stratified_table <- function(data) {
       pct = 100 * n / total,
       .groups = "drop"
     )
+  
+  other_overall <- data |>
+    summarise(
+      n = sum(other_inject_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  other_inj_total <- bind_rows(other_inj_total, other_overall)
   
   # Comorbidities
   glaucoma_total <- data |>
@@ -666,6 +703,15 @@ create_stratified_table <- function(data) {
       .groups = "drop"
     )
   
+  glaucoma_overall <- data |>
+    summarise(
+      n = sum(glaucoma_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  glaucoma_total <- bind_rows(glaucoma_total, glaucoma_overall)
+  
   cataract_total <- data |>
     group_by(lapse_group) |>
     summarise(
@@ -675,6 +721,15 @@ create_stratified_table <- function(data) {
       .groups = "drop"
     )
   
+  cataract_overall <- data |>
+    summarise(
+      n = sum(catsurg_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  cataract_total <- bind_rows(cataract_total, cataract_overall)
+  
   retina_total <- data |>
     group_by(lapse_group) |>
     summarise(
@@ -683,6 +738,15 @@ create_stratified_table <- function(data) {
       pct = 100 * n / total,
       .groups = "drop"
     )
+  
+  retina_overall <- data |>
+    summarise(
+      n = sum(otherretina_num == 1, na.rm = TRUE),
+      total = n(),
+      pct = 100 * n / total,
+      lapse_group = "Total"
+    )
+  retina_total <- bind_rows(retina_total, retina_overall)
   
   # Continuous variables
   va_stats <- calculate_stratified_stats(data, "baseline_VA_logMAR", is_continuous = TRUE)
@@ -717,26 +781,26 @@ format_stratified_table <- function(table_data, title) {
   
   # Display totals
   cat("**Total Patients**\n")
-  print(kable(table_data$totals))
+  knitr::kable(table_data$totals)
   
   cat("\n**Demographic Characteristics**\n")
   
   cat("\n*Sex*\n")
-  print(kable(table_data$sex))
+  knitr::kable(table_data$sex)
   
   cat("\n*Age (years)*\n")
-  print(kable(table_data$age))
+  knitr::kable(table_data$age)
   
   cat("\n*Race/Ethnicity*\n")
-  print(kable(table_data$race))
+  knitr::kable(table_data$race)
   
   cat("\n*Insurance*\n")
-  print(kable(table_data$insurance))
+  knitr::kable(table_data$insurance)
   
   cat("\n**Ocular Characteristics**\n")
   
   cat("\n*Severity of DR*\n")
-  print(kable(table_data$dr))
+  knitr::kable(table_data$dr)
   
   cat("\n*DR Treatments (% with treatment)*\n")
   treatments_df <- data.frame(
@@ -752,9 +816,15 @@ format_stratified_table <- function(table_data, title) {
       sprintf("%d (%.0f%%)", table_data$treatments$focal$n[2], table_data$treatments$focal$pct[2]),
       sprintf("%d (%.0f%%)", table_data$treatments$vegf$n[2], table_data$treatments$vegf$pct[2]),
       sprintf("%d (%.0f%%)", table_data$treatments$other$n[2], table_data$treatments$other$pct[2])
+    ),
+    Total = c(
+      sprintf("%d (%.0f%%)", table_data$treatments$prp$n[3], table_data$treatments$prp$pct[3]),
+      sprintf("%d (%.0f%%)", table_data$treatments$focal$n[3], table_data$treatments$focal$pct[3]),
+      sprintf("%d (%.0f%%)", table_data$treatments$vegf$n[3], table_data$treatments$vegf$pct[3]),
+      sprintf("%d (%.0f%%)", table_data$treatments$other$n[3], table_data$treatments$other$pct[3])
     )
   )
-  print(kable(treatments_df, col.names = c("Treatment", "Lapse in care", "No lapse in care")))
+  knitr::kable(treatments_df, col.names = c("Treatment", "Lapse in care", "No lapse in care", "Total"))
   
   cat("\n*Ophthalmologic Comorbidities*\n")
   comorb_df <- data.frame(
@@ -768,9 +838,14 @@ format_stratified_table <- function(table_data, title) {
       sprintf("%d (%.0f%%)", table_data$comorbidities$glaucoma$n[2], table_data$comorbidities$glaucoma$pct[2]),
       sprintf("%d (%.0f%%)", table_data$comorbidities$cataract$n[2], table_data$comorbidities$cataract$pct[2]),
       sprintf("%d (%.0f%%)", table_data$comorbidities$retina$n[2], table_data$comorbidities$retina$pct[2])
+    ),
+    Total = c(
+      sprintf("%d (%.0f%%)", table_data$comorbidities$glaucoma$n[3], table_data$comorbidities$glaucoma$pct[3]),
+      sprintf("%d (%.0f%%)", table_data$comorbidities$cataract$n[3], table_data$comorbidities$cataract$pct[3]),
+      sprintf("%d (%.0f%%)", table_data$comorbidities$retina$n[3], table_data$comorbidities$retina$pct[3])
     )
   )
-  print(kable(comorb_df, col.names = c("Condition", "Lapse in care", "No lapse in care")))
+  knitr::kable(comorb_df, col.names = c("Condition", "Lapse in care", "No lapse in care", "Total"))
   
   cat("\n**Clinical Characteristics (Mean ± SD)**\n")
   clinical_df <- data.frame(
@@ -787,10 +862,108 @@ format_stratified_table <- function(table_data, title) {
              table_data$continuous$dcsi$stat[3],
              table_data$continuous$cci$stat[3])
   )
-  print(kable(clinical_df, col.names = c("Variable", "Lapse in care", "No lapse in care", "Total")))
+  knitr::kable(clinical_df, col.names = c("Variable", "Lapse in care", "No lapse in care", "Total"))
 }
 
 format_stratified_table(complete_table_data, "Table 1: Baseline Characteristics by Lapse Status (Complete Cases)")
+
+# Export complete cases table to CSV
+export_stratified_table <- function(table_data, filename) {
+  # Initialize empty dataframe for export
+  export_df <- data.frame(
+    variable = character(),
+    lapse_value = numeric(),
+    lapse_prop = numeric(),
+    lapse_sd = numeric(),
+    no_lapse_value = numeric(),
+    no_lapse_prop = numeric(),
+    no_lapse_sd = numeric(),
+    total_value = numeric(),
+    total_prop = numeric(),
+    total_sd = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Add total row
+  n_lapse <- as.numeric(gsub(" .*", "", table_data$totals$Lapse))
+  n_no_lapse <- as.numeric(gsub(" .*", "", table_data$totals$NoLapse))
+  n_total <- as.numeric(gsub(" .*", "", table_data$totals$Total))
+  
+  export_df <- rbind(export_df, data.frame(
+    variable = "Total",
+    lapse_value = n_lapse,
+    lapse_prop = as.numeric(gsub(".*\\((.*)%.*", "\\1", table_data$totals$Lapse)),
+    lapse_sd = NA,
+    no_lapse_value = n_no_lapse,
+    no_lapse_prop = as.numeric(gsub(".*\\((.*)%.*", "\\1", table_data$totals$NoLapse)),
+    no_lapse_sd = NA,
+    total_value = n_total,
+    total_prop = 100,
+    total_sd = NA
+  ))
+  
+  # Process categorical variables from table_data
+  # This is a simplified version - you'll need to expand this based on your exact structure
+  
+  # Add treatments
+  for (i in 1:3) {  # Lapse, No Lapse, Total
+    if (i <= nrow(table_data$treatments$prp)) {
+      # Extract values for each treatment
+      # This needs more sophisticated parsing based on actual data structure
+    }
+  }
+  
+  # Add continuous variables
+  for (var_name in c("baseline_VA_logMAR", "DCSI", "CCI")) {
+    var_label <- switch(var_name,
+      "baseline_VA_logMAR" = "Baseline VA (logMAR)",
+      "DCSI" = "Diabetes Complication Severity Index",
+      "CCI" = "Charlson Comorbidity Index"
+    )
+    
+    # Parse mean ± SD format
+    if (var_name == "baseline_VA_logMAR") {
+      stats <- table_data$continuous$va$stat
+    } else if (var_name == "DCSI") {
+      stats <- table_data$continuous$dcsi$stat
+    } else {
+      stats <- table_data$continuous$cci$stat
+    }
+    
+    # Parse "mean ± sd" format
+    parse_mean_sd <- function(x) {
+      parts <- strsplit(x, " ± ")[[1]]
+      return(list(mean = as.numeric(parts[1]), sd = as.numeric(parts[2])))
+    }
+    
+    lapse_stats <- parse_mean_sd(stats[1])
+    no_lapse_stats <- parse_mean_sd(stats[2])
+    total_stats <- parse_mean_sd(stats[3])
+    
+    export_df <- rbind(export_df, data.frame(
+      variable = var_label,
+      lapse_value = lapse_stats$mean,
+      lapse_prop = NA,
+      lapse_sd = lapse_stats$sd,
+      no_lapse_value = no_lapse_stats$mean,
+      no_lapse_prop = NA,
+      no_lapse_sd = no_lapse_stats$sd,
+      total_value = total_stats$mean,
+      total_prop = NA,
+      total_sd = total_stats$sd
+    ))
+  }
+  
+  # Save to CSV
+  write.csv(export_df, filename, row.names = FALSE)
+  cat(paste0("\nTable exported to: ", filename, "\n"))
+  
+  return(export_df)
+}
+
+# Export the complete cases table
+complete_export <- export_stratified_table(complete_table_data, 
+                                           file.path(reanalysis_data_dir, "table1_complete_cases.csv"))
 ```
 
 ## Stratified Table 2: Imputed Data (Averaged)
@@ -872,6 +1045,10 @@ imputed_table_data <- create_imputed_stratified_table(imputed_datasets)
 
 # Display the imputed table
 format_stratified_table(imputed_table_data, "Table 2: Baseline Characteristics by Lapse Status (Imputed Data - Averaged)")
+
+# Export the imputed table
+imputed_export <- export_stratified_table(imputed_table_data, 
+                                          file.path(reanalysis_data_dir, "table1_imputed.csv"))
 ```
 
 ```{r finalize}
