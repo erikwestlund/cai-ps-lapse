@@ -1,6 +1,6 @@
 ---
-title: "Reanalysis Step 7: Alternative Propensity Score Specifications"
-subtitle: "Comprehensive comparison of PS methods with multiple imputation"
+title: "Reanalysis Step 9: Alternative Propensity Score Specifications"
+subtitle: "Comprehensive comparison of PS methods with multiple imputation using strategy pattern"
 author: "Erik Westlund"
 date: "`r Sys.Date()`"
 format: 
@@ -17,19 +17,11 @@ format:
 #| include: false
 source("dependencies.R")
 source("functions.R")  # Load formula definitions and helper functions
+source("alt_specs.R")  # Load strategy pattern implementation
 setup_analysis(seed = 2025)
 
-library(MatchIt)
-library(WeightIt)
-library(twang)
-library(cobalt)
-library(mice)
-library(survey)
 library(ggplot2)
-library(gridExtra)
-library(parallel)
-library(doParallel)
-library(forestplot)
+library(knitr)
 
 # Initialize logging
 log_file <- init_log("alternative_ps_methods")
@@ -60,84 +52,85 @@ n_imputations <- length(imputed_datasets)
 
 # Load variable lists
 variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
-ps_model_vars <- variable_lists$ps_model_vars
 
-# Create PS formula
-ps_formula <- as.formula(paste("ever_lapse_binary ~", 
-                               paste(ps_model_vars, collapse = " + ")))
+# ANALYSIS MODE: "test" or "final"
+analysis_mode <- "final"  # Change to "test" for quick testing with 2 imputations
 
-# ANALYSIS MODE
-analysis_mode <- "final"  # Should match imputation mode
-max_imputations_to_process <- ifelse(analysis_mode == "test", 5, n_imputations)
+# Get configuration based on mode
+config <- get_analysis_config(analysis_mode)
 
-# Caching configuration
+# Cache configuration
 use_cache <- TRUE
 cache_dir <- file.path(reanalysis_data_dir, "ps_alternative_methods")
-if (!dir.exists(cache_dir)) {
-  dir.create(cache_dir, recursive = TRUE)
-  log_message(paste0("Created cache directory: ", cache_dir))
-}
-
-# Parallel processing configuration
-max_cores_for_ps <- 2  # Limit cores for memory management
 
 log_message(paste0("Analysis mode: ", analysis_mode))
-log_message(paste0("Processing ", max_imputations_to_process, " of ", n_imputations, " imputations"))
+log_message(paste0("Processing up to ", config$n_imputations, " of ", n_imputations, " available imputations"))
 log_message(paste0("Caching: ", ifelse(use_cache, "ENABLED", "DISABLED")))
+log_message(paste0("Cache directory: ", cache_dir))
 ```
 
-## Define Propensity Score Methods
+## Define Formulas
 
-```{r define-methods}
-# Define all PS methods to compare (excluding twang_gbm which we'll load from reanalysis-4)
-ps_methods <- list(
-  # MatchIt Methods - Nearest Neighbor with replacement
-  list(name = "nearest_glm", package = "matchit", method = "nearest", 
-       distance = "glm", estimand = "ATT", replace = TRUE),
-  
-  list(name = "nearest_gam", package = "matchit", method = "nearest", 
-       distance = "gam", estimand = "ATT", replace = TRUE),
-  
-  list(name = "nearest_gbm", package = "matchit", method = "nearest", 
-       distance = "gbm", estimand = "ATT", replace = TRUE,
-       distance.options = list(n.trees = 1000, interaction.depth = 3)),
-  
-  list(name = "nearest_lasso", package = "matchit", method = "nearest", 
-       distance = "lasso", estimand = "ATT", replace = TRUE),
-  
-  list(name = "nearest_rpart", package = "matchit", method = "nearest", 
-       distance = "rpart", estimand = "ATT", replace = TRUE),
-  
-  list(name = "nearest_mahalanobis", package = "matchit", method = "nearest", 
-       distance = "mahalanobis", estimand = "ATT", replace = TRUE),
-  
-  # MatchIt - Subclassification  
-  list(name = "subclass_glm", package = "matchit", method = "subclass", 
-       distance = "glm", estimand = "ATT", subclass = 5),
-  
-  # WeightIt Methods - IPTW
-  list(name = "cbps", package = "weightit", method = "cbps", 
-       estimand = "ATT", over = FALSE),
-  
-  list(name = "entropy", package = "weightit", method = "ebal", 
-       estimand = "ATT"),
-  
-  list(name = "bart", package = "weightit", method = "bart", 
-       estimand = "ATT")
+```{r define-formulas}
+# Get PS formula using reanalysis version (includes dr_severity)
+ps_formula <- get_matching_formula_reanalysis()
+
+# Get outcome formula
+outcome_formulas <- get_analysis_formulas_reanalysis()
+outcome_formula <- outcome_formulas$full
+
+log_message("Propensity Score Formula:")
+print(ps_formula)
+
+log_message("Outcome Formula:")
+print(outcome_formula)
+```
+
+## Available Methods
+
+```{r show-methods}
+# Get list of available methods
+available_methods <- names(get_ps_methods(config))
+
+cat("\nAvailable PS methods to run:\n")
+for (method in available_methods) {
+  cat(" -", method, "\n")
+}
+
+# Define which methods to actually run
+# Comment out any methods you want to skip
+methods_to_run <- c(
+  "nearest_glm",
+  "nearest_gam", 
+  "nearest_gbm",
+  "nearest_lasso",
+  "nearest_rpart",
+  "nearest_mahalanobis",
+  "subclass_glm",
+  "cbps",
+  "entropy",
+  "bart",
+  "twang_gbm"  # Will load from reanalysis-4 if available
 )
 
-# Note: twang_gbm results will be loaded from reanalysis-4
-
-log_message(paste0("Defined ", length(ps_methods), " PS methods to compare"))
+log_message(paste0("Will run ", length(methods_to_run), " methods"))
 ```
 
-## Propensity Score Estimation Functions
+## Run Complete Analysis
 
-```{r ps-functions}
-# Function to process a single PS method for one imputation
-process_ps_method <- function(imputation_id, data, method_params, ps_formula, cache_dir, use_cache = TRUE) {
-  method_name <- method_params$name
-  cache_file <- file.path(cache_dir, paste0(method_name, "_imp", imputation_id, ".rds"))
+```{r run-analysis}
+# Run the complete analysis using the strategy pattern from alt_specs.R
+# This will run all specified methods, fit outcome models, and pool results
+
+results <- run_alternative_ps_analysis(
+  imputed_datasets = imputed_datasets,
+  ps_formula = ps_formula,
+  outcome_formula = outcome_formula,
+  mode = analysis_mode,
+  cache_dir = cache_dir,
+  use_cache = use_cache,
+  methods_to_run = methods_to_run
+)
   
   # Check cache
   if (use_cache && file.exists(cache_file)) {

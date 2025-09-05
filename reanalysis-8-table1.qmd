@@ -334,25 +334,25 @@ format_continuous_table <- function(original, submitted, excluded, imputed) {
     # Original
     orig_row <- original[original$variable == v, ]
     if (nrow(orig_row) > 0 && !is.na(orig_row$mean)) {
-      table_df$Original[i] <- sprintf("%.2f (%.2f)", orig_row$mean, orig_row$sd)
+      table_df$Original[i] <- sprintf("%.4f (%.4f)", orig_row$mean, orig_row$sd)
     }
     
     # Submitted
     sub_row <- submitted[submitted$variable == v, ]
     if (nrow(sub_row) > 0 && !is.na(sub_row$mean)) {
-      table_df$Submitted[i] <- sprintf("%.2f (%.2f)", sub_row$mean, sub_row$sd)
+      table_df$Submitted[i] <- sprintf("%.4f (%.4f)", sub_row$mean, sub_row$sd)
     }
     
     # Excluded
     exc_row <- excluded[excluded$variable == v, ]
     if (nrow(exc_row) > 0 && !is.na(exc_row$mean)) {
-      table_df$Excluded[i] <- sprintf("%.2f (%.2f)", exc_row$mean, exc_row$sd)
+      table_df$Excluded[i] <- sprintf("%.4f (%.4f)", exc_row$mean, exc_row$sd)
     }
     
     # Imputed
     imp_row <- imputed[imputed$variable == v, ]
     if (nrow(imp_row) > 0 && !is.na(imp_row$mean)) {
-      table_df$Imputed[i] <- sprintf("%.2f (%.2f)", imp_row$mean, imp_row$sd)
+      table_df$Imputed[i] <- sprintf("%.4f (%.4f)", imp_row$mean, imp_row$sd)
     }
   }
   
@@ -405,25 +405,25 @@ format_categorical_table <- function(original, submitted, excluded, imputed) {
     # Original
     orig_row <- original[original$variable_std == v, ]
     if (nrow(orig_row) > 0 && !is.na(orig_row$n)) {
-      table_df$Original[i] <- sprintf("%.0f (%.1f%%)", orig_row$n, orig_row$pct)
+      table_df$Original[i] <- sprintf("%.0f (%.4f%%)", orig_row$n, orig_row$pct)
     }
     
     # Submitted
     sub_row <- submitted[submitted$variable_std == v, ]
     if (nrow(sub_row) > 0 && !is.na(sub_row$n)) {
-      table_df$Submitted[i] <- sprintf("%.0f (%.1f%%)", sub_row$n, sub_row$pct)
+      table_df$Submitted[i] <- sprintf("%.0f (%.4f%%)", sub_row$n, sub_row$pct)
     }
     
     # Excluded
     exc_row <- excluded[excluded$variable_std == v, ]
     if (nrow(exc_row) > 0 && !is.na(exc_row$n)) {
-      table_df$Excluded[i] <- sprintf("%.0f (%.1f%%)", exc_row$n, exc_row$pct)
+      table_df$Excluded[i] <- sprintf("%.0f (%.4f%%)", exc_row$n, exc_row$pct)
     }
     
     # Imputed
     imp_row <- imputed[imputed$variable_std == v, ]
     if (nrow(imp_row) > 0 && !is.na(imp_row$n)) {
-      table_df$Imputed[i] <- sprintf("%.1f (%.1f%%)", imp_row$n, imp_row$pct)
+      table_df$Imputed[i] <- sprintf("%.1f (%.4f%%)", imp_row$n, imp_row$pct)
     }
   }
   
@@ -450,14 +450,14 @@ categorical_table <- format_categorical_table(
 )
 
 # Display continuous variables
-kable(continuous_table, 
+print(kable(continuous_table, 
       caption = "Continuous Variables: Mean (SD)",
-      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)"))
+      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)")))
 
 # Display categorical variables
-kable(categorical_table,
+print(kable(categorical_table,
       caption = "Categorical Variables: N (%)",
-      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)"))
+      col.names = c("Variable", "Original", "Submitted", "Excluded", "Imputed (Average)")))
 
 # Sample sizes
 sample_sizes <- data.frame(
@@ -465,7 +465,7 @@ sample_sizes <- data.frame(
   N = c(nrow(original_complete), nrow(submitted_data), nrow(excluded_data), nrow(imputed_datasets[[1]]))
 )
 
-kable(sample_sizes, caption = "Sample Sizes")
+print(kable(sample_sizes, caption = "Sample Sizes"))
 ```
 
 **Note:** 
@@ -475,7 +475,7 @@ kable(sample_sizes, caption = "Sample Sizes")
 
 ## Stratified Table 1: Complete Cases (Non-imputed)
 
-```{r stratified-complete-cases}
+```{r stratified-complete-cases, results='asis'}
 # Use submitted_data for complete cases analysis
 complete_cases_data <- submitted_data
 
@@ -524,7 +524,7 @@ calculate_stratified_stats <- function(data, var, is_continuous = FALSE) {
         .groups = "drop"
       ) |>
       mutate(
-        stat = sprintf("%.2f ± %.2f", mean, sd)
+        stat = sprintf("%.4f ± %.4f", mean, sd)
       )
     
     # Add total
@@ -535,7 +535,7 @@ calculate_stratified_stats <- function(data, var, is_continuous = FALSE) {
       ) |>
       mutate(
         lapse_group = "Total",
-        stat = sprintf("%.2f ± %.2f", mean, sd)
+        stat = sprintf("%.4f ± %.4f", mean, sd)
       )
     
     return(bind_rows(stats[, c("lapse_group", "stat")], total_stat[, c("lapse_group", "stat")]))
@@ -549,7 +549,7 @@ calculate_stratified_stats <- function(data, var, is_continuous = FALSE) {
       mutate(
         total_lapse = sum(n),
         pct = 100 * n / total_lapse,
-        stat_lapse = sprintf("%d (%.0f%%)", n, pct)
+        stat_lapse = sprintf("%d (%.4f%%)", n, pct)
       ) |>
       rename(level = !!sym(var))
     
@@ -559,7 +559,7 @@ calculate_stratified_stats <- function(data, var, is_continuous = FALSE) {
       mutate(
         total_no_lapse = sum(n),
         pct = 100 * n / total_no_lapse,
-        stat_no_lapse = sprintf("%d (%.0f%%)", n, pct)
+        stat_no_lapse = sprintf("%d (%.4f%%)", n, pct)
       ) |>
       rename(level = !!sym(var))
     
@@ -569,7 +569,7 @@ calculate_stratified_stats <- function(data, var, is_continuous = FALSE) {
       mutate(
         total_all = sum(n),
         pct = 100 * n / total_all,
-        stat_total = sprintf("%d (%.0f%%)", n, pct)
+        stat_total = sprintf("%d (%.4f%%)", n, pct)
       ) |>
       rename(level = !!sym(var))
     
@@ -596,8 +596,8 @@ create_stratified_table <- function(data) {
   # Total row
   results$Total <- data.frame(
     Variable = "Total",
-    Lapse = sprintf("%d (%.0f%%)", n_lapse, 100*n_lapse/n_total),
-    NoLapse = sprintf("%d (%.0f%%)", n_no_lapse, 100*n_no_lapse/n_total),
+    Lapse = sprintf("%d (%.4f%%)", n_lapse, 100*n_lapse/n_total),
+    NoLapse = sprintf("%d (%.4f%%)", n_no_lapse, 100*n_no_lapse/n_total),
     Total = sprintf("%d (100%%)", n_total),
     stringsAsFactors = FALSE
   )
@@ -781,71 +781,71 @@ format_stratified_table <- function(table_data, title) {
   
   # Display totals
   cat("**Total Patients**\n")
-  knitr::kable(table_data$totals)
+  print(knitr::kable(table_data$totals))
   
   cat("\n**Demographic Characteristics**\n")
   
   cat("\n*Sex*\n")
-  knitr::kable(table_data$sex)
+  print(knitr::kable(table_data$sex))
   
   cat("\n*Age (years)*\n")
-  knitr::kable(table_data$age)
+  print(knitr::kable(table_data$age))
   
   cat("\n*Race/Ethnicity*\n")
-  knitr::kable(table_data$race)
+  print(knitr::kable(table_data$race))
   
   cat("\n*Insurance*\n")
-  knitr::kable(table_data$insurance)
+  print(knitr::kable(table_data$insurance))
   
   cat("\n**Ocular Characteristics**\n")
   
   cat("\n*Severity of DR*\n")
-  knitr::kable(table_data$dr)
+  print(knitr::kable(table_data$dr))
   
   cat("\n*DR Treatments (% with treatment)*\n")
   treatments_df <- data.frame(
     Treatment = c("PRP", "Focal laser", "Anti-VEGF", "Other injections"),
     Lapse = c(
-      sprintf("%d (%.0f%%)", table_data$treatments$prp$n[1], table_data$treatments$prp$pct[1]),
-      sprintf("%d (%.0f%%)", table_data$treatments$focal$n[1], table_data$treatments$focal$pct[1]),
-      sprintf("%d (%.0f%%)", table_data$treatments$vegf$n[1], table_data$treatments$vegf$pct[1]),
-      sprintf("%d (%.0f%%)", table_data$treatments$other$n[1], table_data$treatments$other$pct[1])
+      sprintf("%d (%.4f%%)", table_data$treatments$prp$n[1], table_data$treatments$prp$pct[1]),
+      sprintf("%d (%.4f%%)", table_data$treatments$focal$n[1], table_data$treatments$focal$pct[1]),
+      sprintf("%d (%.4f%%)", table_data$treatments$vegf$n[1], table_data$treatments$vegf$pct[1]),
+      sprintf("%d (%.4f%%)", table_data$treatments$other$n[1], table_data$treatments$other$pct[1])
     ),
     NoLapse = c(
-      sprintf("%d (%.0f%%)", table_data$treatments$prp$n[2], table_data$treatments$prp$pct[2]),
-      sprintf("%d (%.0f%%)", table_data$treatments$focal$n[2], table_data$treatments$focal$pct[2]),
-      sprintf("%d (%.0f%%)", table_data$treatments$vegf$n[2], table_data$treatments$vegf$pct[2]),
-      sprintf("%d (%.0f%%)", table_data$treatments$other$n[2], table_data$treatments$other$pct[2])
+      sprintf("%d (%.4f%%)", table_data$treatments$prp$n[2], table_data$treatments$prp$pct[2]),
+      sprintf("%d (%.4f%%)", table_data$treatments$focal$n[2], table_data$treatments$focal$pct[2]),
+      sprintf("%d (%.4f%%)", table_data$treatments$vegf$n[2], table_data$treatments$vegf$pct[2]),
+      sprintf("%d (%.4f%%)", table_data$treatments$other$n[2], table_data$treatments$other$pct[2])
     ),
     Total = c(
-      sprintf("%d (%.0f%%)", table_data$treatments$prp$n[3], table_data$treatments$prp$pct[3]),
-      sprintf("%d (%.0f%%)", table_data$treatments$focal$n[3], table_data$treatments$focal$pct[3]),
-      sprintf("%d (%.0f%%)", table_data$treatments$vegf$n[3], table_data$treatments$vegf$pct[3]),
-      sprintf("%d (%.0f%%)", table_data$treatments$other$n[3], table_data$treatments$other$pct[3])
+      sprintf("%d (%.4f%%)", table_data$treatments$prp$n[3], table_data$treatments$prp$pct[3]),
+      sprintf("%d (%.4f%%)", table_data$treatments$focal$n[3], table_data$treatments$focal$pct[3]),
+      sprintf("%d (%.4f%%)", table_data$treatments$vegf$n[3], table_data$treatments$vegf$pct[3]),
+      sprintf("%d (%.4f%%)", table_data$treatments$other$n[3], table_data$treatments$other$pct[3])
     )
   )
-  knitr::kable(treatments_df, col.names = c("Treatment", "Lapse in care", "No lapse in care", "Total"))
+  print(knitr::kable(treatments_df, col.names = c("Treatment", "Lapse in care", "No lapse in care", "Total")))
   
   cat("\n*Ophthalmologic Comorbidities*\n")
   comorb_df <- data.frame(
     Condition = c("Glaucoma", "Prior cataract surgery", "Other retinal disease"),
     Lapse = c(
-      sprintf("%d (%.0f%%)", table_data$comorbidities$glaucoma$n[1], table_data$comorbidities$glaucoma$pct[1]),
-      sprintf("%d (%.0f%%)", table_data$comorbidities$cataract$n[1], table_data$comorbidities$cataract$pct[1]),
-      sprintf("%d (%.0f%%)", table_data$comorbidities$retina$n[1], table_data$comorbidities$retina$pct[1])
+      sprintf("%d (%.4f%%)", table_data$comorbidities$glaucoma$n[1], table_data$comorbidities$glaucoma$pct[1]),
+      sprintf("%d (%.4f%%)", table_data$comorbidities$cataract$n[1], table_data$comorbidities$cataract$pct[1]),
+      sprintf("%d (%.4f%%)", table_data$comorbidities$retina$n[1], table_data$comorbidities$retina$pct[1])
     ),
     NoLapse = c(
-      sprintf("%d (%.0f%%)", table_data$comorbidities$glaucoma$n[2], table_data$comorbidities$glaucoma$pct[2]),
-      sprintf("%d (%.0f%%)", table_data$comorbidities$cataract$n[2], table_data$comorbidities$cataract$pct[2]),
-      sprintf("%d (%.0f%%)", table_data$comorbidities$retina$n[2], table_data$comorbidities$retina$pct[2])
+      sprintf("%d (%.4f%%)", table_data$comorbidities$glaucoma$n[2], table_data$comorbidities$glaucoma$pct[2]),
+      sprintf("%d (%.4f%%)", table_data$comorbidities$cataract$n[2], table_data$comorbidities$cataract$pct[2]),
+      sprintf("%d (%.4f%%)", table_data$comorbidities$retina$n[2], table_data$comorbidities$retina$pct[2])
     ),
     Total = c(
-      sprintf("%d (%.0f%%)", table_data$comorbidities$glaucoma$n[3], table_data$comorbidities$glaucoma$pct[3]),
-      sprintf("%d (%.0f%%)", table_data$comorbidities$cataract$n[3], table_data$comorbidities$cataract$pct[3]),
-      sprintf("%d (%.0f%%)", table_data$comorbidities$retina$n[3], table_data$comorbidities$retina$pct[3])
+      sprintf("%d (%.4f%%)", table_data$comorbidities$glaucoma$n[3], table_data$comorbidities$glaucoma$pct[3]),
+      sprintf("%d (%.4f%%)", table_data$comorbidities$cataract$n[3], table_data$comorbidities$cataract$pct[3]),
+      sprintf("%d (%.4f%%)", table_data$comorbidities$retina$n[3], table_data$comorbidities$retina$pct[3])
     )
   )
-  knitr::kable(comorb_df, col.names = c("Condition", "Lapse in care", "No lapse in care", "Total"))
+  print(knitr::kable(comorb_df, col.names = c("Condition", "Lapse in care", "No lapse in care", "Total")))
   
   cat("\n**Clinical Characteristics (Mean ± SD)**\n")
   clinical_df <- data.frame(
@@ -862,7 +862,7 @@ format_stratified_table <- function(table_data, title) {
              table_data$continuous$dcsi$stat[3],
              table_data$continuous$cci$stat[3])
   )
-  knitr::kable(clinical_df, col.names = c("Variable", "Lapse in care", "No lapse in care", "Total"))
+  print(knitr::kable(clinical_df, col.names = c("Variable", "Lapse in care", "No lapse in care", "Total")))
 }
 
 format_stratified_table(complete_table_data, "Table 1: Baseline Characteristics by Lapse Status (Complete Cases)")
@@ -907,10 +907,10 @@ export_stratified_table <- function(table_data, filename) {
   export_df <- rbind(export_df, data.frame(
     variable = "Total",
     lapse_value = lapse_total$n,
-    lapse_prop = lapse_total$pct,
+    lapse_prop = round(lapse_total$pct, 4),
     lapse_sd = NA,
     no_lapse_value = no_lapse_total$n,
-    no_lapse_prop = no_lapse_total$pct,
+    no_lapse_prop = round(no_lapse_total$pct, 4),
     no_lapse_sd = NA,
     total_value = total_total$n,
     total_prop = 100,
@@ -929,13 +929,13 @@ export_stratified_table <- function(table_data, filename) {
       export_df <- rbind(export_df, data.frame(
         variable = paste0("Sex_", level),
         lapse_value = lapse_val$n,
-        lapse_prop = lapse_val$pct,
+        lapse_prop = round(lapse_val$pct, 4),
         lapse_sd = NA,
         no_lapse_value = no_lapse_val$n,
-        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_prop = round(no_lapse_val$pct, 4),
         no_lapse_sd = NA,
         total_value = total_val$n,
-        total_prop = total_val$pct,
+        total_prop = round(total_val$pct, 4),
         total_sd = NA
       ))
     }
@@ -952,13 +952,13 @@ export_stratified_table <- function(table_data, filename) {
       export_df <- rbind(export_df, data.frame(
         variable = paste0("Age_", level),
         lapse_value = lapse_val$n,
-        lapse_prop = lapse_val$pct,
+        lapse_prop = round(lapse_val$pct, 4),
         lapse_sd = NA,
         no_lapse_value = no_lapse_val$n,
-        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_prop = round(no_lapse_val$pct, 4),
         no_lapse_sd = NA,
         total_value = total_val$n,
-        total_prop = total_val$pct,
+        total_prop = round(total_val$pct, 4),
         total_sd = NA
       ))
     }
@@ -975,13 +975,13 @@ export_stratified_table <- function(table_data, filename) {
       export_df <- rbind(export_df, data.frame(
         variable = paste0("Race_", level),
         lapse_value = lapse_val$n,
-        lapse_prop = lapse_val$pct,
+        lapse_prop = round(lapse_val$pct, 4),
         lapse_sd = NA,
         no_lapse_value = no_lapse_val$n,
-        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_prop = round(no_lapse_val$pct, 4),
         no_lapse_sd = NA,
         total_value = total_val$n,
-        total_prop = total_val$pct,
+        total_prop = round(total_val$pct, 4),
         total_sd = NA
       ))
     }
@@ -998,13 +998,13 @@ export_stratified_table <- function(table_data, filename) {
       export_df <- rbind(export_df, data.frame(
         variable = paste0("Insurance_", level),
         lapse_value = lapse_val$n,
-        lapse_prop = lapse_val$pct,
+        lapse_prop = round(lapse_val$pct, 4),
         lapse_sd = NA,
         no_lapse_value = no_lapse_val$n,
-        no_lapse_prop = no_lapse_val$pct,
+        no_lapse_prop = round(no_lapse_val$pct, 4),
         no_lapse_sd = NA,
         total_value = total_val$n,
-        total_prop = total_val$pct,
+        total_prop = round(total_val$pct, 4),
         total_sd = NA
       ))
     }
@@ -1044,13 +1044,13 @@ export_stratified_table <- function(table_data, filename) {
       export_df <- rbind(export_df, data.frame(
         variable = treatment_names[j],
         lapse_value = tx_data$n[tx_data$lapse_group == "Lapse in care"],
-        lapse_prop = tx_data$pct[tx_data$lapse_group == "Lapse in care"],
+        lapse_prop = round(tx_data$pct[tx_data$lapse_group == "Lapse in care"], 4),
         lapse_sd = NA,
         no_lapse_value = tx_data$n[tx_data$lapse_group == "No lapse in care"],
-        no_lapse_prop = tx_data$pct[tx_data$lapse_group == "No lapse in care"],
+        no_lapse_prop = round(tx_data$pct[tx_data$lapse_group == "No lapse in care"], 4),
         no_lapse_sd = NA,
         total_value = tx_data$n[tx_data$lapse_group == "Total"],
-        total_prop = tx_data$pct[tx_data$lapse_group == "Total"],
+        total_prop = round(tx_data$pct[tx_data$lapse_group == "Total"], 4),
         total_sd = NA
       ))
     }
@@ -1067,13 +1067,13 @@ export_stratified_table <- function(table_data, filename) {
       export_df <- rbind(export_df, data.frame(
         variable = comorb_names[j],
         lapse_value = com_data$n[com_data$lapse_group == "Lapse in care"],
-        lapse_prop = com_data$pct[com_data$lapse_group == "Lapse in care"],
+        lapse_prop = round(com_data$pct[com_data$lapse_group == "Lapse in care"], 4),
         lapse_sd = NA,
         no_lapse_value = com_data$n[com_data$lapse_group == "No lapse in care"],
-        no_lapse_prop = com_data$pct[com_data$lapse_group == "No lapse in care"],
+        no_lapse_prop = round(com_data$pct[com_data$lapse_group == "No lapse in care"], 4),
         no_lapse_sd = NA,
         total_value = com_data$n[com_data$lapse_group == "Total"],
-        total_prop = com_data$pct[com_data$lapse_group == "Total"],
+        total_prop = round(com_data$pct[com_data$lapse_group == "Total"], 4),
         total_sd = NA
       ))
     }
@@ -1094,15 +1094,15 @@ export_stratified_table <- function(table_data, filename) {
       
       export_df <- rbind(export_df, data.frame(
         variable = cv$name,
-        lapse_value = lapse_stats$mean,
+        lapse_value = ifelse(is.na(lapse_stats$mean), NA, round(lapse_stats$mean, 4)),
         lapse_prop = NA,
-        lapse_sd = lapse_stats$sd,
-        no_lapse_value = no_lapse_stats$mean,
+        lapse_sd = ifelse(is.na(lapse_stats$sd), NA, round(lapse_stats$sd, 4)),
+        no_lapse_value = ifelse(is.na(no_lapse_stats$mean), NA, round(no_lapse_stats$mean, 4)),
         no_lapse_prop = NA,
-        no_lapse_sd = no_lapse_stats$sd,
-        total_value = total_stats$mean,
+        no_lapse_sd = ifelse(is.na(no_lapse_stats$sd), NA, round(no_lapse_stats$sd, 4)),
+        total_value = ifelse(is.na(total_stats$mean), NA, round(total_stats$mean, 4)),
         total_prop = NA,
-        total_sd = total_stats$sd
+        total_sd = ifelse(is.na(total_stats$sd), NA, round(total_stats$sd, 4))
       ))
     }
   }
@@ -1121,7 +1121,7 @@ complete_export <- export_stratified_table(complete_table_data,
 
 ## Stratified Table 2: Imputed Data (Averaged)
 
-```{r stratified-imputed}
+```{r stratified-imputed, results='asis'}
 # Function to process and average imputed datasets
 create_imputed_stratified_table <- function(imputed_list) {
   
@@ -1172,17 +1172,17 @@ create_imputed_stratified_table <- function(imputed_list) {
     Variable = "Total (averaged)",
     Lapse = paste0(round(mean(sapply(all_results, function(x) {
       as.numeric(gsub(" .*", "", x$totals$Lapse))
-    }))), " (", round(mean(sapply(all_results, function(x) {
+    })), 4), " (", round(mean(sapply(all_results, function(x) {
       as.numeric(gsub(".*\\((.*)%.*", "\\1", x$totals$Lapse))
-    }))), "%)"),
+    })), 4), "%)"),
     NoLapse = paste0(round(mean(sapply(all_results, function(x) {
       as.numeric(gsub(" .*", "", x$totals$NoLapse))
-    }))), " (", round(mean(sapply(all_results, function(x) {
+    })), 4), " (", round(mean(sapply(all_results, function(x) {
       as.numeric(gsub(".*\\((.*)%.*", "\\1", x$totals$NoLapse))
-    }))), "%)"),
+    })), 4), "%)"),
     Total = paste0(round(mean(sapply(all_results, function(x) {
       as.numeric(gsub(" .*", "", x$totals$Total))
-    }))), " (100%)")
+    })), 4), " (100%)")
   )
   
   # For simplicity, return the first imputation's structure with a note
