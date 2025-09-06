@@ -925,19 +925,32 @@ run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_fo
       
       for (method in completed_methods) {
         cat(paste0("Loading ", method, "...\n"))
-        method_results <- list()
-        n_imp <- min(length(imputed_datasets), config$n_imputations)
         
-        for (i in 1:n_imp) {
-          cached <- load_cache(method, i, cache_dir)
-          if (!is.null(cached)) {
-            method_results[[i]] <- cached
+        # Special handling for twang_gbm - load from reanalysis-4 cache
+        if (method == "twang_gbm") {
+          twang_cache_dir <- file.path("reanalysis_data", "ps_cache")
+          if (dir.exists(twang_cache_dir)) {
+            ps_results[[method]] <- load_twang_from_reanalysis4(imputed_datasets, config)
+            cat(paste0("  Loaded twang_gbm from reanalysis-4 cache\n"))
+          } else {
+            warning("twang_gbm cache directory not found at reanalysis_data/ps_cache")
           }
-        }
-        
-        if (length(method_results) > 0) {
-          ps_results[[method]] <- method_results
-          cat(paste0("  Loaded ", length(method_results), " cached results for ", method, "\n"))
+        } else {
+          # Regular loading for other methods
+          method_results <- list()
+          n_imp <- min(length(imputed_datasets), config$n_imputations)
+          
+          for (i in 1:n_imp) {
+            cached <- load_cache(method, i, cache_dir)
+            if (!is.null(cached)) {
+              method_results[[i]] <- cached
+            }
+          }
+          
+          if (length(method_results) > 0) {
+            ps_results[[method]] <- method_results
+            cat(paste0("  Loaded ", length(method_results), " cached results for ", method, "\n"))
+          }
         }
       }
     }

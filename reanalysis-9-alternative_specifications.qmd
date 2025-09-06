@@ -119,6 +119,7 @@ all_methods <- c(
 )
 
 # Define completed methods (add to this list as methods complete successfully)
+# Note: twang_gbm should load from reanalysis-4 cache, not run fresh
 completed_methods <- c(
   "nearest_glm",  # Completed successfully
   "nearest_gam",  # Completed successfully
@@ -129,8 +130,8 @@ completed_methods <- c(
   "subclass_glm",  # Completed successfully
   "cbps",  # Completed successfully
   "entropy",  # Completed successfully
-  "bart"  # Completed successfully
-  # "twang_gbm"  # Failed - needs rerun after fix
+  "bart",  # Completed successfully
+  "twang_gbm"  # Will load from reanalysis-4 cache
 )
 
 # Methods to run = all methods minus completed ones
