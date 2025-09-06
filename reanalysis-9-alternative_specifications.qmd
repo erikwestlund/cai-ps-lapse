@@ -120,17 +120,17 @@ all_methods <- c(
 
 # Define completed methods (add to this list as methods complete successfully)
 completed_methods <- c(
-  "nearest_glm",  # Uncomment if completed
-  "nearest_gam"
-  # "nearest_gbm",
-  # "nearest_lasso",
-  # "nearest_rpart",
-  # "nearest_mahalanobis",
-  # "subclass_glm",
-  # "cbps",
-  # "entropy",
-  # "bart",
-  # "twang_gbm"
+  "nearest_glm",  # Completed successfully
+  "nearest_gam",  # Completed successfully
+  "nearest_gbm",  # Completed successfully
+  "nearest_lasso",  # Completed successfully
+  "nearest_rpart",  # Completed successfully
+  "nearest_mahalanobis",  # Completed successfully
+  "subclass_glm",  # Completed successfully
+  "cbps",  # Completed successfully
+  "entropy",  # Completed successfully
+  "bart"  # Completed successfully
+  # "twang_gbm"  # Failed - needs rerun after fix
 )
 
 # Methods to run = all methods minus completed ones
@@ -161,7 +161,8 @@ results <- run_alternative_ps_analysis(
   mode = analysis_mode,
   cache_dir = cache_dir,
   use_cache = use_cache,
-  methods_to_run = methods_to_run
+  methods_to_run = methods_to_run,
+  all_methods = all_methods  # Pass all methods so completed ones can be loaded from cache
 )
 
 # Extract components

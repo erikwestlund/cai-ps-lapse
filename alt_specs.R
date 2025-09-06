@@ -296,16 +296,54 @@ ps_entropy <- function(data, formula, params) {
 
 # WeightIt BART
 ps_bart <- function(data, formula, params) {
+  # Ensure response is numeric {0,1} for BART
+  data2 <- data.frame(data)
+  outcome_var <- all.vars(formula)[1]
+  if (outcome_var %in% names(data2)) {
+    y <- data2[[outcome_var]]
+    if (is.factor(y)) {
+      y <- as.numeric(as.character(y))
+    } else if (is.character(y)) {
+      y <- as.numeric(y)
+    } else if (is.logical(y)) {
+      y <- as.numeric(y)
+    }
+    data2[[outcome_var]] <- y
+    if (any(!is.na(data2[[outcome_var]]) & !data2[[outcome_var]] %in% c(0, 1))) {
+      stop(paste0("Response variable ", outcome_var, " must be numeric 0/1 for BART. Found values: ",
+                  paste(unique(data2[[outcome_var]]), collapse = ", ")))
+    }
+  }
+  
   weightit(formula = formula,
-          data = data,
+          data = data2,
           method = "bart",
           estimand = "ATT")
 }
 
 # Twang GBM (matching analysis.Rmd lines 156-159)
 ps_twang_gbm <- function(data, formula, params) {
+  # Ensure response is numeric {0,1} for Bernoulli GBM
+  data2 <- data.frame(data)
+  outcome_var <- all.vars(formula)[1]
+  if (outcome_var %in% names(data2)) {
+    y <- data2[[outcome_var]]
+    if (is.factor(y)) {
+      y <- as.numeric(as.character(y))
+    } else if (is.character(y)) {
+      y <- as.numeric(y)
+    } else if (is.logical(y)) {
+      y <- as.numeric(y)
+    }
+    data2[[outcome_var]] <- y
+    if (any(!is.na(data2[[outcome_var]]) & !data2[[outcome_var]] %in% c(0, 1))) {
+      stop(paste0("Response variable ", outcome_var, " must be numeric 0/1 for GBM. Found values: ",
+                  paste(unique(data2[[outcome_var]]), collapse = ", ")))
+    }
+  }
+  
   ps(formula = formula,
-     data = data.frame(data),
+     data = data2,
      n.trees = params$n_trees,
      interaction.depth = 3,
      shrinkage = 0.01,
@@ -853,7 +891,8 @@ create_summary_table <- function(pooled_results) {
 # Run complete analysis pipeline
 run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_formula,
                                       mode = "test", cache_dir = "ps_alt_cache",
-                                      use_cache = TRUE, methods_to_run = NULL) {
+                                      use_cache = TRUE, methods_to_run = NULL,
+                                      all_methods = NULL) {
   
   config <- get_analysis_config(mode)
   
@@ -866,7 +905,7 @@ run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_fo
   cat("Cache directory:", cache_dir, "\n")
   cat(paste(rep("=", 60), collapse = ""), "\n")
   
-  # Step 1: Run PS methods
+  # Step 1: Run PS methods for methods_to_run
   ps_results <- run_all_ps_methods(
     imputed_datasets = imputed_datasets,
     formula = ps_formula,
@@ -875,6 +914,34 @@ run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_fo
     config = config,
     methods_to_run = methods_to_run
   )
+  
+  # Step 1b: Load cached results for completed methods if all_methods is provided
+  if (!is.null(all_methods) && use_cache) {
+    completed_methods <- setdiff(all_methods, methods_to_run)
+    if (length(completed_methods) > 0) {
+      cat("\n", paste(rep("=", 50), collapse = ""), "\n")
+      cat("Loading cached results for completed methods\n")
+      cat(paste(rep("=", 50), collapse = ""), "\n")
+      
+      for (method in completed_methods) {
+        cat(paste0("Loading ", method, "...\n"))
+        method_results <- list()
+        n_imp <- min(length(imputed_datasets), config$n_imputations)
+        
+        for (i in 1:n_imp) {
+          cached <- load_cache(method, i, cache_dir)
+          if (!is.null(cached)) {
+            method_results[[i]] <- cached
+          }
+        }
+        
+        if (length(method_results) > 0) {
+          ps_results[[method]] <- method_results
+          cat(paste0("  Loaded ", length(method_results), " cached results for ", method, "\n"))
+        }
+      }
+    }
+  }
   
   # Step 2: Run outcome analysis
   outcome_results <- run_outcome_analysis(
