@@ -118,35 +118,11 @@ all_methods <- c(
   "twang_gbm"  # Will load from reanalysis-4 if available
 )
 
-# Define completed methods (add to this list as methods complete successfully)
-# Note: twang_gbm should load from reanalysis-4 cache, not run fresh
-completed_methods <- c(
-  "nearest_glm",  # Completed successfully
-  "nearest_gam",  # Completed successfully
-  "nearest_gbm",  # Completed successfully
-  "nearest_lasso",  # Completed successfully
-  "nearest_rpart",  # Completed successfully
-  "nearest_mahalanobis",  # Completed successfully
-  "subclass_glm",  # Completed successfully
-  "cbps",  # Completed successfully
-  "entropy",  # Completed successfully
-  "bart",  # Completed successfully
-  "twang_gbm"  # Will load from reanalysis-4 cache
-)
+# Force rerun flag - set to TRUE to reprocess all methods even if cached
+force_rerun <- FALSE  # Set to TRUE to rerun everything
 
-# Methods to run = all methods minus completed ones
-methods_to_run <- setdiff(all_methods, completed_methods)
-
-# Optionally, you can also explicitly exclude problematic methods
-methods_to_exclude <- c(
-  # Add any methods that consistently fail or you want to skip
-)
-methods_to_run <- setdiff(methods_to_run, methods_to_exclude)
-
-log_message(paste0("Will run ", length(methods_to_run), " methods"))
-if (length(completed_methods) > 0) {
-  log_message(paste0("Skipping completed: ", paste(completed_methods, collapse = ", ")))
-}
+log_message(paste0("Will process up to ", length(all_methods), " methods"))
+log_message(paste0("Force rerun: ", ifelse(force_rerun, "YES", "NO")))
 ```
 
 ## Run Complete Analysis
@@ -162,8 +138,8 @@ results <- run_alternative_ps_analysis(
   mode = analysis_mode,
   cache_dir = cache_dir,
   use_cache = use_cache,
-  methods_to_run = methods_to_run,
-  all_methods = all_methods  # Pass all methods so completed ones can be loaded from cache
+  all_methods = all_methods,
+  force_rerun = force_rerun  # Controls whether to reprocess cached results
 )
 
 # Extract components

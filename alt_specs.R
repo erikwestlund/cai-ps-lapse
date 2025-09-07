@@ -888,113 +888,194 @@ create_summary_table <- function(pooled_results) {
 # Main Orchestrator Function
 # ============================================================================
 
-# Run complete analysis pipeline - MEMORY EFFICIENT VERSION
-# Processes one method at a time to minimize memory usage
-run_alternative_ps_analysis_memory_efficient <- function(imputed_datasets, ps_formula, outcome_formula,
-                                                        mode = "test", cache_dir = "ps_alt_cache",
-                                                        use_cache = TRUE, methods_to_run = NULL,
-                                                        all_methods = NULL) {
+# Run complete analysis pipeline with intermediate saves
+# Processes one method at a time, saves after each, can resume from crashes
+run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula, outcome_formula,
+                                                 mode = "test", cache_dir = "ps_alt_cache",
+                                                 pooled_cache_dir = NULL,
+                                                 use_cache = TRUE, 
+                                                 force_rerun = FALSE,
+                                                 all_methods = NULL) {
   
   config <- get_analysis_config(mode)
   n_imp <- min(length(imputed_datasets), config$n_imputations)
   
+  # Set up pooled results cache directory
+  if (is.null(pooled_cache_dir)) {
+    pooled_cache_dir <- file.path(cache_dir, "pooled_results")
+  }
+  if (!dir.exists(pooled_cache_dir)) {
+    dir.create(pooled_cache_dir, recursive = TRUE)
+  }
+  
+  # Set up summary file
+  summary_file <- file.path(pooled_cache_dir, "pooled_summary.csv")
+  
   cat("\n", paste(rep("=", 60), collapse = ""), "\n")
-  cat("ALTERNATIVE PS SPECIFICATIONS ANALYSIS (Memory Efficient)\n")
+  cat("ALTERNATIVE PS SPECIFICATIONS ANALYSIS\n")
   cat(paste(rep("=", 60), collapse = ""), "\n")
   cat("Mode:", mode, "\n")
   cat("Max imputations:", config$n_imputations, "\n")
   cat("Cache:", ifelse(use_cache, "ENABLED", "DISABLED"), "\n")
-  cat("Cache directory:", cache_dir, "\n")
+  cat("PS cache directory:", cache_dir, "\n")
+  cat("Pooled results directory:", pooled_cache_dir, "\n")
+  cat("Force rerun:", ifelse(force_rerun, "YES", "NO"), "\n")
   cat(paste(rep("=", 60), collapse = ""), "\n")
   
-  # Determine which methods to process
+  # Get all available methods if not specified
   if (is.null(all_methods)) {
-    all_methods <- methods_to_run
+    all_methods <- names(get_ps_methods(config))
+  }
+  
+  # Check which methods have cached PS results
+  cat("\nChecking cached PS results:\n")
+  methods_with_cache <- c()
+  for (method in all_methods) {
+    # Check for at least one cached file
+    if (method == "twang_gbm") {
+      cache_file <- file.path("reanalysis_data", "ps_cache", "twang_imp_1.rds")
+    } else {
+      cache_file <- file.path(cache_dir, paste0(method, "_imp_1.rds"))
+    }
+    if (file.exists(cache_file)) {
+      methods_with_cache <- c(methods_with_cache, method)
+      cat(paste0("  ✓ ", method, " - cached PS results found\n"))
+    } else {
+      cat(paste0("  ✗ ", method, " - no cached PS results\n"))
+    }
   }
   
   # Initialize results storage
   pooled_results <- list()
-  all_ps_results <- list()  # Only store minimal info for reporting
+  summary_data <- data.frame()
+  
+  # Load any existing pooled results if not forcing rerun
+  if (!force_rerun && file.exists(summary_file)) {
+    cat("\nLoading existing pooled results:\n")
+    existing_summary <- read.csv(summary_file, stringsAsFactors = FALSE)
+    for (i in 1:nrow(existing_summary)) {
+      method <- existing_summary$method[i]
+      pooled_file <- file.path(pooled_cache_dir, paste0("pooled_", method, ".rds"))
+      if (file.exists(pooled_file)) {
+        pooled_results[[method]] <- readRDS(pooled_file)
+        cat(paste0("  Loaded pooled results for ", method, "\n"))
+      }
+    }
+    summary_data <- existing_summary
+  }
   
   # Process each method one at a time
   cat("\n", paste(rep("=", 50), collapse = ""), "\n")
-  cat("Processing methods sequentially to minimize memory\n")
+  cat("Processing methods sequentially\n")
   cat(paste(rep("=", 50), collapse = ""), "\n\n")
   
-  for (method_name in all_methods) {
-    cat(paste0("\n--- Processing ", method_name, " ---\n"))
-    
-    # Step 1: Load PS results for this method only
-    ps_method_results <- list()
-    
-    if (method_name == "twang_gbm") {
-      # Special handling for twang_gbm
-      twang_cache_dir <- file.path("reanalysis_data", "ps_cache")
-      if (dir.exists(twang_cache_dir)) {
-        ps_method_results <- load_twang_from_reanalysis4(imputed_datasets, config)
-        cat("  Loaded from reanalysis-4 cache\n")
-      }
-    } else {
-      # Load from regular cache
-      for (i in 1:n_imp) {
-        cached <- load_cache(method_name, i, cache_dir)
-        if (!is.null(cached)) {
-          ps_method_results[[i]] <- cached
-        }
-      }
-      if (length(ps_method_results) > 0) {
-        cat(paste0("  Loaded ", length(ps_method_results), " cached results\n"))
-      }
-    }
-    
-    if (length(ps_method_results) == 0) {
-      cat(paste0("  WARNING: No results found for ", method_name, "\n"))
+  for (method_name in methods_with_cache) {
+    # Skip if already processed (unless forcing rerun)
+    if (!force_rerun && method_name %in% names(pooled_results)) {
+      cat(paste0("\n--- Skipping ", method_name, " (already processed) ---\n"))
       next
     }
     
-    # Step 2: Run outcome analysis for this method
-    cat("  Fitting outcome models...\n")
-    method_outcome_results <- list()
+    cat(paste0("\n--- Processing ", method_name, " ---\n"))
     
-    for (i in seq_along(ps_method_results)) {
-      if (!is.null(ps_method_results[[i]]) && ps_method_results[[i]]$success) {
-        outcome_result <- fit_outcome_model(
-          ps_result = ps_method_results[[i]],
-          data = imputed_datasets[[i]],
-          formula = outcome_formula,
-          method_name = method_name
-        )
-        if (outcome_result$success) {
-          method_outcome_results[[i]] <- outcome_result
+    tryCatch({
+      # Step 1: Load PS results for this method only
+      ps_method_results <- list()
+      
+      if (method_name == "twang_gbm") {
+        # Special handling for twang_gbm
+        ps_method_results <- load_twang_from_reanalysis4(imputed_datasets, config)
+        cat("  Loaded from reanalysis-4 cache\n")
+      } else {
+        # Load from regular cache
+        for (i in 1:n_imp) {
+          cached <- load_cache(method_name, i, cache_dir)
+          if (!is.null(cached)) {
+            ps_method_results[[i]] <- cached
+          }
+        }
+        if (length(ps_method_results) > 0) {
+          cat(paste0("  Loaded ", length(ps_method_results), " cached PS results\n"))
         }
       }
-    }
-    
-    # Step 3: Pool results for this method
-    if (length(method_outcome_results) > 0) {
-      cat("  Pooling results...\n")
-      method_pooled <- pool_single_method(method_outcome_results, method_name)
-      if (!is.null(method_pooled) && method_pooled$success) {
-        pooled_results[[method_name]] <- method_pooled
-        cat(paste0("  SUCCESS: Pooled ", length(method_outcome_results), " imputations\n"))
-        
-        # Log the pooled results
-        cat(paste0("  Pooled estimate for ", method_name, ":\n"))
-        cat(paste0("    OR = ", sprintf("%.3f", method_pooled$or), 
-                  " (95% CI: ", sprintf("%.3f", method_pooled$ci_lower),
-                  " - ", sprintf("%.3f", method_pooled$ci_upper), ")\n"))
-        cat(paste0("    p-value = ", sprintf("%.4f", method_pooled$p_value), "\n"))
+      
+      if (length(ps_method_results) == 0) {
+        cat(paste0("  WARNING: No PS results found for ", method_name, "\n"))
+        next
       }
-    }
-    
-    # Store minimal PS info for diagnostics
-    all_ps_results[[method_name]] <- list(
-      n_successful = sum(sapply(ps_method_results, function(x) !is.null(x) && x$success))
-    )
-    
-    # Clear method-specific data to free memory
-    rm(ps_method_results, method_outcome_results)
-    gc()  # Force garbage collection
+      
+      # Step 2: Run outcome analysis for this method
+      cat("  Fitting outcome models...\n")
+      method_outcome_results <- list()
+      n_fitted <- 0
+      
+      for (i in seq_along(ps_method_results)) {
+        if (!is.null(ps_method_results[[i]]) && ps_method_results[[i]]$success) {
+          outcome_result <- fit_outcome_model(
+            ps_result = ps_method_results[[i]],
+            data = imputed_datasets[[i]],
+            formula = outcome_formula,
+            method_name = method_name
+          )
+          if (outcome_result$success) {
+            method_outcome_results[[i]] <- outcome_result
+            n_fitted <- n_fitted + 1
+            if (n_fitted %% 10 == 0) {
+              cat(paste0("    Fitted ", n_fitted, " models...\n"))
+            }
+          }
+        }
+      }
+      
+      # Step 3: Pool results for this method
+      if (length(method_outcome_results) > 0) {
+        cat("  Pooling results...\n")
+        method_pooled <- pool_single_method(method_outcome_results, method_name)
+        if (!is.null(method_pooled) && method_pooled$success) {
+          pooled_results[[method_name]] <- method_pooled
+          
+          # Save pooled result immediately
+          pooled_file <- file.path(pooled_cache_dir, paste0("pooled_", method_name, ".rds"))
+          saveRDS(method_pooled, pooled_file)
+          
+          # Update summary data
+          new_row <- data.frame(
+            method = method_name,
+            or = method_pooled$or,
+            ci_lower = method_pooled$ci_lower,
+            ci_upper = method_pooled$ci_upper,
+            p_value = method_pooled$p_value,
+            n_imputations = length(method_outcome_results),
+            timestamp = Sys.time(),
+            stringsAsFactors = FALSE
+          )
+          
+          # Remove old entry if exists
+          summary_data <- summary_data[summary_data$method != method_name, ]
+          summary_data <- rbind(summary_data, new_row)
+          
+          # Save summary immediately
+          write.csv(summary_data, summary_file, row.names = FALSE)
+          
+          # Log the results
+          cat(paste0("  SUCCESS: Pooled ", length(method_outcome_results), " imputations\n"))
+          cat(paste0("  Pooled estimate for ", method_name, ":\n"))
+          cat(paste0("    OR = ", sprintf("%.3f", method_pooled$or), 
+                    " (95% CI: ", sprintf("%.3f", method_pooled$ci_lower),
+                    " - ", sprintf("%.3f", method_pooled$ci_upper), ")\n"))
+          cat(paste0("    p-value = ", sprintf("%.4f", method_pooled$p_value), "\n"))
+          cat(paste0("  Saved to: ", pooled_file, "\n"))
+        }
+      }
+      
+      # Clear method-specific data to free memory
+      rm(ps_method_results, method_outcome_results)
+      gc()  # Force garbage collection
+      
+    }, error = function(e) {
+      cat(paste0("  ERROR in ", method_name, ": ", e$message, "\n"))
+      cat("  Continuing with next method...\n")
+    })
   }
   
   # Step 4: Format final results
@@ -1002,23 +1083,56 @@ run_alternative_ps_analysis_memory_efficient <- function(imputed_datasets, ps_fo
   cat("Formatting final results\n")
   cat(paste(rep("=", 50), collapse = ""), "\n")
   
-  forest_data <- format_for_forest_plot(pooled_results)
-  summary_table <- create_summary_table(pooled_results)
+  if (length(pooled_results) > 0) {
+    forest_data <- format_for_forest_plot(pooled_results)
+    summary_table <- create_summary_table(pooled_results)
+    
+    # Save final outputs
+    saveRDS(forest_data, file.path(pooled_cache_dir, "forest_data.rds"))
+    saveRDS(summary_table, file.path(pooled_cache_dir, "summary_table.rds"))
+    
+    cat("\nFinal summary of pooled results:\n")
+    cat(paste(rep("-", 50), collapse = ""), "\n")
+    for (method in names(pooled_results)) {
+      res <- pooled_results[[method]]
+      cat(sprintf("%-20s: OR = %.3f (%.3f - %.3f), p = %.4f\n",
+                  method, res$or, res$ci_lower, res$ci_upper, res$p_value))
+    }
+    cat(paste(rep("-", 50), collapse = ""), "\n")
+  } else {
+    forest_data <- NULL
+    summary_table <- NULL
+    cat("No pooled results available\n")
+  }
   
-  # Return minimal results
+  # Return results
   return(list(
-    ps_results = all_ps_results,  # Minimal info only
-    outcome_results = NULL,  # Don't store full outcome results
     pooled_results = pooled_results,
     forest_data = forest_data,
     summary_table = summary_table,
-    config = config
+    config = config,
+    summary_file = summary_file,
+    pooled_cache_dir = pooled_cache_dir
   ))
 }
 
-# Keep original function for backwards compatibility but redirect to memory efficient version
-run_alternative_ps_analysis <- function(...) {
-  run_alternative_ps_analysis_memory_efficient(...)
+# Wrapper for backwards compatibility
+run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_formula,
+                                       mode = "test", cache_dir = "ps_alt_cache",
+                                       use_cache = TRUE, methods_to_run = NULL,
+                                       all_methods = NULL, force_rerun = FALSE) {
+  
+  # Call the sequential version
+  run_alternative_ps_analysis_sequential(
+    imputed_datasets = imputed_datasets,
+    ps_formula = ps_formula,
+    outcome_formula = outcome_formula,
+    mode = mode,
+    cache_dir = cache_dir,
+    use_cache = use_cache,
+    force_rerun = force_rerun,
+    all_methods = all_methods
+  )
 }
 
 # ============================================================================
