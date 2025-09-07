@@ -938,13 +938,32 @@ run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula,
   cat("\nChecking cached PS results:\n")
   methods_with_cache <- c()
   for (method in all_methods) {
-    # Check for at least one cached file
+    # Check for cached files - try both naming patterns
+    cache_found <- FALSE
+    
     if (method == "twang_gbm") {
-      cache_file <- file.path("reanalysis_data", "ps_cache", "twang_imp_1.rds")
+      # Check step 4 cache locations with various naming patterns
+      possible_files <- c(
+        file.path("reanalysis_data", "ps_cache", "twang_imp_1.rds"),
+        file.path("reanalysis_data", "ps_cache", "twang_imp1.rds"),
+        file.path(cache_dir, "twang_gbm_imp1.rds")
+      )
     } else {
-      cache_file <- file.path(cache_dir, paste0(method, "_imp_1.rds"))
+      # Check alternative cache with both patterns
+      possible_files <- c(
+        file.path(cache_dir, paste0(method, "_imp1.rds")),
+        file.path(cache_dir, paste0(method, "_imp_1.rds"))
+      )
     }
-    if (file.exists(cache_file)) {
+    
+    for (file in possible_files) {
+      if (file.exists(file)) {
+        cache_found <- TRUE
+        break
+      }
+    }
+    
+    if (cache_found) {
       methods_with_cache <- c(methods_with_cache, method)
       cat(paste0("  ✓ ", method, " - cached PS results found\n"))
     } else {
