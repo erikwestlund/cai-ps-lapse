@@ -48,7 +48,7 @@ get_analysis_config <- function(mode = "test") {
 # ============================================================================
 
 # Get cache file path for a specific method and imputation
-get_cache_path <- function(method_name, imputation_id, cache_dir = "ps_alt_cache") {
+get_cache_path <- function(method_name, imputation_id, cache_dir = "ps_cache") {
   if (!dir.exists(cache_dir)) {
     dir.create(cache_dir, recursive = TRUE)
   }
@@ -56,7 +56,7 @@ get_cache_path <- function(method_name, imputation_id, cache_dir = "ps_alt_cache
 }
 
 # Check if cached result exists and is valid
-check_cache <- function(method_name, imputation_id, cache_dir = "ps_alt_cache", force_rerun = FALSE) {
+check_cache <- function(method_name, imputation_id, cache_dir = "ps_cache", force_rerun = FALSE) {
   if (force_rerun) return(FALSE)
   
   cache_file <- get_cache_path(method_name, imputation_id, cache_dir)
@@ -64,7 +64,7 @@ check_cache <- function(method_name, imputation_id, cache_dir = "ps_alt_cache", 
 }
 
 # Load cached result
-load_cache <- function(method_name, imputation_id, cache_dir = "ps_alt_cache") {
+load_cache <- function(method_name, imputation_id, cache_dir = "ps_cache") {
   cache_file <- get_cache_path(method_name, imputation_id, cache_dir)
   if (file.exists(cache_file)) {
     readRDS(cache_file)
@@ -74,7 +74,7 @@ load_cache <- function(method_name, imputation_id, cache_dir = "ps_alt_cache") {
 }
 
 # Save result to cache
-save_cache <- function(result, method_name, imputation_id, cache_dir = "ps_alt_cache") {
+save_cache <- function(result, method_name, imputation_id, cache_dir = "ps_cache") {
   cache_file <- get_cache_path(method_name, imputation_id, cache_dir)
   saveRDS(result, cache_file)
 }
@@ -85,7 +85,7 @@ save_cache <- function(result, method_name, imputation_id, cache_dir = "ps_alt_c
 
 # Base strategy function that all methods will use
 ps_strategy_base <- function(data, formula, method_name, params, imputation_id, 
-                            cache_dir = "ps_alt_cache", use_cache = TRUE) {
+                            cache_dir = "ps_cache", use_cache = TRUE) {
   
   # Check cache first
   if (use_cache && check_cache(method_name, imputation_id, cache_dir)) {
@@ -446,7 +446,7 @@ get_ps_methods <- function(config = NULL) {
 
 # Run a single PS method across all imputations
 run_ps_method <- function(method_name, imputed_datasets, formula, 
-                         cache_dir = "ps_alt_cache", use_cache = TRUE,
+                         cache_dir = "ps_cache", use_cache = TRUE,
                          config = NULL) {
   
   if (is.null(config)) {
@@ -489,7 +489,7 @@ run_ps_method <- function(method_name, imputed_datasets, formula,
 
 # Run all PS methods (no loop - explicit calls for easy debugging)
 run_all_ps_methods <- function(imputed_datasets, formula, 
-                              cache_dir = "ps_alt_cache", use_cache = TRUE,
+                              cache_dir = "ps_cache", use_cache = TRUE,
                               config = NULL, methods_to_run = NULL) {
   
   if (is.null(config)) {
@@ -557,7 +557,7 @@ run_all_ps_methods <- function(imputed_datasets, formula,
   
   if ("twang_gbm" %in% methods_to_run) {
     # Check if we should load from reanalysis-4 cache
-    twang_cache_dir <- file.path("reanalysis_data", "ps_cache")
+    twang_cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
     if (dir.exists(twang_cache_dir)) {
       cat("\nLoading twang_gbm results from reanalysis-4 cache...\n")
       results$twang_gbm <- load_twang_from_reanalysis4(imputed_datasets, config)
@@ -573,15 +573,15 @@ run_all_ps_methods <- function(imputed_datasets, formula,
 
 # Load twang results from reanalysis-4
 load_twang_from_reanalysis4 <- function(imputed_datasets, config) {
-  twang_cache_dir <- file.path("reanalysis_data", "ps_cache")
+  twang_cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
   n_imp <- min(length(imputed_datasets), config$n_imputations)
   
   results <- list()
   
   for (i in 1:n_imp) {
-    # Check both possible file naming conventions
-    twang_file1 <- file.path(twang_cache_dir, paste0("twang_imp_", i, ".rds"))
-    twang_file2 <- file.path(twang_cache_dir, paste0("ps_imp_", i, ".rds"))  # Alternative naming
+    # Check for twang files with consistent naming
+    twang_file1 <- file.path(twang_cache_dir, paste0("twang_gbm_imp", i, ".rds"))
+    twang_file2 <- file.path(twang_cache_dir, paste0("twang_imp_", i, ".rds"))  # Legacy naming
     
     twang_file <- if (file.exists(twang_file1)) twang_file1 else twang_file2
     
@@ -898,8 +898,9 @@ create_summary_table <- function(pooled_results) {
 # Run complete analysis pipeline with intermediate saves
 # Processes one method at a time, saves after each, can resume from crashes
 run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula, outcome_formula,
-                                                 mode = "test", cache_dir = "ps_alt_cache",
+                                                 mode = "test", cache_dir = "ps_cache",
                                                  pooled_cache_dir = NULL,
+                                                 outcome_cache_dir = NULL,
                                                  use_cache = TRUE, 
                                                  force_rerun = FALSE,
                                                  all_methods = NULL) {
@@ -913,6 +914,14 @@ run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula,
   }
   if (!dir.exists(pooled_cache_dir)) {
     dir.create(pooled_cache_dir, recursive = TRUE)
+  }
+  
+  # Set up outcome cache directory
+  if (is.null(outcome_cache_dir)) {
+    outcome_cache_dir <- file.path(dirname(cache_dir), "outcome_cache")
+  }
+  if (!dir.exists(outcome_cache_dir)) {
+    dir.create(outcome_cache_dir, recursive = TRUE)
   }
   
   # Set up summary file
@@ -942,11 +951,10 @@ run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula,
     cache_found <- FALSE
     
     if (method == "twang_gbm") {
-      # Check step 4 cache locations with various naming patterns
+      # Check for twang files in unified cache
       possible_files <- c(
-        file.path("reanalysis_data", "ps_cache", "twang_imp_1.rds"),
-        file.path("reanalysis_data", "ps_cache", "twang_imp1.rds"),
-        file.path(cache_dir, "twang_gbm_imp1.rds")
+        file.path(cache_dir, "twang_gbm_imp1.rds"),
+        file.path(cache_dir, "twang_imp1.rds")  # Legacy naming if not yet renamed
       )
     } else {
       # Check alternative cache with both patterns
@@ -1030,27 +1038,48 @@ run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula,
         next
       }
       
-      # Step 2: Run outcome analysis for this method
+      # Step 2: Run outcome analysis for this method with caching
       cat("  Fitting outcome models...\n")
       method_outcome_results <- list()
       n_fitted <- 0
+      n_cached <- 0
       
       for (i in seq_along(ps_method_results)) {
         if (!is.null(ps_method_results[[i]]) && ps_method_results[[i]]$success) {
-          outcome_result <- fit_outcome_model(
-            ps_result = ps_method_results[[i]],
-            data = imputed_datasets[[i]],
-            formula = outcome_formula,
-            method_name = method_name
-          )
-          if (outcome_result$success) {
-            method_outcome_results[[i]] <- outcome_result
-            n_fitted <- n_fitted + 1
-            if (n_fitted %% 10 == 0) {
-              cat(paste0("    Fitted ", n_fitted, " models...\n"))
+          # Check for cached outcome model
+          outcome_cache_file <- file.path(outcome_cache_dir, 
+                                         paste0("outcome_", method_name, "_imp", i, ".rds"))
+          
+          if (!force_rerun && file.exists(outcome_cache_file)) {
+            # Load cached outcome model
+            method_outcome_results[[i]] <- readRDS(outcome_cache_file)
+            n_cached <- n_cached + 1
+          } else {
+            # Fit new outcome model
+            outcome_result <- fit_outcome_model(
+              ps_result = ps_method_results[[i]],
+              data = imputed_datasets[[i]],
+              formula = outcome_formula,
+              method_name = method_name
+            )
+            if (outcome_result$success) {
+              method_outcome_results[[i]] <- outcome_result
+              # Save to cache immediately
+              saveRDS(outcome_result, outcome_cache_file)
+              n_fitted <- n_fitted + 1
+              if (n_fitted %% 10 == 0) {
+                cat(paste0("    Fitted ", n_fitted, " models...\n"))
+              }
             }
           }
         }
+      }
+      
+      if (n_cached > 0) {
+        cat(paste0("    Loaded ", n_cached, " cached outcome models\n"))
+      }
+      if (n_fitted > 0) {
+        cat(paste0("    Fitted ", n_fitted, " new outcome models\n"))
       }
       
       # Step 3: Pool results for this method
@@ -1144,7 +1173,8 @@ run_alternative_ps_analysis_sequential <- function(imputed_datasets, ps_formula,
 
 # Wrapper for backwards compatibility
 run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_formula,
-                                       mode = "test", cache_dir = "ps_alt_cache",
+                                       mode = "test", cache_dir = "ps_cache",
+                                       outcome_cache_dir = NULL,
                                        use_cache = TRUE, methods_to_run = NULL,
                                        all_methods = NULL, force_rerun = FALSE) {
   
@@ -1155,6 +1185,7 @@ run_alternative_ps_analysis <- function(imputed_datasets, ps_formula, outcome_fo
     outcome_formula = outcome_formula,
     mode = mode,
     cache_dir = cache_dir,
+    outcome_cache_dir = outcome_cache_dir,
     use_cache = use_cache,
     force_rerun = force_rerun,
     all_methods = all_methods

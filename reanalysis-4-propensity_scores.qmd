@@ -34,7 +34,7 @@ if (!dir.exists(cache_dir)) {
 
 # Get list of existing cache files with their modification times
 if (use_cache) {
-  cache_files <- list.files(cache_dir, pattern = "^twang_imp_.*\\.rds$", full.names = TRUE)
+  cache_files <- list.files(cache_dir, pattern = "^twang_gbm_imp.*\\.rds$", full.names = TRUE)
   if (length(cache_files) > 0) {
     cache_info <- file.info(cache_files)
     cache_info$file <- basename(rownames(cache_info))
@@ -154,8 +154,8 @@ process_imputation <- function(i, imp_datasets, formula, trees, cache_path, use_
   start_msg <- paste0("[Worker ", worker_id, "] Imputation ", i, " started")
   cat(paste0(Sys.time(), " - ", start_msg, "\n"), file = worker_log_file, append = TRUE)
   
-  # Check for cached result
-  cache_file <- file.path(cache_path, paste0("twang_imp_", i, ".rds"))
+  # Check for cached result (using consistent naming without underscore)
+  cache_file <- file.path(cache_path, paste0("twang_gbm_imp", i, ".rds"))
   
   # Determine if we should use cached file
   should_use_cache <- FALSE
@@ -642,7 +642,7 @@ saveRDS(twang_weights, file.path(reanalysis_data_dir, "twang_weights.rds"))
 
 ```{r cache-summary}
 # Check cache status
-cache_files <- list.files(cache_dir, pattern = "twang_imp_.*\\.rds", full.names = FALSE)
+cache_files <- list.files(cache_dir, pattern = "twang_gbm_imp.*\\.rds", full.names = FALSE)
 n_cached <- length(cache_files)
 
 cache_status_msg <- paste0("Cache status: ", n_cached, " of ", n_imputations, " imputations cached")

@@ -61,7 +61,8 @@ config <- get_analysis_config(analysis_mode)
 
 # Cache configuration
 use_cache <- TRUE
-cache_dir <- file.path(reanalysis_data_dir, "ps_alternative_methods")
+cache_dir <- file.path(reanalysis_data_dir, "ps_cache")  # Now using unified ps_cache
+outcome_cache_dir <- file.path(reanalysis_data_dir, "outcome_cache")  # Separate outcome cache
 
 log_message(paste0("Analysis mode: ", analysis_mode))
 log_message(paste0("Processing up to ", config$n_imputations, " of ", n_imputations, " available imputations"))
@@ -137,6 +138,7 @@ results <- run_alternative_ps_analysis(
   outcome_formula = outcome_formula,
   mode = analysis_mode,
   cache_dir = cache_dir,
+  outcome_cache_dir = outcome_cache_dir,
   use_cache = use_cache,
   all_methods = all_methods,
   force_rerun = force_rerun  # Controls whether to reprocess cached results
