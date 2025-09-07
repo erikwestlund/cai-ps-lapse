@@ -31,19 +31,43 @@ if (dir.exists(ps_alt_methods)) {
   cat("  ✗ ps_alternative_methods not found\n")
 }
 
-# Ask for confirmation
-cat("\nThis script will:\n")
-cat("1. Rename ps_cache → ps_cache_twang\n")
-cat("2. Rename ps_alternative_methods → ps_cache\n")
-cat("3. Move twang files from ps_cache_twang to ps_cache\n")
-cat("4. Rename twang files to consistent pattern\n")
-cat("5. Create outcome_cache directory\n")
-cat("\nProceed? (y/n): ")
-response <- readline()
+# Check for command line arguments or environment variable
+args <- commandArgs(trailingOnly = TRUE)
+cat("Debug: args =", paste(args, collapse=", "), "\n")
+cat("Debug: length(args) =", length(args), "\n")
+cat("Debug: REORGANIZE_CONFIRM =", Sys.getenv("REORGANIZE_CONFIRM"), "\n")
+cat("Debug: interactive() =", interactive(), "\n")
 
-if (tolower(response) != "y") {
-  cat("Cancelled.\n")
-  stop("User cancelled operation")
+auto_confirm <- length(args) > 0 && args[1] == "--yes"
+env_confirm <- Sys.getenv("REORGANIZE_CONFIRM") == "yes"
+
+cat("Debug: auto_confirm =", auto_confirm, "\n")
+cat("Debug: env_confirm =", env_confirm, "\n")
+
+if (!auto_confirm && !env_confirm && interactive()) {
+  # Only ask for confirmation in interactive mode
+  cat("\nThis script will:\n")
+  cat("1. Rename ps_cache → ps_cache_twang\n")
+  cat("2. Rename ps_alternative_methods → ps_cache\n")
+  cat("3. Move twang files from ps_cache_twang to ps_cache\n")
+  cat("4. Rename twang files to consistent pattern\n")
+  cat("5. Create outcome_cache directory\n")
+  cat("\nProceed? (y/n): ")
+  response <- readline()
+  
+  if (tolower(response) != "y") {
+    cat("Cancelled.\n")
+    stop("User cancelled operation")
+  }
+} else if (auto_confirm || env_confirm) {
+  cat("\nAuto-confirmed. Proceeding with reorganization...\n")
+} else {
+  cat("\nRunning in non-interactive mode without confirmation.\n")
+  cat("To run without prompts, use one of:\n")
+  cat("  Rscript reorganize_cache.R --yes\n")
+  cat("  REORGANIZE_CONFIRM=yes Rscript reorganize_cache.R\n")
+  cat("  Or run in R console: source('reorganize_cache.R')\n")
+  stop("Please confirm the operation using one of the methods above")
 }
 
 # Step 2: Rename ps_cache to ps_cache_twang
@@ -107,11 +131,17 @@ if (dir.exists(ps_cache_twang)) {
     cat("  ✓ Moved and renamed", moved_count, "twang files\n")
     
     # Optionally delete originals after successful copy
-    cat("\nDelete original twang files from ps_cache_twang? (y/n): ")
-    del_response <- readline()
-    if (tolower(del_response) == "y") {
-      unlink(twang_files)
-      cat("  ✓ Original files deleted\n")
+    if (interactive()) {
+      cat("\nDelete original twang files from ps_cache_twang? (y/n): ")
+      del_response <- readline()
+      if (tolower(del_response) == "y") {
+        unlink(twang_files)
+        cat("  ✓ Original files deleted\n")
+      } else {
+        cat("  Original files kept in ps_cache_twang\n")
+      }
+    } else {
+      cat("  Original files kept in ps_cache_twang (run interactively to delete)\n")
     }
   } else {
     cat("  No twang files found to move\n")
