@@ -140,10 +140,15 @@ load_required_libraries <- function() {
   )
   
   for (pkg in required_packages) {
-    if (!requireNamespace(pkg, quietly = TRUE)) {
-      install.packages(pkg, dependencies = TRUE, quiet = TRUE)
+    # More robust check - try to load, if it fails then install
+    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      cat(paste0("Installing ", pkg, "...\n"))
+      install.packages(pkg, dependencies = TRUE, quiet = FALSE)
+      # Try loading again
+      if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+        warning(paste("Failed to load", pkg, "after installation"))
+      }
     }
-    library(pkg, character.only = TRUE, quietly = TRUE)
   }
 }
 
