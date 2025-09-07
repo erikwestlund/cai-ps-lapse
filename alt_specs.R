@@ -672,7 +672,15 @@ fit_outcome_model <- function(ps_result, data, formula, method_name = NULL) {
     
     # Extract coefficient for lapse
     coef_summary <- coef(summary(model))
-    coef_lapse <- coef_summary["ever_lapse_binary", ]
+    
+    # Find the lapse coefficient row (more robust)
+    lapse_rows <- grep("ever_lapse", rownames(coef_summary), value = TRUE)
+    if (length(lapse_rows) == 0) {
+      # Debug: show what coefficients are available
+      available_coefs <- paste(rownames(coef_summary), collapse=", ")
+      stop(paste0("Could not find ever_lapse variable in model coefficients. Available: ", available_coefs))
+    }
+    coef_lapse <- coef_summary[lapse_rows[1], ]
     
     result$estimate <- coef_lapse["Estimate"]
     result$se <- coef_lapse["Std. Error"]
