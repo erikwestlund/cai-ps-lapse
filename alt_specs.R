@@ -4,12 +4,19 @@
 # This file provides a modular approach to running multiple PS methods
 # on multiply imputed data with standardized interfaces and caching
 
-library(MatchIt)
-library(WeightIt)
-library(twang)
-library(cobalt)
-library(survey)
-library(mice)
+# Load required packages with installation check
+required_ps_packages <- c("MatchIt", "WeightIt", "twang", "cobalt", "survey", "mice")
+
+for (pkg in required_ps_packages) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    if (is.null(getOption("repos")) || getOption("repos") == "@CRAN@") {
+      options(repos = c(CRAN = "https://cloud.r-project.org/"))
+    }
+    cat(paste0("Installing ", pkg, "...\n"))
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
 
 # ============================================================================
 # Configuration

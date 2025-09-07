@@ -149,6 +149,29 @@ pooled_results <- results$pooled_results
 forest_data <- results$forest_data
 summary_table <- results$summary_table
 
+# Check if we have results
+if (length(pooled_results) == 0) {
+  cat("\n\n*** WARNING: No pooled results available ***\n")
+  cat("This could mean:\n")
+  cat("1. PS methods haven't been run yet (check reanalysis-4-propensity_scores.qmd)\n")
+  cat("2. Cache directory path is incorrect\n")
+  cat("3. Cache files have been deleted\n\n")
+  cat("Current cache directory:", cache_dir, "\n")
+  cat("Looking for files like: nearest_glm_imp_1.rds\n\n")
+  
+  # Check if the alternative methods were run in step 4
+  ps_cache_step4 <- file.path(reanalysis_data_dir, "ps_cache")
+  if (dir.exists(ps_cache_step4)) {
+    twang_files <- list.files(ps_cache_step4, pattern = "twang_imp.*\\.rds")
+    if (length(twang_files) > 0) {
+      cat("Found twang files in step 4 cache:", ps_cache_step4, "\n")
+      cat("  Files:", paste(twang_files[1:min(3, length(twang_files))], collapse = ", "), "...\n")
+    }
+  }
+  
+  stop("No results to process. Please run PS methods first or check cache paths.")
+}
+
 # Save pooled results for later use
 saveRDS(pooled_results, file.path(reanalysis_data_dir, "alternative_ps_results_pooled.rds"))
 log_message("Saved pooled results")
@@ -159,19 +182,23 @@ log_message("Saved pooled results")
 ```{r forest-plot}
 #| fig.height: 10
 #| fig.width: 8
+#| eval: !expr length(pooled_results) > 0
 
-# Create forest plot matching the style of results-summary.Rmd
-# Add colors for specific methods
-forest_data$color <- "black"
-if ("twang_gbm" %in% forest_data$method) {
-  forest_data$color[forest_data$method == "twang_gbm"] <- "blue"
-}
+if (is.null(forest_data) || nrow(forest_data) == 0) {
+  cat("No data available for forest plot\n")
+} else {
+  # Create forest plot matching the style of results-summary.Rmd
+  # Add colors for specific methods
+  forest_data$color <- "black"
+  if ("twang_gbm" %in% forest_data$method) {
+    forest_data$color[forest_data$method == "twang_gbm"] <- "blue"
+  }
 
-# Add a naive/unadjusted estimate if we want to show it as reference
-# (Would need to run this separately if desired)
+  # Add a naive/unadjusted estimate if we want to show it as reference
+  # (Would need to run this separately if desired)
 
-# Create the plot
-forest_plot <- ggplot(forest_data, aes(x = reorder(method_label, or), y = or)) +
+  # Create the plot
+  forest_plot <- ggplot(forest_data, aes(x = reorder(method_label, or), y = or)) +
   geom_pointrange(aes(ymin = lower, ymax = upper, color = color), size = 0.8) +
   geom_point(aes(color = color), size = 3) +
   geom_text(aes(label = sprintf("%.2f", or), color = color), 
@@ -208,35 +235,42 @@ forest_plot <- ggplot(forest_data, aes(x = reorder(method_label, or), y = or)) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "gray70") +
   geom_hline(yintercept = 1, linetype = "dashed", color = "gray30")
 
-print(forest_plot)
+  print(forest_plot)
 
-# Save the plot
-ggsave(
-  filename = file.path(reanalysis_data_dir, "forest_plot_ps_methods_imputed.png"),
-  plot = forest_plot,
-  width = 10,
-  height = 8,
-  dpi = 300
-)
+  # Save the plot
+  ggsave(
+    filename = file.path(reanalysis_data_dir, "forest_plot_ps_methods_imputed.png"),
+    plot = forest_plot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
 
-log_message("Forest plot saved")
+  log_message("Forest plot saved")
+}  # Close the else statement
 ```
 
 ## Summary Table
 
 ```{r summary-table}
-# Display the summary table
-kable(summary_table, 
-      caption = "Pooled Effect Estimates Across Propensity Score Methods",
-      col.names = c("Method", "Odds Ratio", "95% CI", "P-value", "N Imputations"),
-      align = c("l", "r", "c", "r", "r"))
+#| eval: !expr length(pooled_results) > 0
 
-# Save to CSV for external use
-write.csv(summary_table, 
-          file.path(reanalysis_data_dir, "ps_methods_comparison_table.csv"),
-          row.names = FALSE)
+if (is.null(summary_table) || nrow(summary_table) == 0) {
+  cat("No summary table available\n")
+} else {
+  # Display the summary table
+  kable(summary_table, 
+        caption = "Pooled Effect Estimates Across Propensity Score Methods",
+        col.names = c("Method", "Odds Ratio", "95% CI", "P-value", "N Imputations"),
+        align = c("l", "r", "c", "r", "r"))
 
-log_message("Summary table saved to CSV")
+  # Save to CSV for external use
+  write.csv(summary_table, 
+            file.path(reanalysis_data_dir, "ps_methods_comparison_table.csv"),
+            row.names = FALSE)
+
+  log_message("Summary table saved to CSV")
+}
 ```
 
 ## Method Comparison
