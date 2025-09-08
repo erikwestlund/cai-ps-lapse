@@ -626,6 +626,28 @@ load_twang_from_reanalysis4 <- function(imputed_datasets, config) {
 # Outcome Analysis Functions
 # ============================================================================
 
+# Fit outcome model with caching support
+fit_outcome_model_cached <- function(ps_result, outcome_formula, data, 
+                                    method_name, imputation, cache_dir) {
+  # Check if already cached
+  cache_file <- file.path(cache_dir, paste0("outcome_", method_name, "_imp", imputation, ".rds"))
+  
+  if (file.exists(cache_file)) {
+    # Load from cache
+    return(readRDS(cache_file))
+  }
+  
+  # Fit the model
+  result <- fit_outcome_model(ps_result, data, outcome_formula, method_name)
+  
+  # Save to cache if successful
+  if (result$success) {
+    saveRDS(result, cache_file)
+  }
+  
+  return(result)
+}
+
 # Fit outcome model for a single PS result
 fit_outcome_model <- function(ps_result, data, formula, method_name = NULL) {
   if (!ps_result$success) {
