@@ -49,9 +49,9 @@ if (!method %in% names(ps_methods)) {
        "Available methods: ", paste(names(ps_methods), collapse = ", "))
 }
 
-# Get the method strategy
-method_strategy <- ps_methods[[method]]
-cat("Method type:", class(method_strategy)[1], "\n\n")
+# Get the method parameters
+method_params <- ps_methods[[method]]
+cat("Method has strategy_fn:", !is.null(method_params$strategy_fn), "\n\n")
 
 # Process each specified imputation
 results <- list()
@@ -88,11 +88,15 @@ for (i in imps) {
   cat("  Fitting", method, "propensity score model...\n")
   
   ps_result <- tryCatch({
-    # Execute the PS method using the strategy pattern
-    result <- method_strategy$execute(
+    # Use ps_strategy_base function just like run_ps_method does
+    result <- ps_strategy_base(
       data = imp_data,
       formula = ps_formula,
-      estimand = "ATT"
+      method_name = method,
+      params = method_params,
+      imputation_id = i,
+      cache_dir = cache_dir,
+      use_cache = FALSE  # Force re-run
     )
     
     # Display key results
@@ -127,10 +131,8 @@ for (i in imps) {
         cat("    Control:", result$n_control, "\n")
       }
       
-      # Save the result
-      cat("  Saving to cache...\n")
-      saveRDS(result, ps_cache_file)
-      cat("  Saved to:", ps_cache_file, "\n")
+      # Result is already saved by ps_strategy_base if successful
+      cat("  Result cached to:", ps_cache_file, "\n"
       
       successful_imps <- c(successful_imps, i)
     } else {
@@ -207,8 +209,8 @@ cat("NEXT STEPS\n")
 cat("================================================================================\n")
 cat("If PS models were successfully created, you can now:\n")
 cat("1. Run reanalysis-9-outcome_models.qmd to fit outcome models\n")
-cat("2. Or use run_missing_outcomes.R to fit just these specific outcome models\n")
+cat("2. Or use run_missing_outcome_models.R to fit just these specific outcome models\n")
 cat("\nTo run outcome models for just these imputations:\n")
 cat("  method <- '", method, "'\n")
 cat("  imps <- c(", paste(successful_imps, collapse = ", "), ")\n")
-cat("  source('run_missing_outcomes.R')\n")
+cat("  source('run_missing_outcome_models.R')\n")
