@@ -38,6 +38,7 @@ install_dependencies <- function() {
     # Multiple imputation
     "mice",
     "miceadds",  # For multilevel imputation methods (2l.pmm)
+    "mitools",   # Additional MI tools for pooling
     "VIM",
     "Hmisc",
     "naniar",

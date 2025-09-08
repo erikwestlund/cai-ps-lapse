@@ -1,0 +1,407 @@
+---
+title: "Step 10: Pool Results Across PS Methods Using Rubin's Rules"
+author: "Analysis Team"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 8
+    fig-height: 6
+    fig-dpi: 150
+    embed-resources: true
+    self-contained: true
+---
+
+## Overview
+
+This step pools the outcome model results across all propensity score methods and multiple imputations using Rubin's rules.
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+source("alt_specs.R")
+setup_analysis(seed = 2025)
+
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(mice)      # For pooling with Rubin's rules
+library(miceadds)  # Additional pooling utilities
+library(mitools)   # More MI tools
+
+# Initialize logging
+log_file <- init_log("pooling_results")
+log_message("Starting pooling of outcome model results")
+
+# Configuration
+outcome_cache_dir <- file.path(reanalysis_data_dir, "outcome_cache")
+pooled_cache_dir <- file.path(reanalysis_data_dir, "ps_cache", "pooled_results")
+
+if (!dir.exists(pooled_cache_dir)) {
+  dir.create(pooled_cache_dir, recursive = TRUE)
+}
+
+# Summary file for tracking
+summary_file <- file.path(pooled_cache_dir, "pooled_summary.csv")
+```
+
+## Load Cached Outcome Models
+
+```{r load-outcomes}
+# Define all methods to pool
+all_methods <- c(
+  "nearest_glm",
+  "nearest_gam", 
+  "nearest_gbm",
+  "nearest_lasso",
+  "nearest_rpart",
+  "nearest_mahalanobis",
+  "subclass_glm",
+  "cbps",
+  "entropy",
+  "bart",
+  "twang_gbm"
+)
+
+log_message(paste0("Will pool results for ", length(all_methods), " methods"))
+
+# Function to load outcome results for a method
+load_outcome_results <- function(method_name, outcome_cache_dir, n_imp = 50) {
+  results <- list()
+  n_loaded <- 0
+  
+  for (i in 1:n_imp) {
+    cache_file <- file.path(outcome_cache_dir, 
+                           paste0("outcome_", method_name, "_imp", i, ".rds"))
+    if (file.exists(cache_file)) {
+      results[[i]] <- readRDS(cache_file)
+      n_loaded <- n_loaded + 1
+    }
+  }
+  
+  log_message(paste0("  ", method_name, ": Loaded ", n_loaded, " outcome models"))
+  return(results)
+}
+
+# Load all outcome results
+all_outcome_results <- list()
+cat("\nLoading cached outcome models:\n")
+cat(paste(rep("-", 50), collapse = ""), "\n")
+
+for (method in all_methods) {
+  all_outcome_results[[method]] <- load_outcome_results(method, outcome_cache_dir)
+}
+
+cat(paste(rep("-", 50), collapse = ""), "\n")
+```
+
+## Pool Results Using Rubin's Rules
+
+```{r pool-results}
+# Initialize storage for pooled results
+pooled_results <- list()
+summary_data <- data.frame()
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("POOLING RESULTS ACROSS IMPUTATIONS USING MICE\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+# Function to pool using mice package
+pool_with_mice <- function(outcome_results, method_name) {
+  # Extract coefficients and variance-covariance matrices
+  coef_list <- list()
+  vcov_list <- list()
+  n_valid <- 0
+  
+  for (i in seq_along(outcome_results)) {
+    if (!is.null(outcome_results[[i]]) && outcome_results[[i]]$success) {
+      coef_list[[length(coef_list) + 1]] <- outcome_results[[i]]$coefficients
+      vcov_list[[length(vcov_list) + 1]] <- outcome_results[[i]]$vcov
+      n_valid <- n_valid + 1
+    }
+  }
+  
+  if (n_valid < 2) {
+    return(list(success = FALSE, error = "Less than 2 valid imputations"))
+  }
+  
+  # Pool using miceadds for more robust handling
+  tryCatch({
+    # Create mids-like object for pooling
+    pooled <- miceadds::pool_mi(
+      qhat = coef_list,  # List of coefficient vectors
+      u = vcov_list,     # List of variance-covariance matrices
+      method = "rubin"   # Use Rubin's rules
+    )
+    
+    # Extract ever_lapse coefficient
+    lapse_idx <- grep("ever_lapse", names(coef_list[[1]]))[1]
+    if (is.na(lapse_idx)) {
+      return(list(success = FALSE, error = "Could not find ever_lapse coefficient"))
+    }
+    
+    # Get pooled estimate for lapse
+    estimate <- pooled$qbar[lapse_idx]
+    se <- sqrt(pooled$t[lapse_idx, lapse_idx])
+    df <- pooled$df[lapse_idx]
+    
+    # Calculate CI and p-value
+    t_crit <- qt(0.975, df)
+    ci_lower <- estimate - t_crit * se
+    ci_upper <- estimate + t_crit * se
+    t_stat <- estimate / se
+    p_value <- 2 * pt(abs(t_stat), df, lower.tail = FALSE)
+    
+    # Convert to OR scale
+    or <- exp(estimate)
+    or_ci_lower <- exp(ci_lower)
+    or_ci_upper <- exp(ci_upper)
+    
+    return(list(
+      success = TRUE,
+      method = method_name,
+      estimate = estimate,
+      se = se,
+      df = df,
+      ci_lower = ci_lower,
+      ci_upper = ci_upper,
+      t_stat = t_stat,
+      p_value = p_value,
+      or = or,
+      or_ci_lower = or_ci_lower,
+      or_ci_upper = or_ci_upper,
+      n_imputations = n_valid,
+      fmi = pooled$fmi[lapse_idx] # Fraction of missing information
+    ))
+  }, error = function(e) {
+    # Fallback to manual Rubin's rules if miceadds fails
+    return(pool_single_method(outcome_results, method_name))
+  })
+}
+
+for (method in all_methods) {
+  cat(paste0("\nProcessing ", method, "...\n"))
+  
+  outcome_results <- all_outcome_results[[method]]
+  
+  if (length(outcome_results) == 0) {
+    cat(paste0("  WARNING: No outcome results found for ", method, "\n"))
+    log_message(paste0("WARNING: No results for ", method))
+    next
+  }
+  
+  # Pool using mice/miceadds
+  tryCatch({
+    pooled <- pool_with_mice(outcome_results, method)
+    
+    if (pooled$success) {
+      pooled_results[[method]] <- pooled
+      
+      # Save individual pooled result
+      pooled_file <- file.path(pooled_cache_dir, paste0("pooled_", method, ".rds"))
+      saveRDS(pooled, pooled_file)
+      
+      # Log the pooled estimate
+      cat(paste0("  ✓ Pooled ", pooled$n_imputations, " imputations\n"))
+      cat(paste0("    OR = ", sprintf("%.3f", pooled$or), 
+                " (95% CI: ", sprintf("%.3f", pooled$or_ci_lower),
+                " - ", sprintf("%.3f", pooled$or_ci_upper), ")\n"))
+      cat(paste0("    p-value = ", sprintf("%.4f", pooled$p_value), "\n"))
+      if (!is.null(pooled$fmi)) {
+        cat(paste0("    FMI = ", sprintf("%.3f", pooled$fmi), "\n"))
+      }
+      
+      log_message(paste0(method, ": OR = ", sprintf("%.3f", pooled$or),
+                        " (", sprintf("%.3f", pooled$or_ci_lower),
+                        " - ", sprintf("%.3f", pooled$or_ci_upper),
+                        "), p = ", sprintf("%.4f", pooled$p_value)))
+      
+      # Add to summary data
+      new_row <- data.frame(
+        method = method,
+        or = pooled$or,
+        ci_lower = pooled$or_ci_lower,
+        ci_upper = pooled$or_ci_upper,
+        p_value = pooled$p_value,
+        n_imputations = pooled$n_imputations,
+        fmi = ifelse(!is.null(pooled$fmi), pooled$fmi, NA),
+        timestamp = Sys.time(),
+        stringsAsFactors = FALSE
+      )
+      summary_data <- rbind(summary_data, new_row)
+      
+    } else {
+      cat(paste0("  ✗ Failed: ", pooled$error, "\n"))
+      log_message(paste0("ERROR: Failed to pool ", method, " - ", pooled$error))
+    }
+    
+  }, error = function(e) {
+    cat(paste0("  ✗ Error: ", e$message, "\n"))
+    log_message(paste0("ERROR: ", method, " - ", e$message))
+  })
+}
+
+# Save summary CSV
+if (nrow(summary_data) > 0) {
+  write.csv(summary_data, summary_file, row.names = FALSE)
+  log_message(paste0("Saved summary to ", summary_file))
+}
+
+# Save all pooled results
+saveRDS(pooled_results, file.path(pooled_cache_dir, "all_pooled_results.rds"))
+log_message("Saved all pooled results")
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("POOLING COMPLETE\n")
+cat(paste(rep("=", 60), collapse = ""), "\n")
+```
+
+## Summary Table
+
+```{r summary-table}
+if (length(pooled_results) > 0) {
+  # Create formatted summary table
+  summary_table <- create_summary_table(pooled_results)
+  
+  # Display with kable
+  # Add FMI column if available
+  col_names <- c("Method", "Odds Ratio", "95% CI", "P-value", "N Imputations")
+  if ("FMI" %in% colnames(summary_table)) {
+    col_names <- c(col_names, "FMI")
+  }
+  
+  kable(summary_table, 
+        caption = "Pooled Effect Estimates Across Propensity Score Methods (Using mice/miceadds)",
+        col.names = col_names,
+        align = c("l", "r", "c", "r", "r", if("FMI" %in% colnames(summary_table)) "r" else NULL)) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = FALSE)
+  
+  # Save to CSV
+  write.csv(summary_table, 
+            file.path(reanalysis_data_dir, "ps_methods_pooled_results.csv"),
+            row.names = FALSE)
+  
+  log_message("Summary table saved to CSV")
+} else {
+  cat("No pooled results available for summary table\n")
+}
+```
+
+## Forest Plot
+
+```{r forest-plot}
+#| fig.height: 10
+#| fig.width: 8
+
+if (length(pooled_results) > 0) {
+  # Format data for forest plot
+  forest_data <- format_for_forest_plot(pooled_results)
+  
+  # Add colors for specific methods
+  forest_data$color <- "black"
+  if ("twang_gbm" %in% forest_data$method) {
+    forest_data$color[forest_data$method == "twang_gbm"] <- "blue"
+  }
+  
+  # Create the plot
+  forest_plot <- ggplot(forest_data, aes(x = reorder(method_label, or), y = or)) +
+    geom_pointrange(aes(ymin = lower, ymax = upper, color = color), size = 0.8) +
+    geom_point(aes(color = color), size = 3) +
+    geom_text(aes(label = sprintf("%.2f", or), color = color), 
+              vjust = -1.2, hjust = 0.5, size = 4) +
+    coord_flip() +
+    scale_color_identity() +
+    scale_y_continuous(breaks = seq(0.5, max(forest_data$upper, 1.5), by = 0.1),
+                       trans = "log",
+                       labels = function(x) sprintf("%.1f", x)) +
+    scale_x_discrete(expand = c(0.075, 0.075)) +
+    theme_minimal(base_size = 14) +
+    labs(
+      x = element_blank(),
+      y = "Odds Ratio",
+      title = "Propensity Score Method Comparison",
+      subtitle = "Pooled estimates across multiple imputations using mice package (Rubin's rules)",
+      caption = "All methods use ATT (Average Treatment Effect in the Treated) estimand"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", margin = margin(b = 10)),
+      plot.subtitle = element_text(hjust = 0.5, margin = margin(b = 15)),
+      legend.position = "none",
+      axis.line = element_line(color = "gray80"),
+      axis.text = element_text(color = "gray30"),
+      axis.ticks = element_line(color = "gray80"),
+      axis.title.x = element_text(margin = margin(t = 10)),
+      plot.caption = element_text(margin = margin(t = 15), hjust = 0),
+      plot.margin = margin(20, 20, 30, 20)
+    ) +
+    geom_hline(yintercept = 1, linetype = "dashed", color = "gray70")
+  
+  print(forest_plot)
+  
+  # Save the plot
+  ggsave(
+    filename = file.path(reanalysis_data_dir, "forest_plot_pooled_results.png"),
+    plot = forest_plot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+  
+  log_message("Forest plot saved")
+} else {
+  cat("No pooled results available for forest plot\n")
+}
+```
+
+## Method Comparison
+
+```{r method-comparison}
+if (length(pooled_results) > 0) {
+  cat("\n", paste(rep("=", 50), collapse = ""), "\n")
+  cat("METHOD COMPARISON\n")
+  cat(paste(rep("=", 50), collapse = ""), "\n\n")
+  
+  # Use twang_gbm as reference if available
+  reference_method <- if ("twang_gbm" %in% names(pooled_results)) "twang_gbm" else names(pooled_results)[1]
+  
+  ref_or <- pooled_results[[reference_method]]$or
+  cat(paste0("Reference method: ", reference_method, " (OR = ", sprintf("%.3f", ref_or), ")\n\n"))
+  
+  # Compare all methods
+  comparison_data <- data.frame()
+  for (method in names(pooled_results)) {
+    res <- pooled_results[[method]]
+    rel_diff <- 100 * (res$or / ref_or - 1)
+    
+    cat(sprintf("%-20s: OR = %.3f (%+.1f%% vs reference)\n",
+                method, res$or, rel_diff))
+    
+    comparison_data <- rbind(comparison_data, data.frame(
+      method = method,
+      or = res$or,
+      relative_diff = rel_diff,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  # Save comparison
+  write.csv(comparison_data, 
+            file.path(reanalysis_data_dir, "method_comparison.csv"),
+            row.names = FALSE)
+  
+  log_message("Method comparison saved")
+}
+```
+
+## Session Info
+
+```{r session-info}
+log_message("Pooling analysis complete")
+finalize_log(success = TRUE)
+sessionInfo()
+```

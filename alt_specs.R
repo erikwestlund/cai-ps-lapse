@@ -746,6 +746,66 @@ run_outcome_analysis <- function(ps_results, imputed_datasets, formula, config =
 # ============================================================================
 
 # Pool results across imputations using Rubin's rules
+# Pool results for a single method across imputations
+pool_single_method <- function(outcome_results, method_name) {
+  # Filter out unsuccessful results
+  valid_results <- outcome_results[sapply(outcome_results, function(x) 
+    !is.null(x) && x$success)]
+  
+  if (length(valid_results) == 0) {
+    return(list(success = FALSE, error = "No valid results to pool"))
+  }
+  
+  # Extract estimates and SEs
+  estimates <- sapply(valid_results, function(x) x$estimate)
+  ses <- sapply(valid_results, function(x) x$se)
+  
+  # Rubin's rules
+  m <- length(estimates)
+  q_bar <- mean(estimates)  # Combined estimate
+  u_bar <- mean(ses^2)       # Within-imputation variance
+  b <- var(estimates)        # Between-imputation variance
+  t <- u_bar + (1 + 1/m) * b # Total variance
+  se_pooled <- sqrt(t)
+  
+  # Degrees of freedom (Rubin-Barnard adjustment)
+  gamma <- ((1 + 1/m) * b) / t
+  df_old <- (m - 1) / gamma^2
+  
+  # Get average df from models if available
+  if (!is.null(valid_results[[1]]$df)) {
+    df_obs <- mean(sapply(valid_results, function(x) x$df))
+    df_adjusted <- (df_old * df_obs) / (df_old + df_obs)
+  } else {
+    df_adjusted <- df_old
+  }
+  
+  # Calculate confidence intervals and p-value
+  t_crit <- qt(0.975, df_adjusted)
+  ci_lower <- q_bar - t_crit * se_pooled
+  ci_upper <- q_bar + t_crit * se_pooled
+  t_stat <- q_bar / se_pooled
+  p_value <- 2 * pt(-abs(t_stat), df_adjusted)
+  
+  # Convert to odds ratio scale
+  or <- exp(q_bar)
+  or_lower <- exp(ci_lower)
+  or_upper <- exp(ci_upper)
+  
+  return(list(
+    method = method_name,
+    estimate = q_bar,
+    se = se_pooled,
+    or = or,
+    ci_lower = or_lower,
+    ci_upper = or_upper,
+    p_value = p_value,
+    n_imputations = m,
+    df = df_adjusted,
+    success = TRUE
+  ))
+}
+
 pool_results <- function(outcome_results) {
   # Filter out unsuccessful results
   valid_results <- outcome_results[sapply(outcome_results, function(x) 

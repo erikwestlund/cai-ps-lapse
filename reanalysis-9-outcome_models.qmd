@@ -1,0 +1,304 @@
+---
+title: "Reanalysis Step 9: Fit Outcome Models"
+subtitle: "Fit outcome models for all propensity score methods across imputations"
+author: "Erik Westlund"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")  # Load formula definitions and helper functions
+source("alt_specs.R")  # Load strategy pattern implementation
+setup_analysis(seed = 2025)
+
+library(ggplot2)
+library(knitr)
+
+# Initialize logging
+log_file <- init_log("alternative_ps_methods")
+
+# Check for required files
+required_files <- c(
+  "imputed_datasets.rds",
+  "variable_lists.rds"
+)
+
+missing_files <- c()
+for (file in required_files) {
+  if (!file.exists(file.path(reanalysis_data_dir, file))) {
+    missing_files <- c(missing_files, file)
+  }
+}
+
+if (length(missing_files) > 0) {
+  stop(paste("Required files not found. Please run previous steps first:\n",
+             "- Step 1 (Data Preparation) creates: variable_lists.rds\n",
+             "- Step 2 (Multiple Imputation) creates: imputed_datasets.rds\n",
+             "Missing files:", paste(missing_files, collapse = ", ")))
+}
+
+# Load imputed datasets
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_imputations <- length(imputed_datasets)
+
+# Load variable lists
+variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
+
+# ANALYSIS MODE: "test" or "final"
+analysis_mode <- "final"  # Change to "test" for quick testing with 2 imputations
+
+# Get configuration based on mode
+config <- get_analysis_config(analysis_mode)
+
+# Cache configuration
+use_cache <- TRUE
+cache_dir <- file.path(reanalysis_data_dir, "ps_cache")  # Now using unified ps_cache
+outcome_cache_dir <- file.path(reanalysis_data_dir, "outcome_cache")  # Separate outcome cache
+
+log_message(paste0("Analysis mode: ", analysis_mode))
+log_message(paste0("Processing up to ", config$n_imputations, " of ", n_imputations, " available imputations"))
+log_message(paste0("Caching: ", ifelse(use_cache, "ENABLED", "DISABLED")))
+log_message(paste0("Cache directory: ", cache_dir))
+```
+
+**Analysis Configuration:**
+- Mode: `r analysis_mode`
+- Maximum imputations to process: `r config$n_imputations`
+- Available imputations: `r n_imputations`
+- Cache: `r ifelse(use_cache, "Enabled", "Disabled")`
+
+## Define Formulas
+
+```{r define-formulas}
+# Get PS formula using reanalysis version (includes dr_severity)
+ps_formula <- get_matching_formula_reanalysis()
+
+# Get outcome formula
+outcome_formulas <- get_analysis_formulas_reanalysis()
+outcome_formula <- outcome_formulas$full
+
+log_message("Propensity Score Formula:")
+print(ps_formula)
+
+log_message("Outcome Formula:")
+print(outcome_formula)
+```
+
+## Available Methods
+
+```{r show-methods}
+# Get list of available methods
+available_methods <- names(get_ps_methods(config))
+
+cat("\nAvailable PS methods to run:\n")
+for (method in available_methods) {
+  cat(" -", method, "\n")
+}
+
+# Define all available methods
+all_methods <- c(
+  "nearest_glm",
+  "nearest_gam", 
+  "nearest_gbm",
+  "nearest_lasso",
+  "nearest_rpart",
+  "nearest_mahalanobis",
+  "subclass_glm",
+  "cbps",
+  "entropy",
+  "bart",
+  "twang_gbm"  # Will load from reanalysis-4 if available
+)
+
+# Force rerun flag - set to TRUE to reprocess all methods even if cached
+force_rerun <- FALSE  # Set to TRUE to rerun everything
+
+log_message(paste0("Will process up to ", length(all_methods), " methods"))
+log_message(paste0("Force rerun: ", ifelse(force_rerun, "YES", "NO")))
+```
+
+## Fit Outcome Models for All Methods
+
+```{r fit-outcome-models}
+# Only fit outcome models - no pooling in this step
+# Get PS methods configuration
+ps_methods <- get_ps_methods(config)
+
+# Track progress
+all_outcome_results <- list()
+success_count <- 0
+failure_count <- 0
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("FITTING OUTCOME MODELS\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+# Process each method
+for (method_name in all_methods) {
+  cat(paste0("\nProcessing ", method_name, "...\n"))
+  method_outcome_results <- list()
+  n_fitted <- 0
+  
+  # Process each imputation
+  for (i in 1:config$n_imputations) {
+    # Check if outcome model already cached
+    outcome_cache_file <- file.path(outcome_cache_dir, 
+                                   paste0("outcome_", method_name, "_imp", i, ".rds"))
+    
+    if (file.exists(outcome_cache_file) && !force_rerun) {
+      cat(paste0("  Imputation ", i, ": Using cached outcome model\n"))
+      method_outcome_results[[i]] <- readRDS(outcome_cache_file)
+      n_fitted <- n_fitted + 1
+      next
+    }
+    
+    # Load PS results
+    ps_cache_file <- file.path(cache_dir, paste0(method_name, "_imp", i, ".rds"))
+    
+    if (!file.exists(ps_cache_file)) {
+      cat(paste0("  Imputation ", i, ": No PS results found, skipping\n"))
+      next
+    }
+    
+    ps_result <- readRDS(ps_cache_file)
+    
+    if (!ps_result$success) {
+      cat(paste0("  Imputation ", i, ": PS method failed, skipping\n"))
+      next
+    }
+    
+    # Get the imputed dataset
+    imp_data <- imputed_datasets[[i]]
+    
+    # Fit outcome model
+    cat(paste0("  Imputation ", i, ": Fitting outcome model...\n"))
+    
+    outcome_result <- tryCatch({
+      fit_outcome_model_cached(
+        ps_result = ps_result,
+        outcome_formula = outcome_formula,
+        data = imp_data,
+        method_name = method_name,
+        imputation = i,
+        cache_dir = outcome_cache_dir
+      )
+    }, error = function(e) {
+      log_message(paste0("ERROR: ", method_name, " imp", i, " - ", e$message))
+      list(success = FALSE, error = e$message)
+    })
+    
+    if (outcome_result$success) {
+      method_outcome_results[[i]] <- outcome_result
+      n_fitted <- n_fitted + 1
+      cat(paste0("    ✓ Outcome model fitted and cached\n"))
+    } else {
+      cat(paste0("    ✗ Failed: ", outcome_result$error, "\n"))
+    }
+    
+    # Periodic garbage collection
+    if (i %% 5 == 0) {
+      gc(verbose = FALSE)
+    }
+  }
+  
+  # Store results for this method
+  all_outcome_results[[method_name]] <- method_outcome_results
+  
+  if (n_fitted > 0) {
+    success_count <- success_count + 1
+    cat(paste0("✓ ", method_name, ": Fitted ", n_fitted, " outcome models\n"))
+    log_message(paste0(method_name, ": Successfully fitted ", n_fitted, " outcome models"))
+  } else {
+    failure_count <- failure_count + 1
+    cat(paste0("✗ ", method_name, ": No outcome models fitted\n"))
+    log_message(paste0("WARNING: ", method_name, " - No outcome models fitted"))
+  }
+}
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("OUTCOME MODEL FITTING COMPLETE\n")
+cat(paste0("Successful methods: ", success_count, "\n"))
+cat(paste0("Failed methods: ", failure_count, "\n"))
+cat(paste(rep("=", 60), collapse = ""), "\n")
+
+# Save summary of what was fitted
+summary_info <- data.frame(
+  method = names(all_outcome_results),
+  n_models = sapply(all_outcome_results, length),
+  timestamp = Sys.time()
+)
+write.csv(summary_info, 
+          file.path(outcome_cache_dir, "outcome_fitting_summary.csv"),
+          row.names = FALSE)
+
+log_message(paste0("Outcome model fitting complete. ",
+                  "Successful methods: ", success_count,
+                  ", Failed methods: ", failure_count))
+```
+
+
+## Outcome Model Fitting Summary
+
+```{r outcome-summary}
+# Summarize what was fitted
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("OUTCOME MODEL FITTING SUMMARY\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+# Check what's in the outcome cache
+if (dir.exists(outcome_cache_dir)) {
+  outcome_files <- list.files(outcome_cache_dir, pattern = "outcome_.*_imp\\d+\\.rds")
+  
+  if (length(outcome_files) > 0) {
+    # Extract method names from filenames
+    methods_in_cache <- unique(gsub("outcome_(.*)_imp\\d+\\.rds", "\\1", outcome_files))
+    
+    cat("Methods with cached outcome models:\n")
+    for (method in sort(methods_in_cache)) {
+      method_files <- grep(paste0("outcome_", method, "_imp"), outcome_files, value = TRUE)
+      cat(sprintf("  %-20s: %d models\n", method, length(method_files)))
+    }
+    
+    cat(paste0("\nTotal outcome models cached: ", length(outcome_files), "\n"))
+  } else {
+    cat("No outcome models found in cache.\n")
+  }
+} else {
+  cat("Outcome cache directory does not exist.\n")
+}
+```
+
+## Summary
+
+This step fits outcome models for **`r length(all_methods)` different propensity score methods** across **`r config$n_imputations` multiply imputed datasets**.
+
+### Analysis Details:
+- **Estimand:** ATT (Average Treatment Effect in the Treated)
+- **Imputation method:** Multiple imputation using mice
+- **Outcome model:** Survey-weighted logistic regression with cluster-robust SEs
+- **Results saved to:** `outcome_cache/` directory
+
+### Next Steps:
+Run `reanalysis-10-pooling_results.qmd` to:
+1. Pool results across imputations using Rubin's rules
+2. Generate forest plots and comparison tables
+3. Create publication-ready summaries
+
+## Session Info
+
+```{r session-info}
+# Finalize logging
+log_message("Analysis completed successfully")
+finalize_log(success = TRUE)
+
+# Print session information
+sessionInfo()
+```
