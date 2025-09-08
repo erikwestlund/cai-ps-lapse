@@ -118,11 +118,27 @@ for (i in imps) {
         }
       }
       
+      # Try to extract propensity scores if available
+      ps_scores <- NULL
       if (!is.null(result$ps)) {
+        ps_scores <- result$ps
+      } else if (!is.null(result$ps_object)) {
+        # For WeightIt objects, try to extract ps if stored
+        if (inherits(result$ps_object, "weightit") && !is.null(result$ps_object$ps)) {
+          ps_scores <- result$ps_object$ps
+        } else if (inherits(result$ps_object, "ps")) {
+          # For twang objects
+          ps_scores <- result$ps_object$ps[, 1]  # Usually first column
+        }
+      }
+      
+      if (!is.null(ps_scores) && length(ps_scores) > 0 && !is.list(ps_scores)) {
         cat("  Propensity scores summary:\n")
-        cat("    Min:", round(min(result$ps), 4), "\n")
-        cat("    Max:", round(max(result$ps), 4), "\n")
-        cat("    Mean:", round(mean(result$ps), 4), "\n")
+        cat("    Min:", round(min(ps_scores), 4), "\n")
+        cat("    Max:", round(max(ps_scores), 4), "\n")
+        cat("    Mean:", round(mean(ps_scores), 4), "\n")
+      } else {
+        cat("  Propensity scores: Not directly available for this method\n")
       }
       
       if (!is.null(result$n_treated)) {
