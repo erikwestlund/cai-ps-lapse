@@ -1,0 +1,391 @@
+---
+title: "Step 12: Export Results"
+subtitle: "Export pooled results and key findings to various formats"
+author: "Analysis Team"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    self-contained: true
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+source("alt_specs.R")
+setup_analysis(seed = 2025)
+
+library(knitr)
+library(kableExtra)
+
+# Initialize logging
+log_file <- init_log("export_results")
+log_message("Starting results export")
+
+# Configuration
+pooled_cache_dir <- file.path(reanalysis_data_dir, "ps_cache", "pooled_results")
+export_dir <- file.path(reanalysis_data_dir, "exported_results")
+
+# Create export directory if it doesn't exist
+if (!dir.exists(export_dir)) {
+  dir.create(export_dir, recursive = TRUE)
+  log_message(paste0("Created export directory: ", export_dir))
+}
+```
+
+## Load Pooled Results
+
+```{r load-results}
+# Load the pooled results
+pooled_results_file <- file.path(pooled_cache_dir, "all_pooled_results.rds")
+
+if (!file.exists(pooled_results_file)) {
+  stop(paste0("Pooled results not found at: ", pooled_results_file, "\n",
+              "Please run reanalysis-10-pooling_results.qmd first"))
+}
+
+pooled_results <- readRDS(pooled_results_file)
+log_message(paste0("Loaded pooled results for ", length(pooled_results), " methods"))
+
+# Display structure of first method to show what we're working with
+cat("Structure of pooled results (first method):\n")
+str(pooled_results[[1]])
+```
+
+## Export 1: Main Results Table (CSV)
+
+```{r export-main-csv}
+# Convert nested list to data frame
+results_df <- do.call(rbind, lapply(names(pooled_results), function(method_name) {
+  res <- pooled_results[[method_name]]
+  if (res$success) {
+    data.frame(
+      method = method_name,
+      log_or = res$estimate,
+      se = res$se,
+      or = res$or,
+      ci_lower_log = res$ci_lower,
+      ci_upper_log = res$ci_upper,
+      or_ci_lower = res$or_ci_lower,
+      or_ci_upper = res$or_ci_upper,
+      p_value = res$p_value,
+      n_imputations = res$n_imputations,
+      df = res$df,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    data.frame(
+      method = method_name,
+      log_or = NA,
+      se = NA,
+      or = NA,
+      ci_lower_log = NA,
+      ci_upper_log = NA,
+      or_ci_lower = NA,
+      or_ci_upper = NA,
+      p_value = NA,
+      n_imputations = NA,
+      df = NA,
+      stringsAsFactors = FALSE
+    )
+  }
+}))
+
+# Sort by OR for better readability
+results_df <- results_df[order(results_df$or, na.last = TRUE), ]
+
+# Add rank column
+results_df$rank <- seq_len(nrow(results_df))
+
+# Reorder columns
+results_df <- results_df[, c("rank", "method", "or", "or_ci_lower", "or_ci_upper", 
+                              "p_value", "log_or", "se", "ci_lower_log", "ci_upper_log",
+                              "n_imputations", "df")]
+
+# Display the table
+kable(results_df[, c("rank", "method", "or", "or_ci_lower", "or_ci_upper", "p_value", "n_imputations")],
+      caption = "Pooled Results Summary",
+      col.names = c("Rank", "Method", "OR", "Lower CI", "Upper CI", "P-value", "N Imp"),
+      digits = c(0, 0, 3, 3, 3, 4, 0),
+      align = c("c", "l", "r", "r", "r", "r", "c"))
+
+# Save to CSV
+csv_file <- file.path(export_dir, "pooled_results_main.csv")
+write.csv(results_df, csv_file, row.names = FALSE)
+log_message(paste0("Exported main results to: ", csv_file))
+cat("\nMain results exported to:", csv_file, "\n")
+```
+
+## Export 2: Publication-Ready Table (CSV)
+
+```{r export-publication-csv}
+# Create publication-ready format with formatted strings
+pub_df <- data.frame(
+  Method = results_df$method,
+  `Odds Ratio` = sprintf("%.3f", results_df$or),
+  `95% CI` = sprintf("(%.3f, %.3f)", results_df$or_ci_lower, results_df$or_ci_upper),
+  `P-value` = ifelse(results_df$p_value < 0.001, "<0.001", sprintf("%.3f", results_df$p_value)),
+  `N Imputations` = results_df$n_imputations,
+  stringsAsFactors = FALSE
+)
+
+# Add significance stars
+pub_df$Significance <- ifelse(results_df$p_value < 0.001, "***",
+                              ifelse(results_df$p_value < 0.01, "**",
+                                    ifelse(results_df$p_value < 0.05, "*", "")))
+
+# Display
+kable(pub_df,
+      caption = "Publication-Ready Results Table",
+      col.names = c("Method", "OR", "95% CI", "P-value", "N", "Sig"))
+
+# Save to CSV
+pub_csv_file <- file.path(export_dir, "pooled_results_publication.csv")
+write.csv(pub_df, pub_csv_file, row.names = FALSE)
+log_message(paste0("Exported publication table to: ", pub_csv_file))
+cat("\nPublication table exported to:", pub_csv_file, "\n")
+```
+
+## Export 3: Method Comparison (CSV)
+
+```{r export-comparison}
+# Use twang_gbm as reference if available
+reference_method <- if ("twang_gbm" %in% results_df$method) "twang_gbm" else results_df$method[1]
+ref_or <- results_df$or[results_df$method == reference_method]
+
+# Calculate relative differences
+comparison_df <- data.frame(
+  method = results_df$method,
+  or = results_df$or,
+  or_ci = sprintf("(%.3f, %.3f)", results_df$or_ci_lower, results_df$or_ci_upper),
+  p_value = results_df$p_value,
+  relative_to_ref = results_df$or / ref_or,
+  percent_diff = 100 * (results_df$or / ref_or - 1),
+  abs_diff = results_df$or - ref_or,
+  stringsAsFactors = FALSE
+)
+
+# Sort by relative difference
+comparison_df <- comparison_df[order(comparison_df$relative_to_ref), ]
+
+# Display
+kable(comparison_df[, c("method", "or", "relative_to_ref", "percent_diff")],
+      caption = paste0("Method Comparison (Reference: ", reference_method, ")"),
+      col.names = c("Method", "OR", "Relative to Ref", "% Difference"),
+      digits = c(0, 3, 3, 1),
+      align = c("l", "r", "r", "r"))
+
+# Save to CSV
+comp_csv_file <- file.path(export_dir, paste0("method_comparison_vs_", reference_method, ".csv"))
+write.csv(comparison_df, comp_csv_file, row.names = FALSE)
+log_message(paste0("Exported comparison to: ", comp_csv_file))
+cat("\nMethod comparison exported to:", comp_csv_file, "\n")
+```
+
+## Export 4: Summary Statistics (TXT)
+
+```{r export-summary}
+# Create summary text file
+summary_lines <- c(
+  "================================================================================",
+  "PROPENSITY SCORE METHODS - POOLED RESULTS SUMMARY",
+  "================================================================================",
+  paste0("Generated: ", Sys.Date()),
+  paste0("Analysis: Multiple Imputation with Rubin's Rules"),
+  "",
+  "METHODS ANALYZED:",
+  paste0("  Total methods: ", nrow(results_df)),
+  paste0("  Successful pooling: ", sum(!is.na(results_df$or))),
+  paste0("  Failed pooling: ", sum(is.na(results_df$or))),
+  "",
+  "EFFECT SIZE SUMMARY:",
+  paste0("  Minimum OR: ", sprintf("%.3f", min(results_df$or, na.rm = TRUE)),
+         " (", results_df$method[which.min(results_df$or)], ")"),
+  paste0("  Maximum OR: ", sprintf("%.3f", max(results_df$or, na.rm = TRUE)),
+         " (", results_df$method[which.max(results_df$or)], ")"),
+  paste0("  Median OR: ", sprintf("%.3f", median(results_df$or, na.rm = TRUE))),
+  paste0("  Mean OR: ", sprintf("%.3f", mean(results_df$or, na.rm = TRUE))),
+  paste0("  SD of ORs: ", sprintf("%.3f", sd(results_df$or, na.rm = TRUE))),
+  "",
+  "STATISTICAL SIGNIFICANCE:",
+  paste0("  P < 0.05: ", sum(results_df$p_value < 0.05, na.rm = TRUE), " methods"),
+  paste0("  P < 0.01: ", sum(results_df$p_value < 0.01, na.rm = TRUE), " methods"),
+  paste0("  P < 0.001: ", sum(results_df$p_value < 0.001, na.rm = TRUE), " methods"),
+  "",
+  "REFERENCE METHOD (twang_gbm):"
+)
+
+if ("twang_gbm" %in% results_df$method) {
+  twang_row <- results_df[results_df$method == "twang_gbm", ]
+  summary_lines <- c(summary_lines,
+    paste0("  OR: ", sprintf("%.3f", twang_row$or)),
+    paste0("  95% CI: (", sprintf("%.3f", twang_row$or_ci_lower), 
+           ", ", sprintf("%.3f", twang_row$or_ci_upper), ")"),
+    paste0("  P-value: ", sprintf("%.4f", twang_row$p_value)),
+    "",
+    "METHODS WITHIN 10% OF REFERENCE:",
+    paste0("  ", sum(abs(results_df$or / twang_row$or - 1) <= 0.10, na.rm = TRUE),
+           " of ", sum(!is.na(results_df$or)), " methods")
+  )
+} else {
+  summary_lines <- c(summary_lines, "  twang_gbm not found in results")
+}
+
+summary_lines <- c(summary_lines,
+  "",
+  "TOP 3 METHODS BY EFFECT SIZE:",
+  paste0("  1. ", results_df$method[nrow(results_df)], 
+         " (OR = ", sprintf("%.3f", results_df$or[nrow(results_df)]), ")"),
+  paste0("  2. ", results_df$method[nrow(results_df)-1], 
+         " (OR = ", sprintf("%.3f", results_df$or[nrow(results_df)-1]), ")"),
+  paste0("  3. ", results_df$method[nrow(results_df)-2], 
+         " (OR = ", sprintf("%.3f", results_df$or[nrow(results_df)-2]), ")"),
+  "",
+  "================================================================================",
+  "END OF SUMMARY",
+  "================================================================================"
+)
+
+# Display summary
+cat(paste(summary_lines, collapse = "\n"))
+
+# Save to text file
+summary_file <- file.path(export_dir, "results_summary.txt")
+writeLines(summary_lines, summary_file)
+log_message(paste0("Exported summary to: ", summary_file))
+cat("\n\nSummary exported to:", summary_file, "\n")
+```
+
+## Export 5: Excel Workbook (Multiple Sheets)
+
+```{r export-excel}
+#| eval: false
+# Note: Set eval: true if openxlsx package is available
+
+library(openxlsx)
+
+# Create workbook
+wb <- createWorkbook()
+
+# Sheet 1: Main Results
+addWorksheet(wb, "Main Results")
+writeData(wb, "Main Results", results_df)
+
+# Sheet 2: Publication Format
+addWorksheet(wb, "Publication")
+writeData(wb, "Publication", pub_df)
+
+# Sheet 3: Method Comparison
+addWorksheet(wb, "Comparison")
+writeData(wb, "Comparison", comparison_df)
+
+# Sheet 4: Summary Statistics
+summary_stats <- data.frame(
+  Statistic = c("N Methods", "Min OR", "Max OR", "Median OR", "Mean OR", "SD OR",
+                "P < 0.05", "P < 0.01", "P < 0.001"),
+  Value = c(nrow(results_df),
+           sprintf("%.3f", min(results_df$or, na.rm = TRUE)),
+           sprintf("%.3f", max(results_df$or, na.rm = TRUE)),
+           sprintf("%.3f", median(results_df$or, na.rm = TRUE)),
+           sprintf("%.3f", mean(results_df$or, na.rm = TRUE)),
+           sprintf("%.3f", sd(results_df$or, na.rm = TRUE)),
+           sum(results_df$p_value < 0.05, na.rm = TRUE),
+           sum(results_df$p_value < 0.01, na.rm = TRUE),
+           sum(results_df$p_value < 0.001, na.rm = TRUE))
+)
+addWorksheet(wb, "Summary")
+writeData(wb, "Summary", summary_stats)
+
+# Save workbook
+excel_file <- file.path(export_dir, "pooled_results_complete.xlsx")
+saveWorkbook(wb, excel_file, overwrite = TRUE)
+log_message(paste0("Exported Excel workbook to: ", excel_file))
+cat("\nExcel workbook exported to:", excel_file, "\n")
+```
+
+## Export 6: LaTeX Table
+
+```{r export-latex}
+# Create LaTeX table for publication
+latex_table <- c(
+  "\\begin{table}[ht]",
+  "\\centering",
+  "\\caption{Pooled Effect Estimates Across Propensity Score Methods}",
+  "\\label{tab:ps_methods}",
+  "\\begin{tabular}{lcccc}",
+  "\\hline",
+  "Method & OR & 95\\% CI & P-value & N \\\\",
+  "\\hline"
+)
+
+for (i in 1:nrow(pub_df)) {
+  sig_stars <- pub_df$Significance[i]
+  latex_table <- c(latex_table,
+    paste0(gsub("_", "\\\\_", pub_df$Method[i]), " & ",
+           pub_df$`Odds Ratio`[i], sig_stars, " & ",
+           pub_df$`95% CI`[i], " & ",
+           pub_df$`P-value`[i], " & ",
+           pub_df$`N Imputations`[i], " \\\\")
+  )
+}
+
+latex_table <- c(latex_table,
+  "\\hline",
+  "\\end{tabular}",
+  "\\begin{tablenotes}",
+  "\\small",
+  "\\item OR = Odds Ratio; CI = Confidence Interval; N = Number of imputations",
+  "\\item * p < 0.05, ** p < 0.01, *** p < 0.001",
+  "\\item All methods use ATT (Average Treatment Effect in the Treated) estimand",
+  "\\end{tablenotes}",
+  "\\end{table}"
+)
+
+# Display first few lines
+cat("LaTeX table (first 15 lines):\n")
+cat(paste(latex_table[1:min(15, length(latex_table))], collapse = "\n"))
+
+# Save to file
+latex_file <- file.path(export_dir, "pooled_results_table.tex")
+writeLines(latex_table, latex_file)
+log_message(paste0("Exported LaTeX table to: ", latex_file))
+cat("\n\nLaTeX table exported to:", latex_file, "\n")
+```
+
+## File Summary
+
+```{r file-summary}
+# List all exported files
+exported_files <- list.files(export_dir, full.names = FALSE)
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("EXPORTED FILES SUMMARY\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+cat("Location:", export_dir, "\n\n")
+cat("Files created:\n")
+for (file in exported_files) {
+  file_path <- file.path(export_dir, file)
+  file_size <- file.info(file_path)$size
+  cat(sprintf("  %-40s %8s bytes\n", file, format(file_size, big.mark = ",")))
+}
+
+cat("\nTotal files:", length(exported_files), "\n")
+
+log_message(paste0("Export complete. Created ", length(exported_files), " files"))
+```
+
+## Session Info
+
+```{r session-info}
+log_message("Results export complete")
+finalize_log(success = TRUE)
+sessionInfo()
+```
