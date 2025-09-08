@@ -31,7 +31,7 @@ log_message("Starting results export")
 
 # Configuration
 pooled_cache_dir <- file.path(reanalysis_data_dir, "ps_cache", "pooled_results")
-marginal_effects_dir <- file.path(reanalysis_data_dir, "marginal_effects_cache")
+marginal_effects_dir <- file.path(reanalysis_data_dir, "marginal_effects")
 forest_plots_dir <- file.path(reanalysis_data_dir, "forest_plots")
 export_dir <- file.path(reanalysis_data_dir, "exported_results")
 

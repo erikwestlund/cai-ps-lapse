@@ -37,7 +37,7 @@ log_file <- init_log("forest_plots")
 log_message("Starting forest plot generation")
 
 # Configuration
-marginal_effects_dir <- file.path(reanalysis_data_dir, "marginal_effects_cache")
+marginal_effects_dir <- file.path(reanalysis_data_dir, "marginal_effects")
 pooled_cache_dir <- file.path(reanalysis_data_dir, "ps_cache", "pooled_results")
 plots_dir <- file.path(reanalysis_data_dir, "forest_plots")
 
@@ -55,7 +55,7 @@ if (file.exists(mfx_results_file)) {
   pooled_mfx <- readRDS(mfx_results_file)
   cat("✓ Loaded marginal effects results\n")
 } else {
-  cat("✗ Marginal effects results not found. Run reanalysis-13 first.\n")
+  cat("✗ Marginal effects results not found. Run reanalysis-12-marginal_effects.qmd first.\n")
   pooled_mfx <- list()
 }
 
