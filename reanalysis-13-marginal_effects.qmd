@@ -1,0 +1,503 @@
+---
+title: "Step 13: Marginal Effects Analysis with Multiple Imputation"
+subtitle: "Calculate average marginal effects for twang model across subgroups"
+author: "Analysis Team"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    self-contained: true
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+source("alt_specs.R")
+setup_analysis(seed = 2025)
+
+library(margins)
+library(survey)
+library(knitr)
+library(kableExtra)
+
+# Initialize logging
+log_file <- init_log("marginal_effects")
+log_message("Starting marginal effects analysis for twang models")
+
+# Configuration
+cache_dir <- file.path(reanalysis_data_dir, "ps_cache")
+marginal_effects_dir <- file.path(reanalysis_data_dir, "marginal_effects")
+
+# Create directory for marginal effects results
+if (!dir.exists(marginal_effects_dir)) {
+  dir.create(marginal_effects_dir, recursive = TRUE)
+  log_message(paste0("Created marginal effects directory: ", marginal_effects_dir))
+}
+
+# Load imputed datasets
+imputed_datasets <- readRDS(file.path(reanalysis_data_dir, "imputed_datasets.rds"))
+n_imputations <- length(imputed_datasets)
+
+# Load variable lists
+variable_lists <- readRDS(file.path(reanalysis_data_dir, "variable_lists.rds"))
+
+# Get outcome formula
+outcome_formulas <- get_analysis_formulas_reanalysis()
+outcome_formula <- outcome_formulas$full
+```
+
+## Define Subgroups
+
+```{r define-subgroups}
+# Define the subgroups of interest (matching analysis.Rmd)
+subgroups <- list(
+  overall = list(
+    name = "Overall (Average Marginal Effect)",
+    subset_condition = NULL,  # No subsetting for overall
+    description = "Average marginal effect across entire sample"
+  ),
+  
+  pdr_any_tx = list(
+    name = "PDR on any treatment",
+    subset_condition = expression(PDR == "Present" & 
+                                 (PRP_flag == 1 | anti_VEGF == 1 | 
+                                  focal_laser_flag == 1 | other_inject == 1)),
+    description = "Patients with PDR receiving any treatment"
+  ),
+  
+  pdr_anti_vegf_only = list(
+    name = "PDR on anti-VEGF only",
+    subset_condition = expression(PDR == "Present" & 
+                                 PRP_flag == 0 & anti_VEGF == 1 & 
+                                 focal_laser_flag == 0 & other_inject == 0),
+    description = "Patients with PDR receiving anti-VEGF only"
+  ),
+  
+  pdr_prp_only = list(
+    name = "PDR on PRP only",
+    subset_condition = expression(PDR == "Present" & 
+                                 PRP_flag == 1 & anti_VEGF == 0 & 
+                                 focal_laser_flag == 0 & other_inject == 0),
+    description = "Patients with PDR receiving PRP only"
+  )
+)
+
+# Display subgroup definitions
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("SUBGROUPS FOR MARGINAL EFFECTS ANALYSIS\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+for (sg_name in names(subgroups)) {
+  sg <- subgroups[[sg_name]]
+  cat(paste0("- ", sg$name, "\n"))
+  cat(paste0("  ", sg$description, "\n\n"))
+}
+```
+
+## Test on Single Imputation
+
+```{r test-single}
+# Test the approach on a single imputation first
+test_imp <- 1
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat(paste0("TESTING ON IMPUTATION ", test_imp, "\n"))
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+# Load twang weights for this imputation
+twang_file <- file.path(cache_dir, paste0("twang_gbm_imp", test_imp, ".rds"))
+if (!file.exists(twang_file)) {
+  stop(paste0("twang results not found for imputation ", test_imp, 
+              ". Please run reanalysis-4-propensity_scores.qmd first"))
+}
+
+twang_result <- readRDS(twang_file)
+test_data <- imputed_datasets[[test_imp]]
+
+# Add weights to data
+test_data$twang_att_w <- twang_result$weights
+
+# Fit the outcome model with weights
+design <- svydesign(ids = ~e_mrn_deidentified, 
+                   weights = ~twang_att_w, 
+                   data = test_data)
+model <- svyglm(formula = outcome_formula, 
+               design = design, 
+               family = quasibinomial())
+
+# Calculate marginal effects for each subgroup
+test_results <- list()
+
+for (sg_name in names(subgroups)) {
+  sg <- subgroups[[sg_name]]
+  cat(paste0("\nCalculating marginal effects for: ", sg$name, "\n"))
+  
+  if (is.null(sg$subset_condition)) {
+    # Overall marginal effect
+    mfx <- margins(model, design = design, variables = "ever_lapse")
+    test_results[[sg_name]] <- summary(mfx)
+    cat(paste0("  N = ", nrow(test_data), "\n"))
+  } else {
+    # Subset the data and design
+    subset_data <- subset(test_data, eval(sg$subset_condition))
+    subset_design <- subset(design, eval(sg$subset_condition))
+    
+    if (nrow(subset_data) > 0) {
+      mfx <- margins(model, 
+                    design = subset_design, 
+                    data = subset_data,
+                    variables = "ever_lapse")
+      test_results[[sg_name]] <- summary(mfx)
+      cat(paste0("  N = ", nrow(subset_data), "\n"))
+    } else {
+      cat("  WARNING: No observations in this subgroup\n")
+      test_results[[sg_name]] <- NULL
+    }
+  }
+  
+  # Display results if available
+  if (!is.null(test_results[[sg_name]])) {
+    mfx_summary <- test_results[[sg_name]]
+    if ("ever_lapse" %in% rownames(mfx_summary)) {
+      ame <- mfx_summary["ever_lapse", "AME"]
+      se <- mfx_summary["ever_lapse", "SE"]
+      cat(sprintf("  AME = %.4f (SE = %.4f)\n", ame, se))
+    }
+  }
+}
+
+cat("\n✓ Test on single imputation successful\n")
+```
+
+## Calculate Marginal Effects for All Imputations
+
+```{r calculate-all}
+# Now run for all imputations
+all_mfx_results <- list()
+
+# Initialize storage for each subgroup
+for (sg_name in names(subgroups)) {
+  all_mfx_results[[sg_name]] <- list()
+}
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("CALCULATING MARGINAL EFFECTS ACROSS ALL IMPUTATIONS\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+# Process each imputation
+for (i in 1:n_imputations) {
+  if (i %% 10 == 1) {
+    cat(paste0("Processing imputations ", i, "-", min(i+9, n_imputations), "...\n"))
+  }
+  
+  # Load twang weights
+  twang_file <- file.path(cache_dir, paste0("twang_gbm_imp", i, ".rds"))
+  if (!file.exists(twang_file)) {
+    cat(paste0("  WARNING: Skipping imputation ", i, " - twang results not found\n"))
+    next
+  }
+  
+  twang_result <- readRDS(twang_file)
+  imp_data <- imputed_datasets[[i]]
+  imp_data$twang_att_w <- twang_result$weights
+  
+  # Create survey design and fit model
+  design <- svydesign(ids = ~e_mrn_deidentified, 
+                     weights = ~twang_att_w, 
+                     data = imp_data)
+  
+  tryCatch({
+    model <- svyglm(formula = outcome_formula, 
+                   design = design, 
+                   family = quasibinomial())
+    
+    # Calculate marginal effects for each subgroup
+    for (sg_name in names(subgroups)) {
+      sg <- subgroups[[sg_name]]
+      
+      if (is.null(sg$subset_condition)) {
+        # Overall marginal effect
+        mfx <- margins(model, design = design, variables = "ever_lapse")
+        mfx_summary <- summary(mfx)
+      } else {
+        # Subset marginal effect
+        subset_data <- subset(imp_data, eval(sg$subset_condition))
+        
+        if (nrow(subset_data) > 0) {
+          subset_design <- subset(design, eval(sg$subset_condition))
+          mfx <- margins(model, 
+                        design = subset_design, 
+                        data = subset_data,
+                        variables = "ever_lapse")
+          mfx_summary <- summary(mfx)
+        } else {
+          mfx_summary <- NULL
+        }
+      }
+      
+      # Store results
+      if (!is.null(mfx_summary) && "ever_lapse" %in% rownames(mfx_summary)) {
+        all_mfx_results[[sg_name]][[i]] <- list(
+          ame = mfx_summary["ever_lapse", "AME"],
+          se = mfx_summary["ever_lapse", "SE"],
+          n = ifelse(is.null(sg$subset_condition), 
+                    nrow(imp_data),
+                    nrow(subset(imp_data, eval(sg$subset_condition)))),
+          success = TRUE
+        )
+      } else {
+        all_mfx_results[[sg_name]][[i]] <- list(success = FALSE)
+      }
+    }
+    
+  }, error = function(e) {
+    cat(paste0("  ERROR in imputation ", i, ": ", e$message, "\n"))
+    for (sg_name in names(subgroups)) {
+      all_mfx_results[[sg_name]][[i]] <- list(success = FALSE, error = e$message)
+    }
+  })
+  
+  # Periodic garbage collection
+  if (i %% 10 == 0) {
+    gc(verbose = FALSE)
+  }
+}
+
+cat("\n✓ Marginal effects calculation complete\n")
+
+# Save intermediate results
+saveRDS(all_mfx_results, file.path(marginal_effects_dir, "all_mfx_results.rds"))
+log_message("Saved all marginal effects results")
+```
+
+## Pool Marginal Effects Using Rubin's Rules
+
+```{r pool-mfx}
+# Pool the marginal effects across imputations
+pooled_mfx <- list()
+
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("POOLING MARGINAL EFFECTS USING RUBIN'S RULES\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+for (sg_name in names(subgroups)) {
+  sg <- subgroups[[sg_name]]
+  cat(paste0("\n", sg$name, ":\n"))
+  
+  # Extract successful results
+  sg_results <- all_mfx_results[[sg_name]]
+  valid_results <- sg_results[sapply(sg_results, function(x) 
+    !is.null(x) && x$success)]
+  
+  if (length(valid_results) < 2) {
+    cat("  Insufficient valid imputations for pooling\n")
+    pooled_mfx[[sg_name]] <- list(success = FALSE)
+    next
+  }
+  
+  # Extract AMEs and SEs
+  ames <- sapply(valid_results, function(x) x$ame)
+  ses <- sapply(valid_results, function(x) x$se)
+  ns <- sapply(valid_results, function(x) x$n)
+  
+  # Apply Rubin's rules
+  m <- length(ames)
+  q_bar <- mean(ames)         # Combined estimate
+  u_bar <- mean(ses^2)        # Within-imputation variance
+  b <- var(ames)              # Between-imputation variance
+  t <- u_bar + (1 + 1/m) * b  # Total variance
+  se_pooled <- sqrt(t)
+  
+  # Degrees of freedom
+  gamma <- ((1 + 1/m) * b) / t
+  df <- (m - 1) / gamma^2
+  
+  # Confidence intervals and p-value
+  t_crit <- qt(0.975, df)
+  ci_lower <- q_bar - t_crit * se_pooled
+  ci_upper <- q_bar + t_crit * se_pooled
+  z_stat <- q_bar / se_pooled
+  p_value <- 2 * pnorm(-abs(z_stat))
+  
+  # Average sample size
+  avg_n <- mean(ns)
+  
+  # Store pooled results
+  pooled_mfx[[sg_name]] <- list(
+    name = sg$name,
+    ame = q_bar,
+    se = se_pooled,
+    ci_lower = ci_lower,
+    ci_upper = ci_upper,
+    z_stat = z_stat,
+    p_value = p_value,
+    n_imputations = m,
+    avg_n = avg_n,
+    df = df,
+    success = TRUE
+  )
+  
+  # Display results
+  cat(sprintf("  AME = %.4f (SE = %.4f)\n", q_bar, se_pooled))
+  cat(sprintf("  95%% CI: (%.4f, %.4f)\n", ci_lower, ci_upper))
+  cat(sprintf("  P-value = %.4f\n", p_value))
+  cat(sprintf("  N imputations = %d\n", m))
+  cat(sprintf("  Average N = %.0f\n", avg_n))
+}
+
+# Save pooled results
+saveRDS(pooled_mfx, file.path(marginal_effects_dir, "pooled_mfx_results.rds"))
+log_message("Saved pooled marginal effects")
+```
+
+## Summary Table
+
+```{r summary-table}
+# Create summary table
+summary_df <- do.call(rbind, lapply(names(pooled_mfx), function(sg_name) {
+  res <- pooled_mfx[[sg_name]]
+  if (res$success) {
+    data.frame(
+      Subgroup = res$name,
+      AME = sprintf("%.4f", res$ame),
+      SE = sprintf("%.4f", res$se),
+      `95% CI` = sprintf("(%.4f, %.4f)", res$ci_lower, res$ci_upper),
+      `P-value` = ifelse(res$p_value < 0.001, "<0.001", 
+                         sprintf("%.3f", res$p_value)),
+      `Avg N` = sprintf("%.0f", res$avg_n),
+      `N Imp` = res$n_imputations,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  }
+}))
+
+# Display table
+kable(summary_df,
+      caption = "Pooled Average Marginal Effects of Lapsing by Subgroup",
+      align = c("l", "r", "r", "c", "r", "r", "r")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  add_header_above(c(" " = 1, 
+                     "Marginal Effect" = 2,
+                     "Statistical Inference" = 2,
+                     "Sample" = 2))
+
+# Save to CSV
+write.csv(summary_df, 
+          file.path(marginal_effects_dir, "marginal_effects_summary.csv"),
+          row.names = FALSE)
+log_message("Saved summary table to CSV")
+```
+
+## Interpretation
+
+```{r interpretation}
+cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+cat("INTERPRETATION OF RESULTS\n")
+cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+cat("Average Marginal Effect (AME) represents the average change in\n")
+cat("probability of vision impairment/blindness associated with lapsing\n")
+cat("from care, holding all other variables at their observed values.\n\n")
+
+cat("Key findings:\n\n")
+
+# Overall effect
+if ("overall" %in% names(pooled_mfx) && pooled_mfx$overall$success) {
+  overall_ame <- pooled_mfx$overall$ame
+  overall_pct <- overall_ame * 100
+  cat(sprintf("1. Overall: Lapsing is associated with a %.1f percentage point\n", overall_pct))
+  cat(sprintf("   increase in probability of vision impairment (AME = %.4f)\n\n", overall_ame))
+}
+
+# PDR subgroups
+pdr_groups <- c("pdr_any_tx", "pdr_anti_vegf_only", "pdr_prp_only")
+for (sg_name in pdr_groups) {
+  if (sg_name %in% names(pooled_mfx) && pooled_mfx[[sg_name]]$success) {
+    sg <- pooled_mfx[[sg_name]]
+    pct_change <- sg$ame * 100
+    cat(sprintf("2. %s:\n", sg$name))
+    cat(sprintf("   AME = %.4f (%.1f percentage points)\n", sg$ame, pct_change))
+    cat(sprintf("   Average N = %.0f patients\n\n", sg$avg_n))
+  }
+}
+
+# Statistical significance
+cat("Statistical significance (p < 0.05):\n")
+for (sg_name in names(pooled_mfx)) {
+  if (pooled_mfx[[sg_name]]$success) {
+    sg <- pooled_mfx[[sg_name]]
+    sig <- ifelse(sg$p_value < 0.05, "Yes", "No")
+    cat(sprintf("  - %s: %s (p = %.4f)\n", sg$name, sig, sg$p_value))
+  }
+}
+```
+
+## Export Results
+
+```{r export}
+# Create comprehensive export
+export_list <- list(
+  pooled_results = pooled_mfx,
+  summary_table = summary_df,
+  metadata = list(
+    n_imputations = n_imputations,
+    subgroups = names(subgroups),
+    method = "twang_gbm",
+    formula = deparse(outcome_formula),
+    date = Sys.Date()
+  )
+)
+
+# Save as RDS for R users
+saveRDS(export_list, 
+        file.path(marginal_effects_dir, "marginal_effects_export.rds"))
+
+# Create text summary for sharing
+summary_text <- c(
+  "MARGINAL EFFECTS ANALYSIS RESULTS",
+  paste(rep("=", 60), collapse = ""),
+  paste0("Method: twang GBM with IPW"),
+  paste0("Number of imputations: ", n_imputations),
+  paste0("Date: ", Sys.Date()),
+  "",
+  "POOLED AVERAGE MARGINAL EFFECTS:",
+  paste(rep("-", 40), collapse = "")
+)
+
+for (sg_name in names(pooled_mfx)) {
+  if (pooled_mfx[[sg_name]]$success) {
+    sg <- pooled_mfx[[sg_name]]
+    summary_text <- c(summary_text,
+      "",
+      sg$name,
+      sprintf("  AME: %.4f (SE = %.4f)", sg$ame, sg$se),
+      sprintf("  95%% CI: (%.4f, %.4f)", sg$ci_lower, sg$ci_upper),
+      sprintf("  P-value: %.4f", sg$p_value),
+      sprintf("  Average N: %.0f", sg$avg_n)
+    )
+  }
+}
+
+# Save text summary
+writeLines(summary_text, 
+          file.path(marginal_effects_dir, "marginal_effects_summary.txt"))
+
+log_message("Results exported")
+cat("\n✓ Results exported to:", marginal_effects_dir, "\n")
+```
+
+## Session Info
+
+```{r session-info}
+log_message("Marginal effects analysis complete")
+finalize_log(success = TRUE)
+sessionInfo()
+```
