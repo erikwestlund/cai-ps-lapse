@@ -56,16 +56,18 @@ outcome_formula <- outcome_formulas$full
 ## Define Subgroups
 
 ```{r define-subgroups}
-# Define the subgroups of interest (matching analysis.Rmd)
+# Define all subgroups from twang-analysis.Rmd
 subgroups <- list(
+  # Overall population
   overall = list(
-    name = "Overall (Average Marginal Effect)",
+    name = "Overall Population",
     subset_condition = NULL,  # No subsetting for overall
     description = "Average marginal effect across entire sample"
   ),
   
+  # PDR subgroups - using dr_severity == "PDR"
   pdr_any_tx = list(
-    name = "PDR on any treatment",
+    name = "PDR, any treatment",
     subset_condition = expression(dr_severity == "PDR" & 
                                  (PRP_flag == 1 | anti_VEGF == 1 | 
                                   focal_laser_flag == 1 | other_inject == 1)),
@@ -73,7 +75,7 @@ subgroups <- list(
   ),
   
   pdr_anti_vegf_only = list(
-    name = "PDR on anti-VEGF only",
+    name = "PDR, on anti-VEGF only",
     subset_condition = expression(dr_severity == "PDR" & 
                                  PRP_flag == 0 & anti_VEGF == 1 & 
                                  focal_laser_flag == 0 & other_inject == 0),
@@ -81,12 +83,49 @@ subgroups <- list(
   ),
   
   pdr_prp_only = list(
-    name = "PDR on PRP only",
+    name = "PDR, on PRP only",
     subset_condition = expression(dr_severity == "PDR" & 
                                  PRP_flag == 1 & anti_VEGF == 0 & 
                                  focal_laser_flag == 0 & other_inject == 0),
     description = "Patients with PDR receiving PRP only"
+  ),
+  
+  # No DR or NPDR combined groups - using dr_severity levels
+  npdr_nodr_no_tx = list(
+    name = "No DR or NPDR, no treatment",
+    subset_condition = expression(dr_severity %in% c("No_DR", "NPDR") & 
+                                 (PRP_flag == 0 & anti_VEGF == 0 & 
+                                  focal_laser_flag == 0 & other_inject == 0)),
+    description = "Patients with No DR or NPDR not on treatment"
+  ),
+  
+  npdr_nodr_any_tx = list(
+    name = "No DR or NPDR, any treatment",
+    subset_condition = expression(dr_severity %in% c("No_DR", "NPDR") & 
+                                 (PRP_flag == 1 | anti_VEGF == 1 | 
+                                  focal_laser_flag == 1 | other_inject == 1)),
+    description = "Patients with No DR or NPDR on any treatment"
+  ),
+  
+  # NPDR overall groups - using dr_severity == "NPDR"
+  npdr_no_tx = list(
+    name = "NPDR, no treatment",
+    subset_condition = expression(dr_severity == "NPDR" & 
+                                 (PRP_flag == 0 & anti_VEGF == 0 & 
+                                  focal_laser_flag == 0 & other_inject == 0)),
+    description = "Patients with NPDR not on treatment"
+  ),
+  
+  npdr_any_tx = list(
+    name = "NPDR, any treatment",
+    subset_condition = expression(dr_severity == "NPDR" & 
+                                 (PRP_flag == 1 | anti_VEGF == 1 | 
+                                  focal_laser_flag == 1 | other_inject == 1)),
+    description = "Patients with NPDR on any treatment"
   )
+  
+  # Note: NPDR severity-specific subgroups (Mild/Moderate/Severe) removed
+  # because dr_severity was imputed at coarse level (No_DR/NPDR/PDR only)
 )
 
 # Display subgroup definitions
@@ -438,6 +477,151 @@ for (sg_name in names(pooled_mfx)) {
     cat(sprintf("  - %s: %s (p = %.4f)\n", sg$name, sig, sg$p_value))
   }
 }
+```
+
+## Forest Plots
+
+```{r forest-plots}
+#| fig.width: 10
+#| fig.height: 8
+
+# Prepare data for forest plot
+forest_data <- do.call(rbind, lapply(names(pooled_mfx), function(sg_name) {
+  res <- pooled_mfx[[sg_name]]
+  if (res$success) {
+    data.frame(
+      label = res$name,
+      AME = res$ame,
+      SE = res$se,
+      Lower = res$ci_lower,
+      Upper = res$ci_upper,
+      p = res$p_value,
+      n = res$avg_n,
+      group_type = ifelse(sg_name == "overall", "overall", "subgroup"),
+      stringsAsFactors = FALSE
+    )
+  }
+}))
+
+# Add sample sizes to labels
+forest_data$label_with_n <- paste0(forest_data$label, " (n=", round(forest_data$n), ")")
+
+# Define order for plots (reversed for coord_flip)
+subgroup_order <- rev(c(
+  "No DR or NPDR, no treatment", "No DR or NPDR, any treatment", 
+  "NPDR, no treatment", "NPDR, any treatment", 
+  "Mild NPDR, no treatment", "Mild NPDR, any treatment",
+  "Moderate NPDR, no treatment", "Moderate NPDR, any treatment",
+  "Severe NPDR, no treatment", "Severe NPDR, any treatment",
+  "PDR, any treatment", "PDR, on anti-VEGF only", "PDR, on PRP only"
+))
+
+# Version 1: Subgroups only
+data_subgroups <- forest_data[forest_data$group_type == "subgroup", ]
+data_subgroups$Labels <- factor(data_subgroups$label, levels = subgroup_order)
+
+plot_subgroups <- ggplot(data_subgroups, aes(x = AME, y = Labels)) +
+  geom_vline(xintercept = 0, color = "#be123c", linetype = "solid", size = 0.5) +
+  geom_point(size = 3, color = "#2563eb") +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper), height = 0.2, color = "#2563eb") +
+  geom_text(
+    aes(x = Lower, label = sprintf("%.3f", Lower)), 
+    hjust = 1.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(x = Upper, label = sprintf("%.3f", Upper)), 
+    hjust = -0.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(label = sprintf("%.3f", AME)), 
+    hjust = -0.2, vjust = -1, size = 3, color = "black"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(
+    limits = c(-0.01, max(forest_data$Upper) * 1.1),
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+  labs(
+    title = "Average Marginal Effects of Lapse Across Selected Groups",
+    subtitle = "Pooled across multiple imputations using Rubin's rules",
+    x = "Average Marginal Effect (AME)",
+    y = "Treatment Group",
+    caption = paste0("Based on ", unique(forest_data$n_imputations)[1], " imputations")
+  ) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10), 
+    axis.title.y = element_text(size = 12, face = "bold", margin = ggplot2::margin(r = 20)),
+    axis.title.x = element_text(size = 12, face = "bold", margin = ggplot2::margin(t = 20)),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = ggplot2::margin(b = 20)),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, margin = ggplot2::margin(b = 10)),
+    plot.margin = ggplot2::margin(10, 20, 30, 20),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    plot.caption = element_text(size = 10, face = "italic")
+  )
+
+# Version 2: With overall population included
+all_order <- c("Overall Population", subgroup_order)
+forest_data$Labels <- factor(forest_data$label, levels = rev(all_order))
+forest_data$point_color <- ifelse(forest_data$group_type == "overall", "#dc2626", "#2563eb")
+forest_data$point_size <- ifelse(forest_data$group_type == "overall", 4, 3)
+
+plot_with_overall <- ggplot(forest_data, aes(x = AME, y = Labels)) +
+  geom_vline(xintercept = 0, color = "#be123c", linetype = "solid", size = 0.5) +
+  geom_hline(yintercept = length(subgroup_order) + 0.5, 
+             color = "gray50", linetype = "dashed", alpha = 0.5) +
+  geom_point(aes(color = point_color, size = point_size)) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper, color = point_color), height = 0.2) +
+  geom_text(
+    aes(x = Lower, label = sprintf("%.3f", Lower)), 
+    hjust = 1.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(x = Upper, label = sprintf("%.3f", Upper)), 
+    hjust = -0.2, size = 3, color = "black"
+  ) +
+  geom_text(
+    aes(label = sprintf("%.3f", AME)), 
+    hjust = -0.2, vjust = -1, size = 3, color = "black"
+  ) +
+  scale_color_identity() +
+  scale_size_identity() +
+  theme_minimal() +
+  scale_x_continuous(
+    limits = c(-0.01, max(forest_data$Upper) * 1.1),
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+  labs(
+    title = "Average Marginal Effects of Lapse Across All Groups",
+    subtitle = "Pooled across multiple imputations using Rubin's rules",
+    x = "Average Marginal Effect (AME)",
+    y = "Treatment Group",
+    caption = paste0("Based on ", unique(forest_data$n_imputations)[1], " imputations\n",
+                    "Overall population shown in red, subgroups in blue")
+  ) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10), 
+    axis.title.y = element_text(size = 12, face = "bold", margin = ggplot2::margin(r = 20)),
+    axis.title.x = element_text(size = 12, face = "bold", margin = ggplot2::margin(t = 20)),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = ggplot2::margin(b = 20)),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, margin = ggplot2::margin(b = 10)),
+    plot.margin = ggplot2::margin(10, 20, 30, 20),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    plot.caption = element_text(size = 10, face = "italic")
+  )
+
+# Display plots
+print(plot_subgroups)
+print(plot_with_overall)
+
+# Save plots
+ggsave(file.path(marginal_effects_dir, "forest_plot_subgroups_only.png"), 
+       plot_subgroups, width = 10, height = 8, dpi = 300, bg = "white")
+ggsave(file.path(marginal_effects_dir, "forest_plot_with_overall.png"), 
+       plot_with_overall, width = 10, height = 8.5, dpi = 300, bg = "white")
+
+log_message("Forest plots saved")
 ```
 
 ## Export Results
