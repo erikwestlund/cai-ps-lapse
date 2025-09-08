@@ -203,10 +203,32 @@ for (sg_name in names(subgroups)) {
   # Display results if available
   if (!is.null(test_results[[sg_name]])) {
     mfx_summary <- test_results[[sg_name]]
-    if ("ever_lapse_binary" %in% rownames(mfx_summary)) {
-      ame <- mfx_summary["ever_lapse_binary", "AME"]
-      se <- mfx_summary["ever_lapse_binary", "SE"]
-      cat(sprintf("  AME = %.4f (SE = %.4f)\n", ame, se))
+    
+    # Debug output for first subgroup
+    if (sg_name == names(subgroups)[1]) {
+      cat("  Debug - margins output structure:\n")
+      cat("    Rows:", paste(rownames(mfx_summary), collapse=", "), "\n")
+      cat("    Cols:", paste(colnames(mfx_summary), collapse=", "), "\n")
+      if ("factor" %in% colnames(mfx_summary)) {
+        cat("    Factor column:", paste(mfx_summary$factor, collapse=", "), "\n")
+      }
+    }
+    
+    # Margins output has factor name in 'factor' column, not rownames
+    # Look for ever_lapse_binary in the factor column
+    if ("factor" %in% colnames(mfx_summary)) {
+      lapse_rows <- grep("ever_lapse_binary", mfx_summary$factor)
+      if (length(lapse_rows) > 0) {
+        # Use the first matching row
+        lapse_row <- lapse_rows[1]
+        ame <- mfx_summary[lapse_row, "AME"]
+        se <- mfx_summary[lapse_row, "SE"]
+        cat(sprintf("  AME = %.4f (SE = %.4f)\n", ame, se))
+      } else {
+        cat("  WARNING: Could not find ever_lapse_binary in factor column\n")
+      }
+    } else {
+      cat("  WARNING: No 'factor' column in margins output\n")
     }
   }
 }
@@ -287,39 +309,91 @@ for (i in 1:n_imputations) {
     for (sg_name in names(subgroups)) {
       sg <- subgroups[[sg_name]]
       
-      if (is.null(sg$subset_condition)) {
-        # Overall marginal effect
-        mfx <- margins(model, design = design, variables = "ever_lapse_binary")
-        mfx_summary <- summary(mfx)
-      } else {
-        # Subset marginal effect
-        subset_data <- subset(imp_data, eval(sg$subset_condition))
-        
-        if (nrow(subset_data) > 0) {
-          subset_design <- subset(design, eval(sg$subset_condition))
-          mfx <- margins(model, 
-                        design = subset_design, 
-                        data = subset_data,
-                        variables = "ever_lapse_binary")
+      tryCatch({
+        if (is.null(sg$subset_condition)) {
+          # Overall marginal effect
+          mfx <- margins(model, design = design, variables = "ever_lapse_binary")
           mfx_summary <- summary(mfx)
         } else {
-          mfx_summary <- NULL
+          # Subset marginal effect
+          subset_data <- subset(imp_data, eval(sg$subset_condition))
+          
+          if (nrow(subset_data) > 0) {
+            subset_design <- subset(design, eval(sg$subset_condition))
+            mfx <- margins(model, 
+                          design = subset_design, 
+                          data = subset_data,
+                          variables = "ever_lapse_binary")
+            mfx_summary <- summary(mfx)
+          } else {
+            mfx_summary <- NULL
+          }
         }
-      }
-      
-      # Store results
-      if (!is.null(mfx_summary) && "ever_lapse_binary" %in% rownames(mfx_summary)) {
+        
+        # Store results - margins output has factor name in 'factor' column
+        if (!is.null(mfx_summary)) {
+          # Debug: show what we got for first imp and first subgroup
+          if (i == 1 && sg_name == names(subgroups)[1]) {
+            cat("  Debug: mfx_summary structure:\n")
+            cat("    Cols:", paste(colnames(mfx_summary), collapse=", "), "\n")
+            if ("factor" %in% colnames(mfx_summary)) {
+              cat("    Factor values:", paste(mfx_summary$factor, collapse=", "), "\n")
+            }
+          }
+          
+          # Look for ever_lapse_binary in the factor column
+          if ("factor" %in% colnames(mfx_summary)) {
+            lapse_rows <- grep("ever_lapse_binary", mfx_summary$factor)
+            if (length(lapse_rows) > 0) {
+              # Use the first matching row (should only be one)
+              lapse_row <- lapse_rows[1]
+              all_mfx_results[[sg_name]][[i]] <- list(
+                ame = mfx_summary[lapse_row, "AME"],
+                se = mfx_summary[lapse_row, "SE"],
+                n = ifelse(is.null(sg$subset_condition), 
+                          nrow(imp_data),
+                          nrow(subset(imp_data, eval(sg$subset_condition)))),
+                success = TRUE
+              )
+            } else {
+              all_mfx_results[[sg_name]][[i]] <- list(
+                success = FALSE,
+                error = "Could not find ever_lapse_binary in factor column"
+              )
+            }
+          } else {
+            # Fallback: if no factor column, try using first row
+            if (nrow(mfx_summary) == 1) {
+              all_mfx_results[[sg_name]][[i]] <- list(
+                ame = mfx_summary[1, "AME"],
+                se = mfx_summary[1, "SE"],
+                n = ifelse(is.null(sg$subset_condition), 
+                          nrow(imp_data),
+                          nrow(subset(imp_data, eval(sg$subset_condition)))),
+                success = TRUE
+              )
+            } else {
+              all_mfx_results[[sg_name]][[i]] <- list(
+                success = FALSE,
+                error = "No 'factor' column and multiple rows in margins output"
+              )
+            }
+          }
+        } else {
+          all_mfx_results[[sg_name]][[i]] <- list(
+            success = FALSE,
+            error = "No data in subset"
+          )
+        }
+      }, error = function(e) {
         all_mfx_results[[sg_name]][[i]] <- list(
-          ame = mfx_summary["ever_lapse_binary", "AME"],
-          se = mfx_summary["ever_lapse_binary", "SE"],
-          n = ifelse(is.null(sg$subset_condition), 
-                    nrow(imp_data),
-                    nrow(subset(imp_data, eval(sg$subset_condition)))),
-          success = TRUE
+          success = FALSE,
+          error = e$message
         )
-      } else {
-        all_mfx_results[[sg_name]][[i]] <- list(success = FALSE)
-      }
+        if (i == 1) {
+          cat(paste0("    ERROR in ", sg_name, ": ", e$message, "\n"))
+        }
+      })
     }
     
   }, error = function(e) {
@@ -444,40 +518,52 @@ if (!file.exists(pooled_results_file)) {
 
 ```{r summary-table}
 # Create summary table
-summary_df <- do.call(rbind, lapply(names(pooled_mfx), function(sg_name) {
-  res <- pooled_mfx[[sg_name]]
-  if (res$success) {
-    data.frame(
-      Subgroup = res$name,
-      AME = sprintf("%.4f", res$ame),
-      SE = sprintf("%.4f", res$se),
-      `95% CI` = sprintf("(%.4f, %.4f)", res$ci_lower, res$ci_upper),
-      `P-value` = ifelse(res$p_value < 0.001, "<0.001", 
-                         sprintf("%.3f", res$p_value)),
-      `Avg N` = sprintf("%.0f", res$avg_n),
-      `N Imp` = res$n_imputations,
-      stringsAsFactors = FALSE,
-      check.names = FALSE
-    )
+if (length(pooled_mfx) > 0) {
+  summary_rows <- lapply(names(pooled_mfx), function(sg_name) {
+    res <- pooled_mfx[[sg_name]]
+    if (!is.null(res) && !is.null(res$success) && res$success) {
+      data.frame(
+        Subgroup = res$name,
+        AME = sprintf("%.4f", res$ame),
+        SE = sprintf("%.4f", res$se),
+        `95% CI` = sprintf("(%.4f, %.4f)", res$ci_lower, res$ci_upper),
+        `P-value` = ifelse(res$p_value < 0.001, "<0.001", 
+                           sprintf("%.3f", res$p_value)),
+        `Avg N` = sprintf("%.0f", res$avg_n),
+        `N Imp` = res$n_imputations,
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+      )
+    } else {
+      NULL
+    }
+  })
+  
+  # Remove NULL entries and combine
+  summary_rows <- summary_rows[!sapply(summary_rows, is.null)]
+  
+  if (length(summary_rows) > 0) {
+    summary_df <- do.call(rbind, summary_rows)
+    
+    # Display table - simplified to avoid kable errors
+    print(kable(summary_df,
+          caption = "Pooled Average Marginal Effects of Lapsing by Subgroup",
+          align = c("l", "r", "r", "c", "r", "r", "r"),
+          digits = 4))
+    
+    # Save to CSV
+    write.csv(summary_df, 
+              file.path(marginal_effects_dir, "marginal_effects_summary.csv"),
+              row.names = FALSE)
+    log_message("Saved summary table to CSV")
+  } else {
+    cat("No successful results to display in summary table\n")
+    log_message("No successful pooled results for summary table")
   }
-}))
-
-# Display table - simplified to avoid kable errors
-if (nrow(summary_df) > 0) {
-  # Use basic kable without complex styling that can fail with long data
-  print(kable(summary_df,
-        caption = "Pooled Average Marginal Effects of Lapsing by Subgroup",
-        align = c("l", "r", "r", "c", "r", "r", "r"),
-        digits = 4))
 } else {
-  cat("No results to display in summary table\n")
+  cat("No pooled results available for summary table\n")
+  log_message("No pooled results found")
 }
-
-# Save to CSV
-write.csv(summary_df, 
-          file.path(marginal_effects_dir, "marginal_effects_summary.csv"),
-          row.names = FALSE)
-log_message("Saved summary table to CSV")
 ```
 
 ## Interpretation
