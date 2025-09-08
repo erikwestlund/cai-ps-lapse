@@ -359,6 +359,84 @@ log_message(paste0("Exported LaTeX table to: ", latex_file))
 cat("\n\nLaTeX table exported to:", latex_file, "\n")
 ```
 
+## Forest Plot (Publication Style)
+
+```{r forest-plot}
+#| fig.width: 10
+#| fig.height: 8
+
+# Prepare data for forest plot
+forest_data <- results_df[!is.na(results_df$or), ]  # Remove any failed methods
+
+# Add method labels (clean up underscores and format nicely)
+forest_data$method_label <- gsub("_", " ", forest_data$method)
+forest_data$method_label <- gsub("nearest ", "Nearest Neighbor ", forest_data$method_label)
+forest_data$method_label <- gsub("subclass glm", "Subclassification GLM", forest_data$method_label)
+forest_data$method_label <- gsub("cbps", "CBPS", forest_data$method_label)
+forest_data$method_label <- gsub("entropy", "Entropy Balancing", forest_data$method_label)
+forest_data$method_label <- gsub("bart", "BART", forest_data$method_label)
+forest_data$method_label <- gsub("twang gbm", "IPTW Twang GBM", forest_data$method_label)
+forest_data$method_label <- gsub("glm", "GLM", forest_data$method_label)
+forest_data$method_label <- gsub("gam", "GAM", forest_data$method_label)
+forest_data$method_label <- gsub("gbm", "GBM", forest_data$method_label)
+forest_data$method_label <- gsub("lasso", "LASSO", forest_data$method_label)
+forest_data$method_label <- gsub("rpart", "RPART", forest_data$method_label)
+forest_data$method_label <- gsub("mahalanobis", "Mahalanobis", forest_data$method_label)
+
+# Add colors (blue for twang_gbm, black for others)
+forest_data$color <- ifelse(forest_data$method == "twang_gbm", "blue", "black")
+
+# Create the plot matching results-summary.Rmd style exactly
+forest_plot <- ggplot(forest_data, aes(x = reorder(method_label, or), y = or, color = color)) +
+  geom_pointrange(aes(ymin = or_ci_lower, ymax = or_ci_upper), size = 0.8) +
+  geom_point(size = 3) +
+  geom_text(aes(label = sprintf("%.2f", or), color = color), 
+            vjust = -1.2, hjust = 0.5, size = 4) +
+  coord_flip() +
+  scale_color_identity() +
+  scale_y_continuous(breaks = seq(1, max(forest_data$or_ci_upper), by = 0.1)) +
+  scale_x_discrete(expand = c(0.075, 0.075)) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = element_blank(),
+    y = "Odds Ratio",
+    title = "Doubly Robust Propensity Score Adjusted\n Model Estimates (ATT)",
+    caption = "\n\nOdds Ratio of 1.0 = No Association.
+               MatchIt, WeightIt, and twang R packages are used for estimation.
+               IPTW = Inverse probability of treatment weighting.
+               IPTW Twang GBM results (shown in blue) reported throughout paper."
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", margin = ggplot2::margin(b = 15)),
+    legend.position = "none",
+    axis.line = element_line(color = "gray80"),
+    axis.text = element_text(color = "gray30"),
+    axis.ticks = element_line(color = "gray80"),
+    axis.title.x = element_text(margin = ggplot2::margin(t = 10)),
+    plot.caption = element_text(margin = ggplot2::margin(t = 15)),
+    plot.margin = ggplot2::margin(20, 20, 30, 20)
+  ) +
+  geom_hline(yintercept = 1, linetype = "solid", color = "gray60") +
+  annotate("text", x = 0.5, y = 1, label = "Null", vjust = -1, hjust = 1.2, 
+           color = "gray50", size = 3.5)
+
+# Display the plot
+print(forest_plot)
+
+# Save the plot
+forest_plot_file <- file.path(export_dir, "forest_plot_publication.png")
+ggsave(
+  filename = forest_plot_file,
+  plot = forest_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+log_message(paste0("Forest plot saved to: ", forest_plot_file))
+cat("\nForest plot (publication style) saved to:", forest_plot_file, "\n")
+```
+
 ## File Summary
 
 ```{r file-summary}
