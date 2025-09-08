@@ -140,7 +140,7 @@ for (sg_name in names(subgroups)) {
   
   if (is.null(sg$subset_condition)) {
     # Overall marginal effect
-    mfx <- margins(model, design = design, variables = "ever_lapse")
+    mfx <- margins(model, design = design, variables = "ever_lapse_binary")
     test_results[[sg_name]] <- summary(mfx)
     cat(paste0("  N = ", nrow(test_data), "\n"))
   } else {
@@ -152,7 +152,7 @@ for (sg_name in names(subgroups)) {
       mfx <- margins(model, 
                     design = subset_design, 
                     data = subset_data,
-                    variables = "ever_lapse")
+                    variables = "ever_lapse_binary")
       test_results[[sg_name]] <- summary(mfx)
       cat(paste0("  N = ", nrow(subset_data), "\n"))
     } else {
@@ -164,9 +164,9 @@ for (sg_name in names(subgroups)) {
   # Display results if available
   if (!is.null(test_results[[sg_name]])) {
     mfx_summary <- test_results[[sg_name]]
-    if ("ever_lapse" %in% rownames(mfx_summary)) {
-      ame <- mfx_summary["ever_lapse", "AME"]
-      se <- mfx_summary["ever_lapse", "SE"]
+    if ("ever_lapse_binary" %in% rownames(mfx_summary)) {
+      ame <- mfx_summary["ever_lapse_binary", "AME"]
+      se <- mfx_summary["ever_lapse_binary", "SE"]
       cat(sprintf("  AME = %.4f (SE = %.4f)\n", ame, se))
     }
   }
@@ -223,7 +223,7 @@ for (i in 1:n_imputations) {
       
       if (is.null(sg$subset_condition)) {
         # Overall marginal effect
-        mfx <- margins(model, design = design, variables = "ever_lapse")
+        mfx <- margins(model, design = design, variables = "ever_lapse_binary")
         mfx_summary <- summary(mfx)
       } else {
         # Subset marginal effect
@@ -234,7 +234,7 @@ for (i in 1:n_imputations) {
           mfx <- margins(model, 
                         design = subset_design, 
                         data = subset_data,
-                        variables = "ever_lapse")
+                        variables = "ever_lapse_binary")
           mfx_summary <- summary(mfx)
         } else {
           mfx_summary <- NULL
@@ -242,10 +242,10 @@ for (i in 1:n_imputations) {
       }
       
       # Store results
-      if (!is.null(mfx_summary) && "ever_lapse" %in% rownames(mfx_summary)) {
+      if (!is.null(mfx_summary) && "ever_lapse_binary" %in% rownames(mfx_summary)) {
         all_mfx_results[[sg_name]][[i]] <- list(
-          ame = mfx_summary["ever_lapse", "AME"],
-          se = mfx_summary["ever_lapse", "SE"],
+          ame = mfx_summary["ever_lapse_binary", "AME"],
+          se = mfx_summary["ever_lapse_binary", "SE"],
           n = ifelse(is.null(sg$subset_condition), 
                     nrow(imp_data),
                     nrow(subset(imp_data, eval(sg$subset_condition)))),
