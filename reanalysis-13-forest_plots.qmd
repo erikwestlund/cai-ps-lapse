@@ -141,10 +141,10 @@ if (length(pooled_mfx) > 0) {
     theme(
       axis.text.x = element_text(size = 10),
       axis.text.y = element_text(size = 11, face = "bold"), 
-      axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 20)),
-      plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = margin(b = 10)),
-      plot.subtitle = element_text(size = 11, hjust = 0.5, margin = margin(b = 20)),
-      plot.margin = margin(20, 20, 20, 20),
+      axis.title.x = element_text(size = 12, face = "bold", margin = ggplot2::margin(t = 20)),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = ggplot2::margin(b = 10)),
+      plot.subtitle = element_text(size = 11, hjust = 0.5, margin = ggplot2::margin(b = 20)),
+      plot.margin = ggplot2::margin(20, 20, 20, 20),
       panel.grid.major.y = element_line(color = "gray90", linetype = "dotted"),
       panel.grid.minor = element_blank(),
       plot.caption = element_text(size = 9, face = "italic", margin = margin(t = 20))
