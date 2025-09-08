@@ -684,7 +684,11 @@ fit_outcome_model <- function(ps_result, data, formula, method_name = NULL) {
     
     result$estimate <- coef_lapse["Estimate"]
     result$se <- coef_lapse["Std. Error"]
-    result$model <- model
+    # Don't save the full model - it's huge! Just save what we need for pooling
+    result$t_stat <- coef_lapse["t value"]
+    result$p_value <- coef_lapse["Pr(>|t|)"]
+    result$df <- model$df.residual
+    result$n <- nrow(model$data)
     result$success <- TRUE
     
   }, error = function(e) {
