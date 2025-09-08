@@ -545,17 +545,43 @@ if (length(pooled_mfx) > 0) {
   if (length(summary_rows) > 0) {
     summary_df <- do.call(rbind, summary_rows)
     
-    # Display table - simplified to avoid kable errors
-    print(kable(summary_df,
+    # Display table properly in Quarto (no print needed)
+    kable(summary_df,
           caption = "Pooled Average Marginal Effects of Lapsing by Subgroup",
           align = c("l", "r", "r", "c", "r", "r", "r"),
-          digits = 4))
+          digits = 4)
     
-    # Save to CSV
+    # Save formatted summary to CSV
     write.csv(summary_df, 
               file.path(marginal_effects_dir, "marginal_effects_summary.csv"),
               row.names = FALSE)
-    log_message("Saved summary table to CSV")
+    
+    # Also save a numeric version for easier analysis
+    numeric_df <- do.call(rbind, lapply(names(pooled_mfx), function(sg_name) {
+      res <- pooled_mfx[[sg_name]]
+      if (!is.null(res) && !is.null(res$success) && res$success) {
+        data.frame(
+          subgroup = sg_name,
+          subgroup_label = res$name,
+          ame = res$ame,
+          se = res$se,
+          ci_lower = res$ci_lower,
+          ci_upper = res$ci_upper,
+          z_stat = res$z_stat,
+          p_value = res$p_value,
+          avg_n = res$avg_n,
+          n_imputations = res$n_imputations,
+          df = res$df,
+          stringsAsFactors = FALSE
+        )
+      }
+    }))
+    
+    write.csv(numeric_df,
+              file.path(marginal_effects_dir, "marginal_effects_numeric.csv"),
+              row.names = FALSE)
+    
+    log_message("Saved summary tables to CSV (formatted and numeric)")
   } else {
     cat("No successful results to display in summary table\n")
     log_message("No successful pooled results for summary table")
@@ -641,9 +667,6 @@ forest_data$label_with_n <- paste0(forest_data$label, " (n=", round(forest_data$
 subgroup_order <- rev(c(
   "No DR or NPDR, no treatment", "No DR or NPDR, any treatment", 
   "NPDR, no treatment", "NPDR, any treatment", 
-  "Mild NPDR, no treatment", "Mild NPDR, any treatment",
-  "Moderate NPDR, no treatment", "Moderate NPDR, any treatment",
-  "Severe NPDR, no treatment", "Severe NPDR, any treatment",
   "PDR, any treatment", "PDR, on anti-VEGF only", "PDR, on PRP only"
 ))
 
@@ -805,8 +828,42 @@ for (sg_name in names(pooled_mfx)) {
 writeLines(summary_text, 
           file.path(marginal_effects_dir, "marginal_effects_summary.txt"))
 
+# Export all individual imputation results for transparency
+if (exists("all_mfx_results") && length(all_mfx_results) > 0) {
+  all_imp_df <- do.call(rbind, lapply(names(all_mfx_results), function(sg_name) {
+    sg_results <- all_mfx_results[[sg_name]]
+    do.call(rbind, lapply(seq_along(sg_results), function(i) {
+      res <- sg_results[[i]]
+      if (!is.null(res) && !is.null(res$success) && res$success) {
+        data.frame(
+          subgroup = sg_name,
+          imputation = i,
+          ame = res$ame,
+          se = res$se,
+          n = res$n,
+          stringsAsFactors = FALSE
+        )
+      }
+    }))
+  }))
+  
+  if (!is.null(all_imp_df) && nrow(all_imp_df) > 0) {
+    write.csv(all_imp_df,
+              file.path(marginal_effects_dir, "all_imputation_results.csv"),
+              row.names = FALSE)
+    cat("✓ Individual imputation results saved to: all_imputation_results.csv\n")
+  }
+}
+
 log_message("Results exported")
-cat("\n✓ Results exported to:", marginal_effects_dir, "\n")
+cat("\n✓ All results exported to:", marginal_effects_dir, "\n")
+cat("\nExported files:\n")
+cat("  - marginal_effects_summary.csv (formatted table)\n")
+cat("  - marginal_effects_numeric.csv (numeric values)\n")
+cat("  - all_imputation_results.csv (individual imputations)\n")
+cat("  - marginal_effects_summary.txt (text summary)\n")
+cat("  - marginal_effects_export.rds (complete R object)\n")
+cat("  - forest_plot_*.png (visualization)\n")
 ```
 
 ## Session Info

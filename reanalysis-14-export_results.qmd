@@ -1,6 +1,6 @@
 ---
-title: "Step 12: Export Results"
-subtitle: "Export pooled results and key findings to various formats"
+title: "Step 14: Export All Results"
+subtitle: "Export pooled PS results, marginal effects, and forest plots to various formats"
 author: "Analysis Team"
 date: "`r Sys.Date()`"
 format:
@@ -31,6 +31,8 @@ log_message("Starting results export")
 
 # Configuration
 pooled_cache_dir <- file.path(reanalysis_data_dir, "ps_cache", "pooled_results")
+marginal_effects_dir <- file.path(reanalysis_data_dir, "marginal_effects_cache")
+forest_plots_dir <- file.path(reanalysis_data_dir, "forest_plots")
 export_dir <- file.path(reanalysis_data_dir, "exported_results")
 
 # Create export directory if it doesn't exist
@@ -40,23 +42,38 @@ if (!dir.exists(export_dir)) {
 }
 ```
 
-## Load Pooled Results
+## Load All Results
 
 ```{r load-results}
-# Load the pooled results
+# Load PS methods pooled results
 pooled_results_file <- file.path(pooled_cache_dir, "all_pooled_results.rds")
 
-if (!file.exists(pooled_results_file)) {
-  stop(paste0("Pooled results not found at: ", pooled_results_file, "\n",
-              "Please run reanalysis-10-pooling_results.qmd first"))
+if (file.exists(pooled_results_file)) {
+  pooled_results <- readRDS(pooled_results_file)
+  log_message(paste0("Loaded pooled PS results for ", length(pooled_results), " methods"))
+} else {
+  cat("Warning: PS pooled results not found. Run reanalysis-10-pooling_results.qmd first\n")
+  pooled_results <- list()
 }
 
-pooled_results <- readRDS(pooled_results_file)
-log_message(paste0("Loaded pooled results for ", length(pooled_results), " methods"))
+# Load marginal effects results
+mfx_results_file <- file.path(marginal_effects_dir, "pooled_mfx_results.rds")
 
-# Display structure of first method to show what we're working with
-cat("Structure of pooled results (first method):\n")
-str(pooled_results[[1]])
+if (file.exists(mfx_results_file)) {
+  pooled_mfx <- readRDS(mfx_results_file)
+  log_message(paste0("Loaded marginal effects for ", length(pooled_mfx), " subgroups"))
+} else {
+  cat("Warning: Marginal effects results not found. Run reanalysis-12-marginal_effects.qmd first\n")
+  pooled_mfx <- list()
+}
+
+# Check for forest plots
+forest_plot_files <- list.files(forest_plots_dir, pattern = "\\.png$", full.names = TRUE)
+if (length(forest_plot_files) > 0) {
+  log_message(paste0("Found ", length(forest_plot_files), " forest plot files"))
+} else {
+  cat("Warning: No forest plots found. Run reanalysis-13-forest_plots.qmd first\n")
+}
 ```
 
 ## Export 1: Main Results Table (CSV)
@@ -357,6 +374,147 @@ latex_file <- file.path(export_dir, "pooled_results_table.tex")
 writeLines(latex_table, latex_file)
 log_message(paste0("Exported LaTeX table to: ", latex_file))
 cat("\n\nLaTeX table exported to:", latex_file, "\n")
+```
+
+## Export 5: Marginal Effects Results (CSV)
+
+```{r export-ame-csv}
+if (length(pooled_mfx) > 0) {
+  # Create formatted AME table
+  ame_df <- do.call(rbind, lapply(names(pooled_mfx), function(sg_name) {
+    res <- pooled_mfx[[sg_name]]
+    if (!is.null(res) && res$success) {
+      data.frame(
+        subgroup = sg_name,
+        subgroup_label = res$name,
+        ame = res$ame,
+        se = res$se,
+        ci_lower = res$ci_lower,
+        ci_upper = res$ci_upper,
+        z_stat = res$z_stat,
+        p_value = res$p_value,
+        avg_n = res$avg_n,
+        n_imputations = res$n_imputations,
+        stringsAsFactors = FALSE
+      )
+    }
+  }))
+  
+  if (!is.null(ame_df) && nrow(ame_df) > 0) {
+    # Save numeric version
+    ame_csv_file <- file.path(export_dir, "marginal_effects_pooled.csv")
+    write.csv(ame_df, ame_csv_file, row.names = FALSE)
+    log_message(paste0("Exported AME results to: ", ame_csv_file))
+    
+    # Create formatted version for display
+    ame_formatted <- data.frame(
+      Subgroup = ame_df$subgroup_label,
+      AME = sprintf("%.4f", ame_df$ame),
+      SE = sprintf("%.4f", ame_df$se),
+      `95% CI` = sprintf("(%.4f, %.4f)", ame_df$ci_lower, ame_df$ci_upper),
+      `P-value` = ifelse(ame_df$p_value < 0.001, "<0.001", sprintf("%.3f", ame_df$p_value)),
+      `Avg N` = sprintf("%.0f", ame_df$avg_n),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    
+    ame_formatted_file <- file.path(export_dir, "marginal_effects_formatted.csv")
+    write.csv(ame_formatted, ame_formatted_file, row.names = FALSE)
+    
+    # Display summary
+    cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+    cat("MARGINAL EFFECTS EXPORT SUMMARY\n")
+    cat(paste(rep("=", 60), collapse = ""), "\n\n")
+    cat("Number of subgroups:", nrow(ame_df), "\n")
+    cat("Overall AME:", sprintf("%.4f", ame_df$ame[ame_df$subgroup == "overall"]), "\n")
+    cat("Files exported:\n")
+    cat("  - marginal_effects_pooled.csv (numeric)\n")
+    cat("  - marginal_effects_formatted.csv (publication-ready)\n\n")
+  }
+} else {
+  cat("No marginal effects results to export\n")
+}
+```
+
+## Export 6: Combined Results Summary
+
+```{r export-combined}
+# Create a comprehensive summary combining PS methods and AME results
+if (length(pooled_results) > 0 || length(pooled_mfx) > 0) {
+  combined_summary <- list()
+  
+  # Add PS methods summary
+  if (length(pooled_results) > 0) {
+    ps_summary <- data.frame(
+      analysis = "PS Methods",
+      method = names(pooled_results),
+      estimate_type = "OR",
+      estimate = sapply(pooled_results, function(x) if(x$success) x$or else NA),
+      ci_lower = sapply(pooled_results, function(x) if(x$success) x$or_ci_lower else NA),
+      ci_upper = sapply(pooled_results, function(x) if(x$success) x$or_ci_upper else NA),
+      p_value = sapply(pooled_results, function(x) if(x$success) x$p_value else NA),
+      stringsAsFactors = FALSE
+    )
+    combined_summary$ps_methods <- ps_summary
+  }
+  
+  # Add AME summary
+  if (length(pooled_mfx) > 0) {
+    ame_summary <- data.frame(
+      analysis = "Marginal Effects",
+      method = names(pooled_mfx),
+      estimate_type = "AME",
+      estimate = sapply(pooled_mfx, function(x) if(x$success) x$ame else NA),
+      ci_lower = sapply(pooled_mfx, function(x) if(x$success) x$ci_lower else NA),
+      ci_upper = sapply(pooled_mfx, function(x) if(x$success) x$ci_upper else NA),
+      p_value = sapply(pooled_mfx, function(x) if(x$success) x$p_value else NA),
+      stringsAsFactors = FALSE
+    )
+    combined_summary$marginal_effects <- ame_summary
+  }
+  
+  # Combine all results
+  combined_df <- do.call(rbind, combined_summary)
+  combined_file <- file.path(export_dir, "all_results_combined.csv")
+  write.csv(combined_df, combined_file, row.names = FALSE)
+  
+  log_message(paste0("Exported combined results to: ", combined_file))
+  cat("\nCombined results exported to: all_results_combined.csv\n")
+}
+```
+
+## Export 7: Copy Forest Plots
+
+```{r export-forest-plots}
+# Copy forest plots to export directory if they exist
+if (length(forest_plot_files) > 0) {
+  cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+  cat("COPYING FOREST PLOTS\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n\n")
+  
+  for (plot_file in forest_plot_files) {
+    dest_file <- file.path(export_dir, basename(plot_file))
+    file.copy(plot_file, dest_file, overwrite = TRUE)
+    cat("Copied:", basename(plot_file), "\n")
+  }
+  
+  log_message(paste0("Copied ", length(forest_plot_files), " forest plots to export directory"))
+}
+
+# Also copy AME-specific CSV files if they exist
+ame_csv_files <- c(
+  file.path(marginal_effects_dir, "marginal_effects_summary.csv"),
+  file.path(marginal_effects_dir, "marginal_effects_numeric.csv"),
+  file.path(marginal_effects_dir, "all_imputation_results.csv")
+)
+
+for (csv_file in ame_csv_files) {
+  if (file.exists(csv_file)) {
+    dest_file <- file.path(export_dir, basename(csv_file))
+    file.copy(csv_file, dest_file, overwrite = TRUE)
+    cat("Copied:", basename(csv_file), "\n")
+  }
+}
 ```
 
 ## Forest Plot (Publication Style)
