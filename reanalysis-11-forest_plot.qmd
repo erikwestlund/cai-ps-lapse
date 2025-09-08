@@ -1,0 +1,287 @@
+---
+title: "Step 11: Forest Plot Visualization"
+subtitle: "Generate forest plot from pooled propensity score results"
+author: "Analysis Team"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 10
+    fig-height: 8
+    fig-dpi: 300
+    embed-resources: true
+    self-contained: true
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+source("dependencies.R")
+source("functions.R")
+source("alt_specs.R")
+setup_analysis(seed = 2025)
+
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+
+# Initialize logging
+log_file <- init_log("forest_plot")
+log_message("Starting forest plot generation")
+
+# Configuration
+pooled_cache_dir <- file.path(reanalysis_data_dir, "ps_cache", "pooled_results")
+```
+
+## Load Pooled Results
+
+```{r load-results}
+# Load the pooled results from file 10
+pooled_results_file <- file.path(pooled_cache_dir, "all_pooled_results.rds")
+
+if (!file.exists(pooled_results_file)) {
+  stop(paste0("Pooled results not found at: ", pooled_results_file, "\n",
+              "Please run reanalysis-10-pooling_results.qmd first"))
+}
+
+pooled_results <- readRDS(pooled_results_file)
+log_message(paste0("Loaded pooled results for ", length(pooled_results), " methods"))
+
+# Show which methods we have
+cat("Methods with pooled results:\n")
+for (method in names(pooled_results)) {
+  res <- pooled_results[[method]]
+  if (res$success) {
+    cat(sprintf("  %-20s: OR = %.3f (%.3f - %.3f), p = %.4f\n",
+                method, res$or, res$or_ci_lower, res$or_ci_upper, res$p_value))
+  } else {
+    cat(sprintf("  %-20s: FAILED\n", method))
+  }
+}
+```
+
+## Format Data for Plotting
+
+```{r format-data}
+# Use the existing format function
+forest_data <- format_for_forest_plot(pooled_results)
+
+# Add colors for specific methods
+forest_data$color <- "black"
+if ("twang_gbm" %in% forest_data$method) {
+  forest_data$color[forest_data$method == "twang_gbm"] <- "blue"
+}
+
+# Sort by OR for better visualization
+forest_data <- forest_data[order(forest_data$or), ]
+
+# Display the data
+kable(forest_data[, c("method_label", "or", "lower", "upper", "p_value")],
+      caption = "Data for Forest Plot",
+      col.names = c("Method", "OR", "Lower CI", "Upper CI", "P-value"),
+      digits = 3)
+```
+
+## Create Forest Plot
+
+```{r forest-plot}
+#| fig.height: 10
+#| fig.width: 8
+
+# Create the forest plot
+forest_plot <- ggplot(forest_data, aes(x = reorder(method_label, or), y = or)) +
+  # Point estimates with confidence intervals
+  geom_pointrange(aes(ymin = lower, ymax = upper, color = color), 
+                  size = 0.8, linewidth = 0.8) +
+  # Larger points for estimates
+  geom_point(aes(color = color), size = 3) +
+  # Add OR values as text
+  geom_text(aes(label = sprintf("%.2f", or), color = color), 
+            vjust = -1.2, hjust = 0.5, size = 4) +
+  # Flip coordinates for horizontal forest plot
+  coord_flip() +
+  # Use the color mapping
+  scale_color_identity() +
+  # Log scale for OR with specific breaks
+  scale_y_continuous(
+    breaks = c(0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7),
+    trans = "log",
+    labels = function(x) sprintf("%.1f", x),
+    limits = c(min(forest_data$lower) * 0.95, max(forest_data$upper) * 1.05)
+  ) +
+  # Expand x axis slightly for readability
+  scale_x_discrete(expand = c(0.075, 0.075)) +
+  # Minimal theme
+  theme_minimal(base_size = 14) +
+  # Labels
+  labs(
+    x = element_blank(),
+    y = "Odds Ratio (95% CI)",
+    title = "Propensity Score Method Comparison",
+    subtitle = paste0("Pooled estimates across ", 
+                     ifelse(length(unique(forest_data$n_imputations)) == 1,
+                            paste0(unique(forest_data$n_imputations)[1], " imputations"),
+                            "multiple imputations"),
+                     " using Rubin's rules"),
+    caption = paste0("All methods use ATT (Average Treatment Effect in the Treated) estimand.\n",
+                    ifelse("twang_gbm" %in% forest_data$method,
+                          "twang GBM (shown in blue) is the primary method reported in the paper.",
+                          ""))
+  ) +
+  # Theme customization - using explicit ggplot2:: namespace to avoid conflicts
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", 
+                             margin = ggplot2::margin(b = 10)),
+    plot.subtitle = element_text(hjust = 0.5, 
+                                 margin = ggplot2::margin(b = 15)),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "gray90", linetype = "dotted"),
+    axis.line = element_line(color = "gray80"),
+    axis.text = element_text(color = "gray30"),
+    axis.text.y = element_text(size = 12),
+    axis.ticks = element_line(color = "gray80"),
+    axis.title.x = element_text(margin = ggplot2::margin(t = 10)),
+    plot.caption = element_text(margin = ggplot2::margin(t = 15), hjust = 0),
+    plot.margin = ggplot2::margin(20, 20, 30, 20)
+  ) +
+  # Reference line at OR = 1
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.75)
+
+# Display the plot
+print(forest_plot)
+
+# Save the plot
+plot_file <- file.path(reanalysis_data_dir, "forest_plot_ps_methods.png")
+ggsave(
+  filename = plot_file,
+  plot = forest_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+log_message(paste0("Forest plot saved to: ", plot_file))
+cat("\nForest plot saved to:", plot_file, "\n")
+```
+
+## Statistical Summary
+
+```{r summary-stats}
+# Calculate summary statistics
+or_values <- forest_data$or
+or_range <- range(or_values)
+or_median <- median(or_values)
+or_iqr <- IQR(or_values)
+
+cat("\n", paste(rep("=", 50), collapse = ""), "\n")
+cat("SUMMARY STATISTICS\n")
+cat(paste(rep("=", 50), collapse = ""), "\n\n")
+
+cat(sprintf("Number of methods: %d\n", nrow(forest_data)))
+cat(sprintf("OR range: %.3f to %.3f\n", or_range[1], or_range[2]))
+cat(sprintf("Median OR: %.3f\n", or_median))
+cat(sprintf("IQR of ORs: %.3f\n", or_iqr))
+
+# Find methods with smallest and largest effects
+min_idx <- which.min(or_values)
+max_idx <- which.max(or_values)
+
+cat(sprintf("\nSmallest effect: %s (OR = %.3f)\n", 
+            forest_data$method_label[min_idx], or_values[min_idx]))
+cat(sprintf("Largest effect: %s (OR = %.3f)\n", 
+            forest_data$method_label[max_idx], or_values[max_idx]))
+
+# Reference to twang if available
+if ("twang_gbm" %in% forest_data$method) {
+  twang_idx <- which(forest_data$method == "twang_gbm")
+  twang_or <- forest_data$or[twang_idx]
+  
+  cat(sprintf("\ntwang GBM (reference): OR = %.3f\n", twang_or))
+  
+  # Calculate how many methods are within 10% of twang
+  within_10pct <- sum(abs(or_values / twang_or - 1) <= 0.10)
+  cat(sprintf("Methods within 10%% of twang: %d of %d (%.1f%%)\n", 
+              within_10pct, length(or_values), 
+              100 * within_10pct / length(or_values)))
+}
+
+# Check for significant results
+sig_results <- sum(forest_data$p_value < 0.05)
+cat(sprintf("\nStatistically significant (p < 0.05): %d of %d methods\n",
+            sig_results, nrow(forest_data)))
+```
+
+## Alternative Forest Plot (Sorted by Effect Size)
+
+```{r forest-plot-sorted}
+#| fig.height: 10
+#| fig.width: 8
+
+# Create alternative plot sorted by effect size
+forest_plot_sorted <- ggplot(forest_data, aes(x = reorder(method_label, -or), y = or)) +
+  geom_pointrange(aes(ymin = lower, ymax = upper, color = color), 
+                  size = 0.8, linewidth = 0.8) +
+  geom_point(aes(color = color), size = 3) +
+  geom_text(aes(label = sprintf("%.2f", or), color = color), 
+            vjust = -1.2, hjust = 0.5, size = 4) +
+  coord_flip() +
+  scale_color_identity() +
+  scale_y_continuous(
+    breaks = c(0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7),
+    trans = "log",
+    labels = function(x) sprintf("%.1f", x),
+    limits = c(min(forest_data$lower) * 0.95, max(forest_data$upper) * 1.05)
+  ) +
+  scale_x_discrete(expand = c(0.075, 0.075)) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = element_blank(),
+    y = "Odds Ratio (95% CI)",
+    title = "Propensity Score Methods - Sorted by Effect Size",
+    subtitle = "Largest to smallest odds ratios",
+    caption = "Methods sorted from largest to smallest treatment effect estimate"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", 
+                             margin = ggplot2::margin(b = 10)),
+    plot.subtitle = element_text(hjust = 0.5, 
+                                 margin = ggplot2::margin(b = 15)),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "gray90", linetype = "dotted"),
+    axis.line = element_line(color = "gray80"),
+    axis.text = element_text(color = "gray30"),
+    axis.text.y = element_text(size = 12),
+    axis.ticks = element_line(color = "gray80"),
+    axis.title.x = element_text(margin = ggplot2::margin(t = 10)),
+    plot.caption = element_text(margin = ggplot2::margin(t = 15), hjust = 0),
+    plot.margin = ggplot2::margin(20, 20, 30, 20)
+  ) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.75)
+
+print(forest_plot_sorted)
+
+# Save the sorted plot
+ggsave(
+  filename = file.path(reanalysis_data_dir, "forest_plot_ps_methods_sorted.png"),
+  plot = forest_plot_sorted,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+```
+
+## Session Info
+
+```{r session-info}
+log_message("Forest plot generation complete")
+finalize_log(success = TRUE)
+sessionInfo()
+```
