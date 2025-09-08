@@ -110,27 +110,40 @@ for (i in imps) {
     # Display key results
     if (result$success) {
       cat("  SUCCESS: Outcome model fitted\n")
-      cat("  Coefficients extracted:\n")
       
-      # Show coefficient summary
-      coef_df <- data.frame(
-        Variable = names(result$coefficients),
-        Estimate = round(result$coefficients, 4),
-        SE = round(sqrt(diag(result$vcov)), 4)
-      )
-      coef_df$OR <- round(exp(coef_df$Estimate), 3)
-      coef_df$p_value <- round(2 * pnorm(abs(coef_df$Estimate/coef_df$SE), lower.tail = FALSE), 4)
-      
-      # Display lapse coefficient
-      lapse_rows <- grep("ever_lapse", coef_df$Variable)
-      if (length(lapse_rows) > 0) {
-        cat("\n  Ever_lapse coefficient:\n")
-        print(coef_df[lapse_rows, ])
+      # Check what format the results are in
+      if (!is.null(result$coefficients) && !is.null(result$vcov)) {
+        # Full coefficients available (from older runs)
+        cat("  Coefficients extracted:\n")
+        coef_df <- data.frame(
+          Variable = names(result$coefficients),
+          Estimate = round(result$coefficients, 4),
+          SE = round(sqrt(diag(result$vcov)), 4)
+        )
+        coef_df$OR <- round(exp(coef_df$Estimate), 3)
+        coef_df$p_value <- round(2 * pnorm(abs(coef_df$Estimate/coef_df$SE), lower.tail = FALSE), 4)
+        
+        # Display lapse coefficient
+        lapse_rows <- grep("ever_lapse", coef_df$Variable)
+        if (length(lapse_rows) > 0) {
+          cat("\n  Ever_lapse coefficient:\n")
+          print(coef_df[lapse_rows, ])
+        }
+        n_coef <- length(result$coefficients)
+      } else {
+        # Minimal format (just lapse coefficient)
+        cat("  Ever_lapse coefficient (extracted):\n")
+        cat("    Estimate:", round(result$estimate, 4), "\n")
+        cat("    SE:", round(result$se, 4), "\n")
+        cat("    OR:", round(exp(result$estimate), 3), "\n")
+        cat("    p-value:", sprintf("%.4f", result$p_value), "\n")
+        n_coef <- 1
       }
       
       cat("\n  Model info:\n")
-      cat("    N observations:", result$n_obs, "\n")
-      cat("    N coefficients:", length(result$coefficients), "\n")
+      cat("    N observations:", ifelse(!is.null(result$n), result$n, 
+                                       ifelse(!is.null(result$n_obs), result$n_obs, "NA")), "\n")
+      cat("    Coefficients saved:", n_coef, "\n")
       cat("    Cache file:", outcome_cache_file, "\n")
       
       successful_imps <- c(successful_imps, i)

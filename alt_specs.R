@@ -692,7 +692,11 @@ fit_outcome_model <- function(ps_result, data, formula, method_name = NULL) {
     # Fit the outcome model
     model <- svyglm(formula, design = design, family = quasibinomial())
     
-    # Extract coefficient for lapse
+    # Extract all coefficients and vcov for pooling
+    result$coefficients <- coef(model)
+    result$vcov <- vcov(model)
+    
+    # Also extract specific lapse coefficient info
     coef_summary <- coef(summary(model))
     
     # Find the lapse coefficient row (more robust)
@@ -704,13 +708,14 @@ fit_outcome_model <- function(ps_result, data, formula, method_name = NULL) {
     }
     coef_lapse <- coef_summary[lapse_rows[1], ]
     
+    # Store lapse-specific values for easy access
     result$estimate <- coef_lapse["Estimate"]
     result$se <- coef_lapse["Std. Error"]
-    # Don't save the full model - it's huge! Just save what we need for pooling
     result$t_stat <- coef_lapse["t value"]
     result$p_value <- coef_lapse["Pr(>|t|)"]
     result$df <- model$df.residual
     result$n <- nrow(model$data)
+    result$n_obs <- nrow(model$data)
     result$success <- TRUE
     
   }, error = function(e) {
