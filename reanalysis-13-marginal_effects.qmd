@@ -217,12 +217,34 @@ cat("\n✓ Test on single imputation successful\n")
 ## Calculate Marginal Effects for All Imputations
 
 ```{r calculate-all}
-# Now run for all imputations
-all_mfx_results <- list()
-
-# Initialize storage for each subgroup
-for (sg_name in names(subgroups)) {
-  all_mfx_results[[sg_name]] <- list()
+# Check if we have cached results to resume from
+cached_results_file <- file.path(marginal_effects_dir, "all_mfx_results.rds")
+if (file.exists(cached_results_file)) {
+  cat("Loading cached marginal effects results...\n")
+  all_mfx_results <- readRDS(cached_results_file)
+  
+  # Check which imputations are complete
+  completed_imps <- c()
+  for (i in 1:n_imputations) {
+    if (length(all_mfx_results[[1]]) >= i && 
+        !is.null(all_mfx_results[[1]][[i]])) {
+      completed_imps <- c(completed_imps, i)
+    }
+  }
+  
+  if (length(completed_imps) > 0) {
+    cat(paste0("Found ", length(completed_imps), " completed imputations\n"))
+    cat(paste0("Will resume from imputation ", max(completed_imps) + 1, "\n\n"))
+  }
+} else {
+  # Initialize new storage
+  all_mfx_results <- list()
+  
+  # Initialize storage for each subgroup
+  for (sg_name in names(subgroups)) {
+    all_mfx_results[[sg_name]] <- list()
+  }
+  completed_imps <- c()
 }
 
 cat("\n", paste(rep("=", 60), collapse = ""), "\n")
@@ -231,6 +253,11 @@ cat(paste(rep("=", 60), collapse = ""), "\n\n")
 
 # Process each imputation
 for (i in 1:n_imputations) {
+  # Skip if already completed
+  if (i %in% completed_imps) {
+    next
+  }
+  
   if (i %% 10 == 1) {
     cat(paste0("Processing imputations ", i, "-", min(i+9, n_imputations), "...\n"))
   }
@@ -302,6 +329,12 @@ for (i in 1:n_imputations) {
     }
   })
   
+  # Save intermediate results every 5 imputations
+  if (i %% 5 == 0) {
+    saveRDS(all_mfx_results, cached_results_file)
+    cat(paste0("  [Checkpoint] Saved results through imputation ", i, "\n"))
+  }
+  
   # Periodic garbage collection
   if (i %% 10 == 0) {
     gc(verbose = FALSE)
@@ -310,16 +343,24 @@ for (i in 1:n_imputations) {
 
 cat("\n✓ Marginal effects calculation complete\n")
 
-# Save intermediate results
-saveRDS(all_mfx_results, file.path(marginal_effects_dir, "all_mfx_results.rds"))
+# Save final results
+saveRDS(all_mfx_results, cached_results_file)
 log_message("Saved all marginal effects results")
 ```
 
 ## Pool Marginal Effects Using Rubin's Rules
 
 ```{r pool-mfx}
-# Pool the marginal effects across imputations
-pooled_mfx <- list()
+# Check if we have pooled results cached
+pooled_results_file <- file.path(marginal_effects_dir, "pooled_mfx_results.rds")
+
+if (file.exists(pooled_results_file)) {
+  cat("Loading cached pooled results...\n")
+  pooled_mfx <- readRDS(pooled_results_file)
+} else {
+  # Pool the marginal effects across imputations
+  pooled_mfx <- list()
+}
 
 cat("\n", paste(rep("=", 60), collapse = ""), "\n")
 cat("POOLING MARGINAL EFFECTS USING RUBIN'S RULES\n")
@@ -390,9 +431,13 @@ for (sg_name in names(subgroups)) {
   cat(sprintf("  Average N = %.0f\n", avg_n))
 }
 
-# Save pooled results
-saveRDS(pooled_mfx, file.path(marginal_effects_dir, "pooled_mfx_results.rds"))
-log_message("Saved pooled marginal effects")
+# Save pooled results if not already cached
+if (!file.exists(pooled_results_file)) {
+  saveRDS(pooled_mfx, pooled_results_file)
+  log_message("Saved pooled marginal effects")
+} else {
+  log_message("Using cached pooled marginal effects")
+}
 ```
 
 ## Summary Table
@@ -417,16 +462,16 @@ summary_df <- do.call(rbind, lapply(names(pooled_mfx), function(sg_name) {
   }
 }))
 
-# Display table
-kable(summary_df,
-      caption = "Pooled Average Marginal Effects of Lapsing by Subgroup",
-      align = c("l", "r", "r", "c", "r", "r", "r")) %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
-                full_width = FALSE) %>%
-  add_header_above(c(" " = 1, 
-                     "Marginal Effect" = 2,
-                     "Statistical Inference" = 2,
-                     "Sample" = 2))
+# Display table - simplified to avoid kable errors
+if (nrow(summary_df) > 0) {
+  # Use basic kable without complex styling that can fail with long data
+  print(kable(summary_df,
+        caption = "Pooled Average Marginal Effects of Lapsing by Subgroup",
+        align = c("l", "r", "r", "c", "r", "r", "r"),
+        digits = 4))
+} else {
+  cat("No results to display in summary table\n")
+}
 
 # Save to CSV
 write.csv(summary_df, 
