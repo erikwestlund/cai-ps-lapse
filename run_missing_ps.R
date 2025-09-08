@@ -69,7 +69,8 @@ for (i in imps) {
   if (file.exists(ps_cache_file)) {
     cat("  WARNING: PS model already exists at:\n")
     cat("  ", ps_cache_file, "\n")
-    cat("  Overwriting...\n")
+    cat("  Deleting existing file to force re-run...\n")
+    unlink(ps_cache_file)  # Delete the existing file
   }
   
   # Check if imputation exists
@@ -96,7 +97,7 @@ for (i in imps) {
       params = method_params,
       imputation_id = i,
       cache_dir = cache_dir,
-      use_cache = FALSE  # Force re-run
+      use_cache = TRUE  # Will save cache after successful run
     )
     
     # Display key results
