@@ -663,6 +663,65 @@ To monitor the log during execution:
 tail -f `r final_log`
 ```
 
+## Average Largest Absolute Standardized Mean Difference
+
+```{r avg-largest-smd}
+# Extract the largest absolute SMD for each imputation
+largest_smds <- numeric(n_imputations)
+
+for (i in 1:n_imputations) {
+  twang_model <- twang_results[[i]]$model
+  
+  # Get balance table which contains standardized mean differences
+  tryCatch({
+    bal_table <- bal.table(twang_model)
+    
+    # Extract the weighted (after matching) standardized effect sizes
+    # The bal.table contains effect sizes for each covariate
+    if (!is.null(bal_table$es.mean) && !is.null(bal_table$es.mean$max.es)) {
+      largest_smds[i] <- bal_table$es.mean$max.es
+    } else {
+      # Fallback: use the summary method
+      model_summary <- summary(twang_model)
+      if (!is.null(model_summary) && "max.es" %in% names(model_summary)) {
+        largest_smds[i] <- model_summary$max.es
+      } else {
+        largest_smds[i] <- NA
+      }
+    }
+  }, error = function(e) {
+    # If balance table fails, set to NA
+    largest_smds[i] <- NA
+  })
+}
+
+# Calculate average of largest SMDs across imputations
+avg_largest_smd <- mean(largest_smds, na.rm = TRUE)
+n_valid_smds <- sum(!is.na(largest_smds))
+
+# Create summary table
+smd_summary <- data.frame(
+  Imputation = 1:n_imputations,
+  Largest_Absolute_SMD = round(largest_smds, 4)
+)
+
+kable(smd_summary, 
+      caption = "Largest absolute standardized mean difference by imputation",
+      col.names = c("Imputation", "Largest |SMD|"))
+
+# Display average
+cat("\n**Average of largest absolute SMDs across imputations:**", round(avg_largest_smd, 4), "\n")
+cat("**Number of valid SMD values:**", n_valid_smds, "out of", n_imputations, "\n")
+
+if (avg_largest_smd < 0.1) {
+  cat("**Interpretation:** Excellent balance (avg largest |SMD| < 0.1)\n")
+} else if (avg_largest_smd < 0.25) {
+  cat("**Interpretation:** Good balance (avg largest |SMD| < 0.25)\n") 
+} else {
+  cat("**Interpretation:** Poor balance (avg largest |SMD| ≥ 0.25) - consider alternative methods\n")
+}
+```
+
 ## Summary
 
 ### Analysis Configuration
