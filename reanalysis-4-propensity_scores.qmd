@@ -710,15 +710,23 @@ kable(smd_summary,
       col.names = c("Imputation", "Largest |SMD|"))
 
 # Display average
-cat("\n**Average of largest absolute SMDs across imputations:**", round(avg_largest_smd, 4), "\n")
+if (!is.na(avg_largest_smd)) {
+  cat("\n**Average of largest absolute SMDs across imputations:**", round(avg_largest_smd, 4), "\n")
+} else {
+  cat("\n**Average of largest absolute SMDs across imputations:** NA (unable to extract SMDs)\n")
+}
 cat("**Number of valid SMD values:**", n_valid_smds, "out of", n_imputations, "\n")
 
-if (avg_largest_smd < 0.1) {
-  cat("**Interpretation:** Excellent balance (avg largest |SMD| < 0.1)\n")
-} else if (avg_largest_smd < 0.25) {
-  cat("**Interpretation:** Good balance (avg largest |SMD| < 0.25)\n") 
+if (!is.na(avg_largest_smd)) {
+  if (avg_largest_smd < 0.1) {
+    cat("**Interpretation:** Excellent balance (avg largest |SMD| < 0.1)\n")
+  } else if (avg_largest_smd < 0.25) {
+    cat("**Interpretation:** Good balance (avg largest |SMD| < 0.25)\n") 
+  } else {
+    cat("**Interpretation:** Poor balance (avg largest |SMD| ≥ 0.25) - consider alternative methods\n")
+  }
 } else {
-  cat("**Interpretation:** Poor balance (avg largest |SMD| ≥ 0.25) - consider alternative methods\n")
+  cat("**Interpretation:** Unable to assess balance - SMD extraction failed\n")
 }
 ```
 
