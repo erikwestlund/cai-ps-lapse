@@ -677,21 +677,24 @@ for (i in 1:n_imputations) {
     bal_table <- bal.table(twang_model)
     
     # Extract the weighted (after matching) standardized effect sizes
-    # The bal.table contains effect sizes for each covariate
-    if (!is.null(bal_table$es.mean) && !is.null(bal_table$es.mean$max.es)) {
-      largest_smds[i] <- bal_table$es.mean$max.es
+    # For ATT with es.mean stop method, the balance table is stored in bal_table$es.mean.ATT
+    if (!is.null(bal_table$es.mean.ATT) && !is.null(bal_table$es.mean.ATT$std.eff.sz)) {
+      # Get the maximum absolute standardized effect size
+      largest_smds[i] <- max(abs(bal_table$es.mean.ATT$std.eff.sz), na.rm = TRUE)
+    } else if (!is.null(bal_table$es.mean) && !is.null(bal_table$es.mean$std.eff.sz)) {
+      # Fallback to es.mean if es.mean.ATT not available
+      largest_smds[i] <- max(abs(bal_table$es.mean$std.eff.sz), na.rm = TRUE)
     } else {
-      # Fallback: use the summary method
-      model_summary <- summary(twang_model)
-      if (!is.null(model_summary) && "max.es" %in% names(model_summary)) {
-        largest_smds[i] <- model_summary$max.es
-      } else {
-        largest_smds[i] <- NA
-      }
+      # Try to get from the twang_model summary directly
+      largest_smds[i] <- twang_model$desc$es.mean$max.es
     }
   }, error = function(e) {
-    # If balance table fails, set to NA
-    largest_smds[i] <- NA
+    # If balance table fails, try to get from model summary
+    tryCatch({
+      largest_smds[i] <- twang_model$desc$es.mean$max.es
+    }, error = function(e2) {
+      largest_smds[i] <- NA
+    })
   })
 }
 
